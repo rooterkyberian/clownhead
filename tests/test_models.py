@@ -3,7 +3,7 @@ from pathlib import Path
 
 import pytest
 
-from clownhead.models import Kind, Session, SnapshotEntry, Status
+from clownhead.models import Kind, Session, Status
 
 INTERACTIVE_PAYLOAD = {
     "pid": 16571,
@@ -94,11 +94,3 @@ def test_durations_are_none_without_timestamps():
 
     assert session.age() is None
     assert session.quiet_for() is None
-
-
-def test_snapshot_entry_from_session():
-    entry = SnapshotEntry.from_session(Session.model_validate(INTERACTIVE_PAYLOAD))
-
-    assert entry.session_id == "4e020900-df7c-4665-a804-d973b14a1926"
-    assert entry.cwd == Path("/Users/x/dev/payments-api")
-    assert entry.name == "payments-api-7c"

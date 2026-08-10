@@ -1,13 +1,19 @@
-"""Mapping session state onto terminal attention signals."""
+"""Mapping session state onto terminal attention signals.
+
+Every entry point takes an optional terminal. Left out, each session is signalled through
+the application that actually owns it, which is the only way a fleet spread across
+several terminals gets signalled correctly; passing one forces it for every session.
+"""
 
 from __future__ import annotations
 
+import subprocess
 from collections.abc import Iterable
 from dataclasses import dataclass
 from pathlib import Path
 
 from clownhead.models import Session, Status
-from clownhead.terminal import Rgb, Terminal
+from clownhead.terminal import Rgb, Terminal, terminal_for
 
 STATUS_COLORS: dict[Status, Rgb | None] = {
     Status.WAITING: Rgb(220, 50, 47),
@@ -15,6 +21,8 @@ STATUS_COLORS: dict[Status, Rgb | None] = {
     Status.FAILED: Rgb(203, 75, 22),
     Status.BUSY: Rgb(38, 139, 210),
     Status.IDLE: None,
+    Status.COMPLETED: None,
+    Status.CLOSED: None,
     Status.UNKNOWN: None,
 }
 
@@ -34,7 +42,12 @@ def color_for(status: Status) -> Rgb | None:
     return STATUS_COLORS.get(status)
 
 
-def paint(sessions: Iterable[Session], terminal: Terminal) -> list[SignalResult]:
+def terminal_of(session: Session, terminal: Terminal | None = None) -> Terminal:
+    """The terminal a session should be signalled through."""
+    return terminal or terminal_for(session.app)
+
+
+def paint(sessions: Iterable[Session], terminal: Terminal | None = None) -> list[SignalResult]:
     """Sync every session's tab colour to its current state.
 
     A session whose TTY has gone away is reported rather than raising, so one dead
@@ -45,12 +58,13 @@ def paint(sessions: Iterable[Session], terminal: Terminal) -> list[SignalResult]
         if session.tty is None:
             results.append(SignalResult(session.label, None, False, "no tty"))
             continue
+        emitter = terminal_of(session, terminal)
         color = color_for(session.status)
         try:
             if color is None:
-                terminal.reset_tab_color(session.tty)
+                emitter.reset_tab_color(session.tty)
             else:
-                terminal.set_tab_color(session.tty, color)
+                emitter.set_tab_color(session.tty, color)
         except OSError as error:
             results.append(SignalResult(session.label, session.tty, False, str(error)))
             continue
@@ -58,7 +72,7 @@ def paint(sessions: Iterable[Session], terminal: Terminal) -> list[SignalResult]
     return results
 
 
-def reset(sessions: Iterable[Session], terminal: Terminal) -> list[SignalResult]:
+def reset(sessions: Iterable[Session], terminal: Terminal | None = None) -> list[SignalResult]:
     """Clear the tab colour of every session, leaving terminals as they were found."""
     results: list[SignalResult] = []
     for session in sessions:
@@ -66,7 +80,7 @@ def reset(sessions: Iterable[Session], terminal: Terminal) -> list[SignalResult]
             results.append(SignalResult(session.label, None, False, "no tty"))
             continue
         try:
-            terminal.reset_tab_color(session.tty)
+            terminal_of(session, terminal).reset_tab_color(session.tty)
         except OSError as error:
             results.append(SignalResult(session.label, session.tty, False, str(error)))
             continue
@@ -74,19 +88,37 @@ def reset(sessions: Iterable[Session], terminal: Terminal) -> list[SignalResult]
     return results
 
 
-def ping(session: Session, terminal: Terminal, message: str | None = None) -> SignalResult:
-    """Demand attention from a single session's terminal."""
+def focus(
+    session: Session,
+    terminal: Terminal | None = None,
+    message: str | None = None,
+    *,
+    foreground: bool = True,
+) -> SignalResult:
+    """Demand attention from a single session's terminal and bring it to the front.
+
+    Attention is requested before the emulator is raised, so the dock bounce, tab flash
+    or renamed tab survives the switch and still marks the session once the window is up.
+    A terminal without notifications is not asked for one: it would degrade to a second
+    bell, and the message it would have carried is already in the marked tab title.
+    """
     if session.tty is None:
         return SignalResult(session.label, None, False, "no tty")
     text = message or f"{session.label}: {session.reason}"
+    emitter = terminal_of(session, terminal)
     try:
-        terminal.request_attention(session.tty)
-        terminal.notify(session.tty, text)
-    except OSError as error:
+        emitter.request_attention(session.tty, text)
+        if foreground:
+            emitter.foreground(session.tty)
+        if emitter.supports_notifications:
+            emitter.notify(session.tty, text)
+    except (OSError, subprocess.SubprocessError) as error:
         return SignalResult(session.label, session.tty, False, str(error))
     return SignalResult(session.label, session.tty, True, text)
 
 
-def ping_stalled(sessions: Iterable[Session], terminal: Terminal) -> list[SignalResult]:
+def focus_stalled(
+    sessions: Iterable[Session], terminal: Terminal | None = None, *, foreground: bool = True
+) -> list[SignalResult]:
     """Demand attention from every session that is waiting on a human."""
-    return [ping(session, terminal) for session in sessions if session.needs_attention]
+    return [focus(session, terminal, foreground=foreground) for session in sessions if session.needs_attention]

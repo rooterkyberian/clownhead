@@ -11,13 +11,19 @@ from pydantic import BaseModel, ConfigDict, model_validator
 
 
 class Status(StrEnum):
-    """State a Claude Code session reports about itself."""
+    """State a Claude Code session reports about itself.
+
+    ``COMPLETED`` is a background agent the CLI reports as finished; ``CLOSED`` is an
+    interactive session the registry remembers but the CLI no longer lists.
+    """
 
     BUSY = "busy"
     IDLE = "idle"
     WAITING = "waiting"
     BLOCKED = "blocked"
     FAILED = "failed"
+    COMPLETED = "completed"
+    CLOSED = "closed"
     UNKNOWN = "unknown"
 
     @classmethod
@@ -37,6 +43,15 @@ class Kind(StrEnum):
 
 
 ATTENTION_STATES = frozenset({Status.WAITING, Status.BLOCKED, Status.FAILED})
+FINISHED_STATES = frozenset({Status.COMPLETED, Status.CLOSED})
+
+WORKTREE_MARKER = "/.claude/worktrees/"
+
+
+def split_worktree(cwd: Path) -> tuple[Path, str | None]:
+    """The repository a worktree belongs to and its name, or the path and ``None``."""
+    repo, marker, name = str(cwd).partition(WORKTREE_MARKER)
+    return (Path(repo), name) if marker else (cwd, None)
 
 
 def _epoch_millis_to_datetime(value: Any) -> datetime | None:
@@ -49,7 +64,8 @@ class Session(BaseModel):
     """A single Claude Code session as reported by ``claude agents --json``.
 
     Interactive entries carry ``status``/``waitingFor`` while background entries carry
-    ``state``; both are normalised onto :attr:`status`.
+    ``state``; both are normalised onto :attr:`status`. :attr:`tty` and :attr:`app` are
+    not in the payload at all — they are discovered from the process table.
     """
 
     model_config = ConfigDict(populate_by_name=True)
@@ -64,6 +80,7 @@ class Session(BaseModel):
     started_at: datetime | None = None
     updated_at: datetime | None = None
     tty: Path | None = None
+    app: Path | None = None
 
     @model_validator(mode="before")
     @classmethod
@@ -81,6 +98,7 @@ class Session(BaseModel):
             "status": data.get("status", data.get("state", "unknown")),
             "waiting_for": data.get("waitingFor"),
             "started_at": _epoch_millis_to_datetime(data.get("startedAt")),
+            "updated_at": _epoch_millis_to_datetime(data.get("updatedAt")),
         }
 
     @property
@@ -99,6 +117,11 @@ class Session(BaseModel):
         return self.status in ATTENTION_STATES
 
     @property
+    def is_finished(self) -> bool:
+        """Whether this session has ended, by completing or by losing its terminal."""
+        return self.status in FINISHED_STATES
+
+    @property
     def reason(self) -> str:
         """Why the session needs attention, or its plain status when it does not."""
         return self.waiting_for or self.status.value
@@ -114,23 +137,3 @@ class Session(BaseModel):
         if self.updated_at is None:
             return None
         return (now or datetime.now(tz=UTC)) - self.updated_at
-
-
-class SnapshotEntry(BaseModel):
-    """A session recorded for later resurrection."""
-
-    session_id: str
-    cwd: Path
-    name: str | None = None
-
-    @classmethod
-    def from_session(cls, session: Session) -> SnapshotEntry:
-        """Build a snapshot entry from a live session."""
-        return cls(session_id=session.session_id, cwd=session.cwd, name=session.name)
-
-
-class Snapshot(BaseModel):
-    """A point-in-time record of the interactive fleet."""
-
-    saved_at: datetime
-    entries: list[SnapshotEntry]

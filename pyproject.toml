@@ -25,6 +25,7 @@ classifiers = [
 dependencies = [
     "pydantic>=2.7",
     "rich>=13.7",
+    "textual>=0.80",
     "typer>=0.12",
 ]
 
@@ -39,6 +40,7 @@ clownhead = "clownhead.cli:main"
 dev = [
     "mypy>=1.10",
     "pytest>=8.0",
+    "pytest-asyncio>=0.24",
     "pytest-cov>=5.0",
     "ruff>=0.5",
 ]
@@ -46,6 +48,8 @@ dev = [
 [tool.pytest.ini_options]
 testpaths = ["tests"]
 addopts = "--cov=clownhead --cov-report=term-missing"
+asyncio_mode = "auto"
+asyncio_default_fixture_loop_scope = "function"
 
 [tool.coverage.report]
 fail_under = 80
