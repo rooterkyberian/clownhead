@@ -1,0 +1,36 @@
+[tools]
+python = "3.13"
+uv = "latest"
+actionlint = "latest"
+
+[env]
+UV_PYTHON_DOWNLOADS = "automatic"
+
+[tasks.install]
+description = "Sync the development environment"
+run = "uv sync --all-groups"
+
+[tasks.test]
+description = "Run the test suite"
+run = "uv run pytest"
+
+[tasks.lint]
+description = "Check style with ruff and actionlint"
+run = ["uv run ruff check .", "uv run ruff format --check .", "actionlint"]
+
+[tasks.lint-fix]
+description = "Autoformat and autofix with ruff"
+alias = "format"
+run = ["uv run ruff check --fix .", "uv run ruff format ."]
+
+[tasks.typecheck]
+description = "Type check with mypy"
+run = "uv run mypy"
+
+[tasks.check]
+description = "Run lint, typecheck and tests"
+depends = ["lint", "typecheck", "test"]
+
+[tasks.build]
+description = "Build the sdist and wheel"
+run = "uv build"
