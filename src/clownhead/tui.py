@@ -372,7 +372,7 @@ class FleetApp(App[None]):
         Binding("t", "terminate", "terminate"),
         Binding("comma", "settings", "settings"),
         Binding("q", "quit", "quit"),
-        Binding("R", "refresh", "refresh", show=False),
+        Binding("ctrl+r", "refresh", "refresh", show=False),
         Binding("right", "history", "→ history", show=False),
         Binding("left", "close_history", "← close", show=False),
         Binding("escape", "dismiss_panel", "clear filter", show=False),

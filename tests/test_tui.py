@@ -1171,7 +1171,7 @@ async def test_tui_refresh_picks_up_new_sessions():
         assert table_of(app).row_count == 0
 
         sessions.extend(fleet())
-        await pilot.press("R")
+        await pilot.press("ctrl+r")
         await settle(app, pilot)
 
         assert table_of(app).row_count == 2
@@ -1185,7 +1185,7 @@ async def test_tui_refresh_keeps_the_cursor_on_the_same_session():
         await pilot.press("down")
         selected = app.selected_session
 
-        await pilot.press("R")
+        await pilot.press("ctrl+r")
         await settle(app, pilot)
 
         assert selected is not None

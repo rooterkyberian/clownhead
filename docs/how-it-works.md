@@ -24,7 +24,7 @@ the directory it settled on either way.
 
 **Pull requests.** Nothing on a session records which pull request it belonged to, so the
 question is answered from the transcripts, matching the `repo/pull/309` of a URL and the
-`repo#309` of a mention, subagents included. What it finds is remembered until `R` reads
+`repo#309` of a mention, subagents included. What it finds is remembered until `^r` reads
 them again.
 
 **Attention.** Signals are OSC escape sequences written to a session's TTY, which the
