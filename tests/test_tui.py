@@ -1,6 +1,7 @@
 from pathlib import Path
 
 import pytest
+from rich.console import Console
 from rich.markup import render as render_markup
 from textual.widgets import DataTable, Input, Static, Switch
 
@@ -248,7 +249,10 @@ async def test_tui_details_describe_the_session_under_the_cursor():
 
 
 def history_of(app: FleetApp) -> str:
-    return render_markup(str(app.query_one("#history-body", Static).content)).plain
+    console = Console(width=200, no_color=True)
+    with console.capture() as capture:
+        console.print(app.query_one("#history-body", Static).content)
+    return capture.get()
 
 
 async def test_tui_right_arrow_opens_the_conversation_beside_the_fleet(monkeypatch):

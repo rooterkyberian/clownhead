@@ -18,8 +18,10 @@ from dataclasses import dataclass
 from datetime import UTC, datetime, timedelta
 from pathlib import Path
 
+from rich.console import Group, RenderableType
 from rich.markup import escape
 from rich.table import Table
+from rich.text import Text
 
 from clownhead.discovery import Message
 from clownhead.models import Session, Status, split_worktree
@@ -38,6 +40,7 @@ STATUS_STYLES: dict[Status, str] = {
 
 SPEAKERS = {"user": "you", "assistant": "claude"}
 SPEAKER_STYLES = {"user": "bold", "assistant": "bold cyan"}
+YOUR_TURN_BACKGROUND = "on grey19"
 
 CODE_SPAN = re.compile(r"`([^`\n]+)`")
 STRONG = re.compile(r"\*\*([^*\n]+)\*\*")
@@ -154,8 +157,8 @@ def describe(session: Session, now: datetime | None = None, terminal: str | None
     return f"{header}\n{body}"
 
 
-def conversation(messages: Iterable[Message], now: datetime | None = None) -> str:
-    """Render a session's recent turns, newest last, as Rich markup.
+def conversation(messages: Iterable[Message], now: datetime | None = None) -> RenderableType:
+    """Render a session's recent turns, newest last, as a stack of renderables.
 
     A transcript will sooner or later contain anything at all, so every turn is escaped
     before Rich sees it.
@@ -166,8 +169,25 @@ def conversation(messages: Iterable[Message], now: datetime | None = None) -> st
     the same thing again.
     """
     moment = now or datetime.now(tz=UTC)
-    turns = [f"{_attribution(message, moment)}\n{_spoken(message.text)}" for message in messages]
-    return "\n".join(turns) if turns else "[dim]nothing said yet[/]"
+    turns = [_turn(message, moment) for message in messages]
+    return Group(*turns) if turns else Text.from_markup("[dim]nothing said yet[/]")
+
+
+def _turn(message: Message, moment: datetime) -> Text:
+    """Render one turn, with your own words laid on a background of their own.
+
+    What you asked for is what a reader scans back through, and in a column of stacked
+    turns a speaker line alone is a thin thing to look for. The background is what makes
+    a question findable at a glance.
+
+    It is justified rather than left as it falls: Rich pads a justified line out to the
+    console width, so the tint reaches the edge of the panel and the turn reads as one
+    block instead of a smear that stops wherever the sentence happened to end.
+    """
+    markup = f"{_attribution(message, moment)}\n{_spoken(message.text)}"
+    if message.role != "user":
+        return Text.from_markup(markup)
+    return Text.from_markup(markup, style=YOUR_TURN_BACKGROUND, justify="left")
 
 
 def _attribution(message: Message, moment: datetime) -> str:

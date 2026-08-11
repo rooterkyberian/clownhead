@@ -2,18 +2,41 @@ from datetime import UTC, datetime, timedelta
 from pathlib import Path
 
 import pytest
-from rich.console import Console
+from rich.console import Console, Group, RenderableType
 from rich.markup import render as render_markup
+from rich.text import Text
 
 from clownhead.discovery import Message
 from clownhead.models import Session, Status
-from clownhead.render import build_table, conversation, describe, format_duration, shorten_path
+from clownhead.render import (
+    YOUR_TURN_BACKGROUND,
+    build_table,
+    conversation,
+    describe,
+    format_duration,
+    shorten_path,
+)
 
 NOW = datetime(2026, 8, 10, tzinfo=UTC)
 
 
 def visible(markup: str) -> str:
     return render_markup(markup).plain
+
+
+def spoken(renderable: RenderableType, width: int = 60) -> str:
+    console = Console(width=width, no_color=True)
+    with console.capture() as capture:
+        console.print(renderable)
+    return "\n".join(line.rstrip() for line in capture.get().splitlines())
+
+
+def turns(renderable: RenderableType) -> list[Text]:
+    return list(renderable.renderables) if isinstance(renderable, Group) else [renderable]
+
+
+def spans(text: Text) -> list[tuple[str, str]]:
+    return [(text.plain[span.start : span.end], str(span.style)) for span in text.spans]
 
 
 @pytest.mark.parametrize(
@@ -233,10 +256,10 @@ def test_conversation_names_both_speakers():
         Message(role="assistant", text="Enter opens the conversation beside the fleet."),
     ]
 
-    turns = visible(conversation(messages, now=NOW))
+    said = spoken(conversation(messages, now=NOW))
 
-    assert "you\nshow history in detail view" in turns
-    assert "claude\nEnter opens the conversation beside the fleet." in turns
+    assert "you\nshow history in detail view" in said
+    assert "claude\nEnter opens the conversation beside the fleet." in said
 
 
 def test_conversation_dates_each_turn():
@@ -245,22 +268,22 @@ def test_conversation_dates_each_turn():
         Message(role="assistant", text="squashed", at=NOW - timedelta(minutes=4)),
     ]
 
-    turns = visible(conversation(messages, now=NOW))
+    said = spoken(conversation(messages, now=NOW))
 
-    assert "you 3h ago" in turns
-    assert "claude 4m ago" in turns
+    assert "you 3h ago" in said
+    assert "claude 4m ago" in said
 
 
 def test_conversation_leaves_an_undated_turn_undated():
-    turns = visible(conversation([Message(role="user", text="squash them")], now=NOW))
+    said = spoken(conversation([Message(role="user", text="squash them")], now=NOW))
 
-    assert turns == "you\nsquash them"
+    assert said == "you\nsquash them"
 
 
 def test_conversation_reads_a_turn_from_the_future_as_just_said():
     messages = [Message(role="assistant", text="squashed", at=NOW + timedelta(minutes=9))]
 
-    assert "claude 0s ago" in visible(conversation(messages, now=NOW))
+    assert "claude 0s ago" in spoken(conversation(messages, now=NOW))
 
 
 def test_conversation_spends_no_blank_lines_between_turns():
@@ -269,36 +292,61 @@ def test_conversation_spends_no_blank_lines_between_turns():
         Message(role="assistant", text="squashed"),
     ]
 
-    assert visible(conversation(messages, now=NOW)) == "you\nsquash them\nclaude\nsquashed"
+    assert spoken(conversation(messages, now=NOW)) == "you\nsquash them\nclaude\nsquashed"
+
+
+def test_conversation_lays_your_own_turns_on_a_background_of_their_own():
+    messages = [
+        Message(role="user", text="squash them"),
+        Message(role="assistant", text="squashed"),
+    ]
+
+    asked, answered = turns(conversation(messages, now=NOW))
+
+    assert str(asked.style) == YOUR_TURN_BACKGROUND
+    assert not str(answered.style)
+
+
+def test_conversation_carries_your_background_to_the_edge_of_the_panel():
+    messages = [Message(role="user", text="squash them")]
+
+    console = Console(width=24, no_color=True)
+    with console.capture() as capture:
+        console.print(conversation(messages, now=NOW))
+
+    assert capture.get().splitlines() == ["you".ljust(24), "squash them".ljust(24)]
 
 
 @pytest.mark.parametrize(
-    ("text", "marked"),
+    ("text", "spoken_text", "marked", "style"),
     [
-        ("run `mise run check` first", "[cyan]mise run check[/]"),
-        ("that is **the** point", "[bold]the[/]"),
+        ("run `mise run check` first", "run mise run check first", "mise run check", "cyan"),
+        ("that is **the** point", "that is the point", "the", "bold"),
     ],
 )
-def test_conversation_picks_out_the_marked_up_spans(text, marked):
-    rendered = conversation([Message(role="user", text=text)], now=NOW)
+def test_conversation_picks_out_the_marked_up_spans(text, spoken_text, marked, style):
+    (turn,) = turns(conversation([Message(role="user", text=text)], now=NOW))
 
-    assert marked in rendered
-    assert "`" not in rendered
-    assert "**" not in rendered
+    assert spoken_text in turn.plain
+    assert (marked, style) in spans(turn)
 
 
 def test_conversation_escapes_markup():
-    assert r"\[bold]red\[/]" in conversation([Message(role="user", text="use [bold]red[/] here")], now=NOW)
+    (turn,) = turns(conversation([Message(role="user", text="use [bold]red[/] here")], now=NOW))
+
+    assert "use [bold]red[/] here" in turn.plain
+    assert ("red", "bold") not in spans(turn)
 
 
 def test_conversation_escapes_markup_inside_a_marked_span():
-    rendered = conversation([Message(role="user", text="run `claude [bold]--resume[/]`")], now=NOW)
+    (turn,) = turns(conversation([Message(role="user", text="run `claude [bold]--resume[/]`")], now=NOW))
 
-    assert r"[cyan]claude \[bold]--resume\[/][/]" in rendered
+    assert "run claude [bold]--resume[/]" in turn.plain
+    assert ("claude [bold]--resume[/]", "cyan") in spans(turn)
 
 
 def test_conversation_with_nothing_said():
-    assert "nothing said yet" in conversation([])
+    assert "nothing said yet" in spoken(conversation([]))
 
 
 def test_describe_a_closed_session_has_no_process_left():

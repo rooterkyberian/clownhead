@@ -150,7 +150,10 @@ unfiltered tail is all its own voice and no conversation at all.
 Each turn is headed by who said it and how long ago, which is what tells a conversation
 that stopped mid-question from one that stopped after an answer. Turns are stacked without
 a blank line between them, since that header already parts one from the next and the panel
-is a narrow column; `code` and **bold** are rendered rather than left as punctuation.
+is a narrow column; `code` and **bold** are rendered rather than left as punctuation. Your
+own turns are laid on a background of their own, tinted to the edge of the panel: what you
+asked for is what a reader scans back through, and a speaker line alone is a thin thing to
+look for in a column of stacked turns.
 
 **Settings.** `,` opens them, changes apply live, and they persist to
 `settings.json` under the state directory. They cover the columns the board shows, the refresh
