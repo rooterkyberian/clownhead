@@ -38,3 +38,7 @@ run = "uv build"
 [tasks.demo]
 description = "Re-record the README demo GIF with vhs"
 run = ["uv sync", "vhs docs/demo.tape"]
+
+[tasks.social-preview]
+description = "Cut the GitHub social preview PNG out of the demo GIF with ffmpeg"
+run = "ffmpeg -y -ss 3.2 -i docs/demo.gif -frames:v 1 -vf scale=1280:640:flags=lanczos docs/social-preview.png"
