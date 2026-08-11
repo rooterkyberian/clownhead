@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+import os
 import time
 from collections.abc import Iterable
 from pathlib import Path
@@ -67,6 +68,20 @@ def _fleet_table(sessions: list[Session], show_pid: bool | None, show_tty: bool 
         show_pid=settings.show_pid if show_pid is None else show_pid,
         show_tty=settings.show_tty if show_tty is None else show_tty,
     )
+
+
+def _config_dir_line() -> str:
+    """The Claude Code directory being read, and what pointed clownhead at it.
+
+    A fleet listed out of one config directory and enriched from another is the failure
+    this answers: the CLI scopes its listing to ``CLAUDE_CONFIG_DIR``, so a session board
+    that is short of heartbeats is usually clownhead and the CLI disagreeing about where
+    to look.
+    """
+    directory = discovery.config_dir()
+    source = f" [dim](${discovery.CONFIG_DIR_VAR})[/]" if os.environ.get(discovery.CONFIG_DIR_VAR) else ""
+    missing = "" if directory.is_dir() else " [yellow](missing)[/]"
+    return f"{directory}{source}{missing}"
 
 
 def _warn_about_tab_colours(sessions: Iterable[Session]) -> None:
@@ -182,6 +197,7 @@ def doctor() -> None:
     reachable = discovery.peer_discovery_available()
 
     console.print(f"claude binary       {discovery.claude_binary()}")
+    console.print(f"config dir          {_config_dir_line()}")
     console.print(f"peer discovery      {'[green]ok[/]' if reachable else '[bold red]blocked (sandboxed?)[/]'}")
     console.print(f"terminal            {terminal.name} (this shell)")
     if reachable:

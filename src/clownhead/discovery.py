@@ -3,11 +3,15 @@
 ``claude agents --json`` is the only built-in listing that includes interactive
 sessions, so it is the source of truth for what is live. Everything else in this module
 layers extra facts on top of that payload: the controlling TTY from ``ps`` and the
-registry heartbeat from ``~/.claude/sessions``.
+registry heartbeat from ``sessions`` under the Claude Code config directory.
 
 Sessions that have ended are found the other way round — from what they left on disk,
-under ``~/.claude/projects`` and in the registry — and are only trusted to be closed
-because the CLI no longer reports them.
+under ``projects`` and in the registry — and are only trusted to be closed because the
+CLI no longer reports them.
+
+Where that config directory is is a question with an answer that moves: ``CLAUDE_CONFIG_DIR``
+relocates the whole of it, and the CLI scopes its listing to whichever one it was invoked
+under. clownhead therefore reads the same variable rather than assuming ``~/.claude``.
 
 I/O and parsing are deliberately separate so the parsing half stays trivially testable.
 """
@@ -30,8 +34,8 @@ from pydantic import ValidationError
 from clownhead.models import Kind, Session, Status
 
 SOCKET_DIR = Path("/tmp/cc-socks")  # noqa: S108
-SESSION_REGISTRY = Path.home() / ".claude" / "sessions"
-TRANSCRIPT_ROOT = Path.home() / ".claude" / "projects"
+CONFIG_DIR_VAR = "CLAUDE_CONFIG_DIR"
+DEFAULT_CONFIG_DIR = Path.home() / ".claude"
 TRANSCRIPT_HEAD_LINES = 40
 TRANSCRIPT_TAIL_BYTES = 256 * 1024
 TRANSCRIPT_MAX_BYTES = 8 * 1024 * 1024
@@ -74,6 +78,30 @@ class Message:
 def claude_binary() -> str:
     """Path to the Claude Code CLI, overridable for tests via ``CLOWNHEAD_CLAUDE_BIN``."""
     return os.environ.get("CLOWNHEAD_CLAUDE_BIN", "claude")
+
+
+def config_dir() -> Path:
+    """Where Claude Code keeps its state, which ``CLAUDE_CONFIG_DIR`` may move.
+
+    Read fresh on every call rather than resolved at import, because it is the same
+    variable the CLI reads: ``claude agents --json`` lists only the sessions belonging to
+    the config directory it is invoked under, so a listing and the records that enrich it
+    have to be answered by one directory or the other and never a mixture of both. Pids
+    are what the heartbeat records are keyed by, and two config directories on one machine
+    number their sessions from the same process table.
+    """
+    override = os.environ.get(CONFIG_DIR_VAR)
+    return Path(override).expanduser() if override else DEFAULT_CONFIG_DIR
+
+
+def session_registry() -> Path:
+    """Directory of registry records, one per session that has published a heartbeat."""
+    return config_dir() / "sessions"
+
+
+def transcript_root() -> Path:
+    """Directory of per-project transcripts, which outlive the sessions that wrote them."""
+    return config_dir() / "projects"
 
 
 def peer_discovery_available() -> bool:
@@ -192,7 +220,7 @@ def registry_heartbeats(registry: Path | None = None) -> dict[int, datetime]:
 
 def registry_entries(registry: Path | None = None) -> list[dict[str, Any]]:
     """Every readable record in the interactive session registry."""
-    directory = registry or SESSION_REGISTRY
+    directory = registry or session_registry()
     if not directory.is_dir():
         return []
     entries: list[dict[str, Any]] = []
@@ -287,7 +315,7 @@ def recent_messages(session_id: str, limit: int = PREVIEW_MESSAGES, root: Path |
 
 def transcript_path(session_id: str, root: Path | None = None) -> Path | None:
     """Where a session's transcript lives, whether or not the session still runs."""
-    directory = root or TRANSCRIPT_ROOT
+    directory = root or transcript_root()
     if not directory.is_dir():
         return None
     return next(iter(sorted(directory.glob(f"*/{session_id}.jsonl"))), None)
@@ -301,7 +329,7 @@ def transcript_sessions(root: Path | None = None) -> list[Session]:
     the transcript rather than decoded from the project directory name, which flattens
     path separators into the same dash it allows inside a directory name.
     """
-    directory = root or TRANSCRIPT_ROOT
+    directory = root or transcript_root()
     if not directory.is_dir():
         return []
     sessions: list[Session] = []

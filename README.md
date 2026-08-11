@@ -78,8 +78,8 @@ rather than a floor held open for older ones. `claude --version` reports yours.
 
 **Discovery.** `claude agents --json` is the source of truth for what is live. Each entry
 is enriched with the controlling TTY (from `ps`) and the last heartbeat (from
-`~/.claude/sessions/<pid>.json`, which a crashed session leaves behind, so entries are
-only trusted when the CLI still reports the session as live).
+`sessions/<pid>.json` under the Claude Code config directory, which a crashed session
+leaves behind, so entries are only trusted when the CLI still reports the session as live).
 
 **Attention.** Signals are OSC escape sequences written to a session's TTY. The emulator
 consumes them before the running application sees them, so they are safe to inject into a
@@ -179,6 +179,14 @@ that stops is easier to recover from than one that quietly does the wrong thing.
 `/tmp/cc-socks`. A sandboxed shell can run the CLI but not list that directory, in which
 case `claude agents --json` silently degrades to background agents only. clownhead checks
 for this and refuses rather than reporting an empty fleet.
+
+**It goes where `CLAUDE_CONFIG_DIR` says.** Sessions, transcripts and the registry live
+under `~/.claude` unless that variable moves them, and the CLI scopes its listing to
+whichever directory it was invoked under — a shell with it set lists that fleet, a shell
+without it lists the other. clownhead reads the same variable, so the fleet is listed and
+enriched out of one directory rather than listed from one and enriched from another. Get
+that wrong and `QUIET` empties out: the heartbeats are being looked for somewhere those
+sessions never wrote one. `clownhead doctor` prints the directory it settled on.
 
 ## Platform support
 

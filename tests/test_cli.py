@@ -15,6 +15,7 @@ runner = CliRunner()
 @pytest.fixture(autouse=True)
 def isolated_state(monkeypatch, tmp_path):
     monkeypatch.setenv("CLOWNHEAD_STATE_DIR", str(tmp_path / "state"))
+    monkeypatch.setenv("CLAUDE_CONFIG_DIR", str(tmp_path / "config"))
     monkeypatch.setattr(discovery, "peer_discovery_available", lambda: True)
 
 
@@ -240,6 +241,29 @@ def test_focus_unknown_name_fails(live_fleet, monkeypatch):
     result = runner.invoke(cli.app, ["focus", "nope"])
 
     assert result.exit_code == 1
+
+
+def test_doctor_names_the_configured_claude_directory(live_fleet, monkeypatch):
+    monkeypatch.setenv("CLAUDE_CONFIG_DIR", "/tmp/elsewhere")
+    use_terminal(monkeypatch, SilentTerminal())
+
+    result = runner.invoke(cli.app, ["doctor"])
+
+    assert result.exit_code == 0
+    assert "/tmp/elsewhere" in result.stdout
+    assert "CLAUDE_CONFIG_DIR" in result.stdout
+    assert "missing" in result.stdout
+
+
+def test_doctor_falls_back_to_the_default_claude_directory(live_fleet, monkeypatch):
+    monkeypatch.delenv("CLAUDE_CONFIG_DIR")
+    use_terminal(monkeypatch, SilentTerminal())
+
+    result = runner.invoke(cli.app, ["doctor"])
+
+    assert result.exit_code == 0
+    assert str(Path.home() / ".claude") in result.stdout
+    assert "CLAUDE_CONFIG_DIR" not in result.stdout
 
 
 def test_doctor_reports_blocked_peer_discovery(monkeypatch):

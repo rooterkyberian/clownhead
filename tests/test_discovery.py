@@ -11,8 +11,7 @@ from clownhead.models import Session, Status
 
 @pytest.fixture(autouse=True)
 def isolated_stores(monkeypatch, tmp_path):
-    monkeypatch.setattr(discovery, "SESSION_REGISTRY", tmp_path / "no-registry")
-    monkeypatch.setattr(discovery, "TRANSCRIPT_ROOT", tmp_path / "no-transcripts")
+    monkeypatch.setenv("CLAUDE_CONFIG_DIR", str(tmp_path / "no-config"))
 
 
 PS_OUTPUT = """\
@@ -253,6 +252,7 @@ def registry_file(
     }
     if socket_path is not None:
         entry["messagingSocketPath"] = socket_path
+    directory.mkdir(parents=True, exist_ok=True)
     (directory / f"{pid}.json").write_text(json.dumps(entry))
 
 
@@ -348,6 +348,39 @@ def transcript_file(root: Path, session_id: str, cwd: str = "/tmp/one", started:
         )
     )
     return path
+
+
+def test_config_dir_follows_claude_config_dir(monkeypatch, tmp_path):
+    monkeypatch.setenv("CLAUDE_CONFIG_DIR", str(tmp_path / "elsewhere"))
+
+    assert discovery.config_dir() == tmp_path / "elsewhere"
+    assert discovery.session_registry() == tmp_path / "elsewhere" / "sessions"
+    assert discovery.transcript_root() == tmp_path / "elsewhere" / "projects"
+
+
+def test_config_dir_expands_a_home_relative_override(monkeypatch):
+    monkeypatch.setenv("CLAUDE_CONFIG_DIR", "~/.claude-personal")
+
+    assert discovery.config_dir() == Path.home() / ".claude-personal"
+
+
+@pytest.mark.parametrize("override", [None, ""])
+def test_config_dir_falls_back_to_the_claude_default(monkeypatch, override):
+    if override is None:
+        monkeypatch.delenv("CLAUDE_CONFIG_DIR")
+    else:
+        monkeypatch.setenv("CLAUDE_CONFIG_DIR", override)
+
+    assert discovery.config_dir() == Path.home() / ".claude"
+
+
+def test_heartbeats_and_transcripts_are_read_from_the_configured_directory(monkeypatch, tmp_path):
+    registry_file(tmp_path / "sessions", 9, "a-b")
+    transcript_file(tmp_path / "projects", "c-d")
+    monkeypatch.setenv("CLAUDE_CONFIG_DIR", str(tmp_path))
+
+    assert discovery.registry_heartbeats()[9] == datetime.fromtimestamp(1786356599914 / 1000, tz=UTC)
+    assert [session.session_id for session in discovery.transcript_sessions()] == ["c-d"]
 
 
 def test_transcript_sessions_read_the_working_directory_out_of_the_transcript(tmp_path):
@@ -545,8 +578,8 @@ def test_closed_sessions_prefer_registry_metadata_over_the_transcript(tmp_path):
 
 
 def test_list_sessions_appends_closed_sessions_when_asked(monkeypatch, tmp_path):
-    registry_file(tmp_path, 9, "e-f")
-    monkeypatch.setattr(discovery, "SESSION_REGISTRY", tmp_path)
+    registry_file(tmp_path / "sessions", 9, "e-f")
+    monkeypatch.setenv("CLAUDE_CONFIG_DIR", str(tmp_path))
     monkeypatch.setattr(discovery, "fetch_payload", lambda *a, **k: MIXED_PAYLOAD)
     monkeypatch.setattr(discovery, "process_table", dict)
 
@@ -558,7 +591,7 @@ def test_list_sessions_appends_closed_sessions_when_asked(monkeypatch, tmp_path)
 
 def test_list_sessions_asks_the_cli_for_completed_agents_when_including_closed(monkeypatch, tmp_path):
     seen: dict[str, object] = {}
-    monkeypatch.setattr(discovery, "SESSION_REGISTRY", tmp_path)
+    monkeypatch.setenv("CLAUDE_CONFIG_DIR", str(tmp_path))
     monkeypatch.setattr(discovery, "fetch_payload", lambda cwd=None, **kwargs: seen.update(kwargs) or [])
     monkeypatch.setattr(discovery, "process_table", dict)
 
