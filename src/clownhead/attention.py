@@ -13,7 +13,10 @@ from dataclasses import dataclass
 from pathlib import Path
 
 from clownhead.models import Session, Status
-from clownhead.terminal import Rgb, Terminal, terminal_for
+from clownhead.terminal import Rgb, Terminal, detect_terminal, own_tty, terminal_for
+
+OVERSEER_LABEL = "clownhead"
+OVERSEER_COLOR = Rgb(108, 113, 196)
 
 STATUS_COLORS: dict[Status, Rgb | None] = {
     Status.WAITING: Rgb(220, 50, 47),
@@ -76,6 +79,41 @@ def paint(sessions: Iterable[Session], terminal: Terminal | None = None) -> list
             continue
         results.append(SignalResult(session.label, session.tty, True, session.status.value))
     return results
+
+
+def paint_self(terminal: Terminal | None = None) -> SignalResult:
+    """Tint the tab clownhead is itself running in.
+
+    The board sits in the tab bar it paints and is the one tab there that is not a
+    session; the colour is what says so. It is a colour no status wears, so a tab the
+    board holds is never read as a session in some state.
+
+    The terminal is clownhead's own rather than one resolved from a process tree: no
+    session owns this tab, only the shell the board was started from.
+    """
+    return _signal_own_tab(terminal, OVERSEER_COLOR)
+
+
+def reset_self(terminal: Terminal | None = None) -> SignalResult:
+    """Hand clownhead's own tab back the colour it had before the board took it."""
+    return _signal_own_tab(terminal, None)
+
+
+def _signal_own_tab(terminal: Terminal | None, color: Rgb | None) -> SignalResult:
+    tty = own_tty()
+    if tty is None:
+        return SignalResult(OVERSEER_LABEL, None, False, "no tty")
+    emitter = terminal or detect_terminal()
+    if not emitter.supports_tab_color:
+        return SignalResult(OVERSEER_LABEL, tty, False, f"{emitter.name} has no tab colours")
+    try:
+        if color is None:
+            emitter.reset_tab_color(tty)
+        else:
+            emitter.set_tab_color(tty, color)
+    except OSError as error:
+        return SignalResult(OVERSEER_LABEL, tty, False, str(error))
+    return SignalResult(OVERSEER_LABEL, tty, True, "tinted" if color else "cleared")
 
 
 def reset(sessions: Iterable[Session], terminal: Terminal | None = None) -> list[SignalResult]:

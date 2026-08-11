@@ -8,6 +8,7 @@ from clownhead.models import Session, Status
 from clownhead.terminal import ITerm2Terminal, Rgb, Terminal
 
 TTY = Path("/dev/ttys004")
+OWN_TTY = Path("/dev/ttys009")
 
 
 class RecordingTerminal(ITerm2Terminal):
@@ -92,6 +93,71 @@ def test_paint_continues_after_a_failure():
     results = attention.paint(sessions, terminal)
 
     assert [result.delivered for result in results] == [False, True]
+
+
+@pytest.fixture
+def own_tty(monkeypatch):
+    monkeypatch.setattr(attention, "own_tty", lambda: OWN_TTY)
+    return OWN_TTY
+
+
+def test_paint_self_tints_the_boards_own_tab(own_tty):
+    terminal = RecordingTerminal()
+
+    result = attention.paint_self(terminal)
+
+    assert result.delivered is True
+    assert result.tty == own_tty
+    assert terminal.calls[0][0] == str(own_tty)
+    assert "brightness;108" in terminal.calls[0][1]
+
+
+def test_paint_self_wears_a_colour_no_status_wears():
+    assert attention.OVERSEER_COLOR not in attention.STATUS_COLORS.values()
+
+
+def test_paint_self_without_a_terminal_of_its_own(monkeypatch):
+    monkeypatch.setattr(attention, "own_tty", lambda: None)
+
+    result = attention.paint_self(RecordingTerminal())
+
+    assert result.delivered is False
+    assert result.detail == "no tty"
+
+
+def test_paint_self_leaves_a_terminal_without_tab_colours_alone(own_tty):
+    terminal = PlainTerminal()
+
+    result = attention.paint_self(terminal)
+
+    assert result.delivered is False
+    assert "no tab colours" in result.detail
+    assert terminal.written == []
+
+
+def test_paint_self_reports_a_dead_tty_without_raising(own_tty):
+    result = attention.paint_self(RecordingTerminal(fail=True))
+
+    assert result.delivered is False
+    assert "device not configured" in result.detail
+
+
+def test_paint_self_asks_the_terminal_clownhead_runs_in(monkeypatch, own_tty):
+    detected = RecordingTerminal()
+    monkeypatch.setattr(attention, "detect_terminal", lambda: detected)
+    monkeypatch.setattr(attention, "terminal_for", lambda app: pytest.fail("no session owns this tab"))
+
+    assert attention.paint_self().delivered is True
+    assert detected.calls
+
+
+def test_reset_self_hands_the_tab_back(own_tty):
+    terminal = RecordingTerminal()
+
+    result = attention.reset_self(terminal)
+
+    assert result.delivered is True
+    assert terminal.calls == [(str(own_tty), "\033]6;1;bg;*;default\a")]
 
 
 def test_close_tab_asks_the_terminal_to_close_the_split():

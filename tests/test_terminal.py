@@ -13,6 +13,7 @@ from clownhead.terminal import (
     bundle_id_of,
     copy_to_pasteboard,
     detect_terminal,
+    own_tty,
     terminal_for,
 )
 
@@ -237,6 +238,32 @@ def test_detect_kitty_by_term_program():
 
 def test_detect_kitty_by_term():
     assert isinstance(detect_terminal({"TERM": "xterm-kitty"}), KittyTerminal)
+
+
+def test_own_tty_reads_the_terminal_behind_the_standard_descriptors(monkeypatch):
+    monkeypatch.setattr(terminal_module.os, "ttyname", {1: "/dev/ttys009"}.__getitem__)
+
+    assert own_tty() == Path("/dev/ttys009")
+
+
+def test_own_tty_falls_through_a_redirected_stream(monkeypatch):
+    def ttyname(descriptor: int) -> str:
+        if descriptor != 2:
+            raise OSError("Inappropriate ioctl for device")
+        return "/dev/ttys009"
+
+    monkeypatch.setattr(terminal_module.os, "ttyname", ttyname)
+
+    assert own_tty() == Path("/dev/ttys009")
+
+
+def test_own_tty_of_a_board_with_no_terminal_at_all(monkeypatch):
+    def ttyname(descriptor: int) -> str:
+        raise OSError("Inappropriate ioctl for device")
+
+    monkeypatch.setattr(terminal_module.os, "ttyname", ttyname)
+
+    assert own_tty() is None
 
 
 def test_detect_falls_back_to_generic():

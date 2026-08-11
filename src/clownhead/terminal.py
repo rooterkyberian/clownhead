@@ -33,6 +33,8 @@ from pathlib import Path
 ESC = "\033"
 BEL = "\a"
 
+STDIN, STDOUT, STDERR = 0, 1, 2
+
 ATTENTION_MARK = "\N{WARNING SIGN}"
 BUNDLE_ID_VAR = "__CFBundleIdentifier"
 OPEN_BINARY = "/usr/bin/open"
@@ -236,6 +238,23 @@ def bundle_id_of(app: Path) -> str | None:
         return None
     identifier = info.get("CFBundleIdentifier")
     return identifier if isinstance(identifier, str) else None
+
+
+def own_tty() -> Path | None:
+    """The TTY clownhead itself is running on, or ``None`` where it has no terminal.
+
+    The standard descriptors are asked in turn, and by number rather than through
+    ``sys.stdout``: a TUI framework replaces the stream objects while it holds the screen,
+    but the descriptors underneath them still point at the terminal. Output is tried first
+    and is also the one most likely to have been sent somewhere else; a board with its
+    output redirected is still a board running in a tab someone can see.
+    """
+    for descriptor in (STDOUT, STDIN, STDERR):
+        try:
+            return Path(os.ttyname(descriptor))
+        except OSError:
+            continue
+    return None
 
 
 def detect_terminal(env: Mapping[str, str] | None = None) -> Terminal:

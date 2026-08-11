@@ -253,7 +253,7 @@ class SettingsScreen(ModalScreen[Settings | None]):
         ("show_tty", "TTY column"),
         ("show_closed", "closed sessions at startup"),
         ("foreground", "raise the window on focus"),
-        ("paint_tabs", "tint each session's tab to match"),
+        ("paint_tabs", "tint session tabs, and the board's own"),
         ("close_tab_on_terminate", "close the tab when a session is terminated"),
     )
 
@@ -385,6 +385,7 @@ class FleetApp(App[None]):
         self._needle = ""
         self._failure: str | None = None
         self._loading = False
+        self._own_tab_tinted = False
 
     def compose(self) -> ComposeResult:
         """Lay out the summary bar, the fleet table, the detail pane, the filter and hints."""
@@ -401,12 +402,21 @@ class FleetApp(App[None]):
         yield Footer()
 
     def on_mount(self) -> None:
-        """Prepare the table and start the refresh loop."""
+        """Prepare the table, tint the board's own tab and start the refresh loop."""
         self._rebuild_columns()
         self.query_one("#fleet", DataTable).focus()
+        self._tint_own_tab(self._settings.paint_tabs)
         self._draw()
         self.start_reload()
         self._ticker = self.set_interval(self._interval, self.start_reload)
+
+    def on_unmount(self) -> None:
+        """Give the board's own tab its colour back on the way out.
+
+        A tint outliving the process it stood for is a tab claiming to be a board that is
+        no longer there, which is worse than no tint at all.
+        """
+        self._tint_own_tab(False)
 
     @property
     def columns(self) -> tuple[str, ...]:
@@ -661,6 +671,21 @@ class FleetApp(App[None]):
         """
         painter = attention.paint if self._settings.paint_tabs else attention.reset
         painter(self._sessions, self._terminal)
+        self._tint_own_tab(self._settings.paint_tabs)
+
+    def _tint_own_tab(self, tinted: bool) -> None:
+        """Take the board's own tab, or hand it back, without doing either twice.
+
+        Only a tab the overseer tinted is cleared again: with tinting switched off its own
+        tab is never touched, and a colour someone set on it themselves is theirs to keep.
+        """
+        if tinted == self._own_tab_tinted:
+            return
+        if tinted:
+            self._own_tab_tinted = attention.paint_self(self._terminal).delivered
+            return
+        attention.reset_self(self._terminal)
+        self._own_tab_tinted = False
 
     def _rebuild_columns(self) -> None:
         table = self.query_one("#fleet", DataTable)

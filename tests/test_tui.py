@@ -14,6 +14,9 @@ from clownhead.settings import Settings
 from clownhead.terminal import ITerm2Terminal
 from clownhead.tui import FleetApp, config_dir_notice, matches
 
+OWN_TTY = Path("/dev/ttys009")
+CLEARED = "\033]6;1;bg;*;default\a"
+
 
 @pytest.fixture(autouse=True)
 def silent_pasteboard(monkeypatch):
@@ -23,6 +26,22 @@ def silent_pasteboard(monkeypatch):
 @pytest.fixture(autouse=True)
 def isolated_state(monkeypatch, tmp_path):
     monkeypatch.setenv("CLOWNHEAD_STATE_DIR", str(tmp_path / "state"))
+
+
+@pytest.fixture(autouse=True)
+def headless_board(monkeypatch):
+    """A board with no tab of its own, so only the fleet's tabs are signalled.
+
+    Whether the suite has a terminal behind it is up to how it was run, and a board that
+    tinted its own tab under `pytest -s` would answer the same assertion differently.
+    """
+    monkeypatch.setattr(tui_module.attention, "own_tty", lambda: None)
+
+
+@pytest.fixture
+def own_tab(monkeypatch):
+    monkeypatch.setattr(tui_module.attention, "own_tty", lambda: OWN_TTY)
+    return OWN_TTY
 
 
 @pytest.fixture(autouse=True)
@@ -476,6 +495,54 @@ async def test_tui_tints_every_tab_as_it_reloads():
 
         assert "brightness;220" in terminal.written[0]
         assert terminal.written[1] == "\033]6;1;bg;*;default\a"
+
+
+async def test_tui_tints_its_own_tab_before_it_paints_the_fleet(own_tab):
+    terminal = SilentTerminal()
+    app = build_app(terminal=terminal)
+
+    async with app.run_test() as pilot:
+        await settle(app, pilot)
+
+        assert "brightness;108" in terminal.written[0]
+
+
+async def test_tui_hands_its_own_tab_back_when_it_exits(own_tab):
+    terminal = SilentTerminal()
+    app = build_app(terminal=terminal)
+
+    async with app.run_test() as pilot:
+        await settle(app, pilot)
+
+    assert terminal.written[-1] == CLEARED
+
+
+async def test_tui_leaves_its_own_tab_alone_when_tinting_is_opted_out_of(own_tab):
+    terminal = SilentTerminal()
+    app = build_app(terminal=terminal, settings=Settings(paint_tabs=False))
+
+    async with app.run_test() as pilot:
+        await settle(app, pilot)
+
+    assert terminal.written == []
+
+
+async def test_tui_clears_its_own_tab_when_the_setting_is_turned_off(own_tab):
+    terminal = SilentTerminal()
+    app = build_app(sessions=[], terminal=terminal)
+
+    async with app.run_test() as pilot:
+        await settle(app, pilot)
+        await pilot.press("comma")
+        await pilot.pause()
+
+        app.screen.query_one("#paint_tabs", Switch).toggle()
+        await pilot.pause()
+        await pilot.press("escape")
+        await pilot.pause()
+
+        assert "brightness;108" in terminal.written[0]
+        assert terminal.written[1:] == [CLEARED]
 
 
 async def test_tui_leaves_the_tabs_alone_when_tinting_is_opted_out_of():

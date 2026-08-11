@@ -47,8 +47,10 @@ whether to send its process SIGTERM, and can close its tab behind it; `/` filter
 `,` opens the settings. The board reloads on its own interval, and `R` reloads it now.
 
 Every reload also tints each session's tab to match its state, so the fleet is readable
-from the tab bar of a terminal the board is nowhere near. Turn it off in the settings and
-the tabs it tinted are cleared on the way out.
+from the tab bar of a terminal the board is nowhere near. The board takes a colour of its
+own — violet, which no status wears — so the one tab that is not a session says so, and
+gives it back when it exits. Turn it all off in the settings and the tabs it tinted are
+cleared on the way out.
 
 Every view is also a one-shot subcommand, so the same data pipes into a script.
 
