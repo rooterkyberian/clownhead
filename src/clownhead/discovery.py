@@ -201,6 +201,27 @@ def registry_entries(registry: Path | None = None) -> list[dict[str, Any]]:
     return entries
 
 
+def messaging_socket(session_id: str, registry: Path | None = None) -> Path | None:
+    """The control socket a session listens on, or ``None`` if it has none.
+
+    Claude Code publishes the path in its registry record. Versions that bind the socket
+    without naming it are still reachable at the conventional per-process path, which is
+    only offered when something is actually listening there — older ones never bound one
+    at all, and deriving a path for them would promise a channel that does not exist.
+    """
+    entry = _newest_entry(session_id, registry)
+    if entry is None:
+        return None
+    published = entry.get("messagingSocketPath")
+    if isinstance(published, str) and published:
+        return Path(published)
+    pid = entry.get("pid")
+    if not isinstance(pid, int):
+        return None
+    conventional = SOCKET_DIR / f"{pid}.sock"
+    return conventional if conventional.is_socket() else None
+
+
 def closed_sessions(
     live: Iterable[Session],
     cwd: Path | None = None,
@@ -357,6 +378,22 @@ def list_sessions(
     if include_closed:
         sessions.extend(closed_sessions(live, cwd))
     return sorted(sessions, key=sort_key)
+
+
+def _newest_entry(session_id: str, registry: Path | None) -> dict[str, Any] | None:
+    """The liveliest registry record for a session id.
+
+    The registry is keyed by process id, and a session that has been resumed answers to a
+    new one while its abandoned record survives until the registry is next pruned. Both
+    name the same session, so the one that last wrote a heartbeat is the running one.
+    """
+    matching = [entry for entry in registry_entries(registry) if entry.get("sessionId") == session_id]
+    return max(matching, key=_heartbeat_of) if matching else None
+
+
+def _heartbeat_of(entry: Mapping[str, Any]) -> float:
+    updated_at = entry.get("updatedAt")
+    return float(updated_at) if isinstance(updated_at, int | float) else 0.0
 
 
 def _transcript_tail(path: Path, size: int) -> list[str]:

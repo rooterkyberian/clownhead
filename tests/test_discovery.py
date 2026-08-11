@@ -1,4 +1,5 @@
 import json
+import socket
 from datetime import UTC, datetime
 from pathlib import Path
 
@@ -231,21 +232,66 @@ def test_list_sessions_keeps_background_when_asked(monkeypatch):
     assert [session.session_id for session in sessions] == ["c-d", "a-b"]
 
 
-def registry_file(directory: Path, pid: int, session_id: str, cwd: str = "/tmp/one", status: str = "busy") -> None:
-    (directory / f"{pid}.json").write_text(
-        json.dumps(
-            {
-                "pid": pid,
-                "sessionId": session_id,
-                "cwd": cwd,
-                "kind": "interactive",
-                "name": f"session-{pid}",
-                "status": status,
-                "startedAt": 1786356508914,
-                "updatedAt": 1786356599914,
-            }
-        )
-    )
+def registry_file(
+    directory: Path,
+    pid: int,
+    session_id: str,
+    cwd: str = "/tmp/one",
+    status: str = "busy",
+    socket_path: str | None = None,
+    updated_at: int = 1786356599914,
+) -> None:
+    entry = {
+        "pid": pid,
+        "sessionId": session_id,
+        "cwd": cwd,
+        "kind": "interactive",
+        "name": f"session-{pid}",
+        "status": status,
+        "startedAt": 1786356508914,
+        "updatedAt": updated_at,
+    }
+    if socket_path is not None:
+        entry["messagingSocketPath"] = socket_path
+    (directory / f"{pid}.json").write_text(json.dumps(entry))
+
+
+def test_messaging_socket_reads_the_path_the_session_published(tmp_path):
+    registry_file(tmp_path, 1, "a-b", socket_path="/tmp/cc-socks/1.sock")
+
+    assert discovery.messaging_socket("a-b", tmp_path) == Path("/tmp/cc-socks/1.sock")
+
+
+def test_messaging_socket_falls_back_to_the_conventional_path_when_it_is_listening(monkeypatch, tmp_path, socket_dir):
+    registry_file(tmp_path, 1, "a-b")
+    monkeypatch.setattr(discovery, "SOCKET_DIR", socket_dir)
+    server = socket.socket(socket.AF_UNIX, socket.SOCK_STREAM)
+    server.bind(str(socket_dir / "1.sock"))
+
+    try:
+        assert discovery.messaging_socket("a-b", tmp_path) == socket_dir / "1.sock"
+    finally:
+        server.close()
+
+
+def test_messaging_socket_ignores_a_conventional_path_with_nothing_on_it(monkeypatch, tmp_path, socket_dir):
+    registry_file(tmp_path, 1, "a-b")
+    monkeypatch.setattr(discovery, "SOCKET_DIR", socket_dir)
+
+    assert discovery.messaging_socket("a-b", tmp_path) is None
+
+
+def test_messaging_socket_is_none_for_a_session_the_registry_never_knew(tmp_path):
+    registry_file(tmp_path, 1, "a-b", socket_path="/tmp/cc-socks/1.sock")
+
+    assert discovery.messaging_socket("c-d", tmp_path) is None
+
+
+def test_messaging_socket_prefers_the_record_that_last_beat(tmp_path):
+    registry_file(tmp_path, 1, "a-b", socket_path="/tmp/cc-socks/1.sock", updated_at=1786000000000)
+    registry_file(tmp_path, 2, "a-b", socket_path="/tmp/cc-socks/2.sock", updated_at=1786999999999)
+
+    assert discovery.messaging_socket("a-b", tmp_path) == Path("/tmp/cc-socks/2.sock")
 
 
 def test_closed_sessions_are_the_ones_the_cli_no_longer_reports(tmp_path):

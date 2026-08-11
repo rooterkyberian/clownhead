@@ -493,6 +493,107 @@ async def test_tui_terminate_on_an_empty_fleet_asks_nothing(monkeypatch):
         assert not isinstance(app.screen, tui_module.ConfirmScreen)
 
 
+async def test_tui_rename_offers_the_current_name_for_editing():
+    app = build_app()
+
+    async with app.run_test() as pilot:
+        await settle(app, pilot)
+        await pilot.press("r")
+        await pilot.pause()
+
+        assert isinstance(app.screen, tui_module.PromptScreen)
+        assert app.screen.query_one("#answer", Input).value == "payments-api-7c"
+
+
+async def test_tui_rename_asks_the_session_once_submitted(monkeypatch):
+    renamed: list[tuple[str, str]] = []
+    monkeypatch.setattr(tui_module, "rename", lambda session, name: renamed.append((session.label, name)))
+    app = build_app()
+
+    async with app.run_test() as pilot:
+        await settle(app, pilot)
+        await pilot.press("r")
+        await pilot.pause()
+        app.screen.query_one("#answer", Input).value = "invoice-parser"
+        await pilot.press("enter")
+        await pilot.pause()
+
+        assert renamed == [("payments-api-7c", "invoice-parser")]
+
+
+async def test_tui_rename_is_dropped_when_the_prompt_is_abandoned(monkeypatch):
+    monkeypatch.setattr(tui_module, "rename", lambda session, name: pytest.fail("must not rename"))
+    app = build_app()
+
+    async with app.run_test() as pilot:
+        await settle(app, pilot)
+        await pilot.press("r")
+        await pilot.pause()
+        app.screen.query_one("#answer", Input).value = "invoice-parser"
+        await pilot.press("escape")
+        await pilot.pause()
+
+        assert not isinstance(app.screen, tui_module.PromptScreen)
+
+
+@pytest.mark.parametrize("answer", ["payments-api-7c", "", "   "])
+async def test_tui_rename_sends_nothing_when_the_name_would_not_change(monkeypatch, answer):
+    monkeypatch.setattr(tui_module, "rename", lambda session, name: pytest.fail("must not rename"))
+    app = build_app()
+
+    async with app.run_test() as pilot:
+        await settle(app, pilot)
+        await pilot.press("r")
+        await pilot.pause()
+        app.screen.query_one("#answer", Input).value = answer
+        await pilot.press("enter")
+        await pilot.pause()
+
+
+async def test_tui_rename_typing_does_not_filter_the_fleet():
+    app = build_app()
+
+    async with app.run_test() as pilot:
+        await settle(app, pilot)
+        await pilot.press("r")
+        await pilot.pause()
+        app.screen.query_one("#answer", Input).value = "invoice"
+        await pilot.pause()
+
+        assert table_of(app).row_count == 2
+
+
+async def test_tui_rename_reports_a_refusal(monkeypatch):
+    def refuse(session, name):
+        raise LookupError("payments-api-7c is not listening for control messages")
+
+    monkeypatch.setattr(tui_module, "rename", refuse)
+    app = build_app()
+
+    async with app.run_test() as pilot:
+        await settle(app, pilot)
+        await pilot.press("r")
+        await pilot.pause()
+        app.screen.query_one("#answer", Input).value = "invoice-parser"
+        await pilot.press("enter")
+        await pilot.pause()
+
+        messages = [notification.message for notification in app._notifications]
+        assert messages == ["payments-api-7c is not listening for control messages"]
+
+
+async def test_tui_rename_on_an_empty_fleet_asks_nothing(monkeypatch):
+    monkeypatch.setattr(tui_module, "rename", lambda session, name: pytest.fail("must not rename"))
+    app = build_app(sessions=[])
+
+    async with app.run_test() as pilot:
+        await settle(app, pilot)
+        await pilot.press("r")
+        await pilot.pause()
+
+        assert not isinstance(app.screen, tui_module.PromptScreen)
+
+
 async def test_tui_settings_screen_edits_and_saves(monkeypatch):
     app = build_app()
 
@@ -583,7 +684,7 @@ async def test_tui_refresh_picks_up_new_sessions():
         assert table_of(app).row_count == 0
 
         sessions.extend(fleet())
-        await pilot.press("r")
+        await pilot.press("R")
         await settle(app, pilot)
 
         assert table_of(app).row_count == 2
@@ -597,7 +698,7 @@ async def test_tui_refresh_keeps_the_cursor_on_the_same_session():
         await pilot.press("down")
         selected = app.selected_session
 
-        await pilot.press("r")
+        await pilot.press("R")
         await settle(app, pilot)
 
         assert selected is not None

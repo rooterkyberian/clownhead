@@ -28,7 +28,7 @@ $ clownhead
  timing  started 12d ago · quiet 12d
  resume  (cd /Users/you/dev/payments-api && claude --resume 4e020900-df7c-…)
 
- → history  q quit  r refresh  f focus  c closed  y copy  t terminate  , settings
+ → history  q quit  f focus  c closed  y copy  r rename  t terminate  R refresh  , settings
 ```
 
 `QUIET` is time since the session last touched its registry heartbeat — the useful
@@ -40,9 +40,9 @@ id and path, the process and terminal it belongs to, and the command that brings
 the fastest way to tell what a session is actually doing. Clicking a row does the same, so
 reaching for the mouse reads a session rather than interrupting it. `f` focuses its
 terminal: attention, then the window brought to the front. `c` folds in
-sessions that have already ended; `y` copies its resume command; `t` asks whether to send
-its process SIGTERM; `/` filters by name, status, path, or session id; `,` opens the
-settings.
+sessions that have already ended; `y` copies its resume command; `r` renames it; `t` asks
+whether to send its process SIGTERM; `/` filters by name, status, path, or session id;
+`,` opens the settings. The board reloads on its own interval, and `R` reloads it now.
 
 Every view is also a one-shot subcommand, so the same data pipes into a script.
 
@@ -100,6 +100,27 @@ leaves a file that can still be resumed. The process id is checked against the p
 table first — a session's pid is up to a refresh old, and a process that has exited since
 may have had its id handed to something else, which would otherwise be signalled in its
 place.
+
+**Renaming.** Claude Code names a session after its directory with a couple of hex digits
+on the end — `web-platform-1d`, and a second one in the same tree is `web-platform-0b`.
+That is no help at all once a fleet is a dozen deep, so `r` renames the session under the
+cursor to whatever the job actually is.
+
+The rename goes to the session rather than to the registry record clownhead reads. Every
+session listens for control messages on a per-process socket, and the rename performed
+there is the one `/rename` performs: the registry record, the transcript, the prompt box
+and the terminal title all follow, and the session is told its new name, which it takes as
+a hint about what it is working on. Editing the registry file directly would move only the
+copy the board reads and leave the session itself answering to the old name.
+
+The socket is the one Claude Code publishes in its own registry record, falling back to
+the conventional per-process path when a session binds one without naming it. The session
+id travels with the request and Claude Code drops anything addressed elsewhere, so a
+socket left behind by a recycled process id refuses the rename instead of applying it to a
+stranger — a stronger check than the process-table lookup termination needs. Sessions
+older than the control channel have no socket at all, and a session that has already ended
+has nothing listening to be told; both say so rather than being renamed somewhere only
+clownhead can see.
 
 **Conversation.** The turns shown by `→` are read from the tail of the session's
 transcript, never the whole file — they run to megabytes and only the end is ever shown.

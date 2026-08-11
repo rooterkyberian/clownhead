@@ -26,7 +26,7 @@ from textual.widgets import DataTable, Footer, Input, Label, Static, Switch
 
 from clownhead import attention
 from clownhead import settings as settings_store
-from clownhead.control import terminate
+from clownhead.control import rename, terminate
 from clownhead.discovery import Message, recent_messages
 from clownhead.models import Session, Status
 from clownhead.render import build_rows, conversation, describe, format_duration
@@ -131,6 +131,59 @@ class ConfirmScreen(ModalScreen[bool]):
     def action_cancel(self) -> None:
         """Answer no."""
         self.dismiss(False)
+
+
+class PromptScreen(ModalScreen[str | None]):
+    """A single line of text, handed back when it is submitted and ``None`` if abandoned."""
+
+    CSS = """
+    PromptScreen {
+        align: center middle;
+    }
+    #sheet {
+        width: 60;
+        height: auto;
+        padding: 1 2;
+        border: round $panel;
+        background: $surface;
+    }
+    #answer {
+        margin: 1 0;
+    }
+    """
+
+    BINDINGS = [Binding("escape", "cancel", "cancel")]
+
+    def __init__(self, question: str, value: str = "") -> None:
+        super().__init__()
+        self._question = question
+        self._value = value
+
+    def compose(self) -> ComposeResult:
+        """Ask, with whatever it is now ready to be edited."""
+        with Vertical(id="sheet"):
+            yield Static(self._question)
+            yield Input(value=self._value, id="answer")
+            yield Static("[dim]enter to confirm · esc to cancel[/]")
+
+    def on_mount(self) -> None:
+        """Put the cursor in the box, past the value already in it."""
+        box = self.query_one("#answer", Input)
+        box.focus()
+        box.action_end()
+
+    def on_input_submitted(self, event: Input.Submitted) -> None:
+        """Hand back what was typed, treating a blank answer as no answer.
+
+        The message is stopped rather than left to bubble: every screen's inputs reach
+        the overseer, which has a submit handler of its own for the filter box.
+        """
+        event.stop()
+        self.dismiss(event.value.strip() or None)
+
+    def action_cancel(self) -> None:
+        """Leave without changing anything."""
+        self.dismiss(None)
 
 
 class SettingsScreen(ModalScreen[Settings | None]):
@@ -266,11 +319,12 @@ class FleetApp(App[None]):
 
     BINDINGS = [
         Binding("q", "quit", "quit"),
-        Binding("r", "refresh", "refresh"),
         Binding("f", "focus_session", "focus"),
         Binding("c", "toggle_closed", "closed"),
         Binding("y", "copy_resume", "copy resume"),
+        Binding("r", "rename", "rename"),
         Binding("t", "terminate", "terminate"),
+        Binding("R", "refresh", "refresh"),
         Binding("right", "history", "→ history", show=False),
         Binding("left", "close_history", "← close", show=False),
         Binding("comma", "settings", "settings"),
@@ -406,6 +460,28 @@ class FleetApp(App[None]):
             self.notify(str(error), title="not terminated", severity="error")
             return
         self.notify(f"SIGTERM sent to {session.label}", severity="warning")
+        self.start_reload()
+
+    def action_rename(self) -> None:
+        """Give the selected session a new name, in the session itself."""
+        session = self.selected_session
+        if session is None:
+            self.notify("nothing selected", severity="warning")
+            return
+        self.push_screen(
+            PromptScreen(f"[bold]Rename {session.label}[/]", session.name or ""),
+            partial(self._rename, session),
+        )
+
+    def _rename(self, session: Session, name: str | None) -> None:
+        if name is None or name == session.name:
+            return
+        try:
+            rename(session, name)
+        except (ValueError, LookupError, OSError) as error:
+            self.notify(str(error), title="not renamed", severity="error")
+            return
+        self.notify(f"{session.label} is now {name}")
         self.start_reload()
 
     def action_toggle_closed(self) -> None:
