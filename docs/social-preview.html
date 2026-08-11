@@ -1,0 +1,99 @@
+<!doctype html>
+<html>
+<head>
+<meta charset="utf-8">
+<style>
+  * { margin: 0; padding: 0; box-sizing: border-box; }
+  html, body { width: 1280px; height: 640px; overflow: hidden; }
+  body {
+    background: #0d1017;
+    background-image:
+      radial-gradient(1100px 520px at 12% -18%, rgba(255,110,90,.12), transparent 62%),
+      radial-gradient(900px 480px at 96% 118%, rgba(56,189,214,.10), transparent 60%);
+    color: #e6edf3;
+    font-family: -apple-system, "SF Pro Text", "Helvetica Neue", sans-serif;
+    display: flex;
+    flex-direction: column;
+    padding: 58px 64px 54px;
+  }
+
+  .wordmark { display: flex; align-items: center; gap: 20px; }
+  .nose {
+    font-size: 62px; line-height: 1;
+    font-family: "Apple Color Emoji";
+    filter: drop-shadow(0 6px 18px rgba(255,90,70,.35));
+  }
+  .name {
+    font-size: 66px; font-weight: 700; letter-spacing: -1.8px; line-height: 1;
+    color: #f5f8fb;
+  }
+  .tagline {
+    margin-top: 18px;
+    font-size: 27px; line-height: 1.32; letter-spacing: -.2px;
+    color: #9aa7b4;
+  }
+  .tagline b { color: #e6edf3; font-weight: 600; }
+
+  .board {
+    margin-top: 36px;
+    flex: 1;
+    background: #12161f;
+    border: 1px solid #262d3a;
+    border-radius: 14px;
+    box-shadow: 0 24px 60px rgba(0,0,0,.45);
+    padding: 22px 26px 20px;
+    font-family: "SF Mono", Menlo, monospace;
+    font-size: 24px;
+    line-height: 1.62;
+    white-space: pre;
+    display: flex;
+    flex-direction: column;
+  }
+
+  .bar { color: #cbd5e1; }
+  .bar .count { color: #f5f8fb; font-weight: 600; }
+  .bar .alert { color: #ff6b6b; font-weight: 600; }
+  .bar .tick { color: #55606e; }
+
+  .head { color: #7d8b9a; letter-spacing: .6px; margin-top: 4px; }
+
+  .row { margin: 0 -26px; padding: 0 26px 0 22px; border-left: 4px solid transparent; }
+  .row.sel {
+    background: linear-gradient(90deg, rgba(255,107,107,.13), rgba(255,107,107,0) 78%);
+    border-left-color: #ff6b6b;
+  }
+
+  .row .waiting { color: #ff6b6b; font-weight: 600; }
+  .row .busy    { color: #4fd1e0; }
+  .row .idle    { color: #6d7887; }
+  .row .cell    { color: #c3ced9; }
+  .row .dim     { color: #6d7887; }
+  .row.sel { color: #c3ced9; }
+
+  .keys { margin-top: auto; padding-top: 14px; color: #596473; font-size: 21px; }
+  .keys b { color: #8b98a7; font-weight: 600; }
+</style>
+</head>
+<body>
+
+  <div class="wordmark">
+    <div class="nose">🤡</div>
+    <div class="name">clownhead</div>
+  </div>
+  <div class="tagline">
+    An overseer for the Claude Code sessions already running on your machine.<br>
+    <b>See which one is waiting on you</b> — and get put back in front of it.
+  </div>
+
+  <div class="board">
+<div class="bar"><span class="count">4 sessions</span> · <span class="alert">1 waiting on you</span>                              <span class="tick">⟳ 5s</span></div>
+<div class="head">STATUS        NAME                 QUIET  AGE  WHERE</div>
+<div class="row sel"><span class="waiting">input needed</span>  <span class="cell">payments-api-7c        12d  12d  ~/dev/payments-api</span></div>
+<div class="row"><span class="busy">busy        </span>  <span class="cell">index-rebuild           0s   1h  web-platform ⇢ search</span></div>
+<div class="row"><span class="idle">idle        </span>  <span class="dim">invoice-parser         32m   1h  web-platform ⇢ invoices</span></div>
+<div class="row"><span class="idle">idle        </span>  <span class="dim">web-platform-1d         4d   4d  ~/dev/web-platform</span></div>
+<div class="keys"><b>→</b> history   <b>f</b> focus   <b>y</b> copy resume   <b>t</b> terminate   <b>,</b> settings</div>
+  </div>
+
+</body>
+</html>

@@ -9,3 +9,4 @@ htmlcov/
 .pytest_cache/
 .ruff_cache/
 .mypy_cache/
+docs/social-preview.png
