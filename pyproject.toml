@@ -4,7 +4,7 @@ build-backend = "uv_build"
 
 [project]
 name = "clownhead"
-version = "0.5.0"
+version = "0.6.0"
 description = "A status board for the Claude Code sessions already running on your machine: which are busy, which are idle, and which one is blocked waiting on you."
 readme = "README.md"
 requires-python = ">=3.12"

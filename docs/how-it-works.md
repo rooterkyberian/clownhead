@@ -78,9 +78,10 @@ their own: what you asked for is what a reader scans back through.
 under the state directory. They cover the columns the board shows, the refresh interval,
 how many turns of history to read, whether closed sessions are in from the start, whether
 focusing raises the window, whether a terminated session's tab is closed after it, and
-whether tabs are tinted at all. The PID and TTY columns are off by default — they matter
-when a session needs killing or signalling, not while reading the board — and
-`clownhead ls --pid --tty` overrides for a single run without touching what is saved.
+whether tabs are tinted at all. The PID, TTY and WORKTREE columns are off by default — the
+first two matter when a session needs killing or signalling rather than while reading the
+board, and the third only in a repository that uses worktrees at all — and
+`clownhead ls --columns` overrides for a single run without touching what is saved.
 
 **Closed sessions.** `--closed` (or `c` in the overseer) folds in the sessions that have
 ended, read from the transcripts under `~/.claude/projects` plus whatever the session
