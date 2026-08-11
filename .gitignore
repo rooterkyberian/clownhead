@@ -10,3 +10,4 @@ htmlcov/
 .ruff_cache/
 .mypy_cache/
 docs/social-preview.png
+docs/social-preview.svg

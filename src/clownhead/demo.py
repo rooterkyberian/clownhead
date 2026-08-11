@@ -23,11 +23,13 @@ recording of the board renders the same numbers.
 
 from __future__ import annotations
 
+import asyncio
 import os
 import plistlib
 from collections.abc import Callable
 from datetime import UTC, datetime, timedelta
 from pathlib import Path
+from typing import Annotated
 
 import typer
 
@@ -42,6 +44,18 @@ DEMO_HOME = Path("/tmp/clownhead-demo")  # noqa: S108
 DEMO_SETTINGS = Settings(interval=5.0, paint_tabs=False)
 """Tab tinting off: the demo has no tabs of its own to colour, and yours are not its to
 take. Everything else is what a fresh install starts with."""
+
+ScreenshotOption = Annotated[
+    Path | None,
+    typer.Option("--screenshot", metavar="SVG", help="Write an SVG of the board to this path instead of opening it."),
+]
+
+SHOT_SIZE = (104, 24)
+"""The terminal the screenshot is taken in, in columns and rows.
+
+Wide enough that no ``WHERE`` is truncated, and shaped so the SVG comes out at very nearly
+two to one — which is what GitHub asks a social preview for.
+"""
 
 TERMINAL_APP = Path("Applications/iTerm.app")
 ITERM2_BUNDLE_ID = "com.googlecode.iterm2"
@@ -112,9 +126,26 @@ def main() -> None:
     typer.run(board)
 
 
-def board() -> None:
+def board(screenshot: ScreenshotOption = None) -> None:
     """Open the overseer on a fabricated fleet, which the README's recording is made from."""
+    if screenshot is not None:
+        screenshot.write_text(asyncio.run(shot()))
+        return
     tui.run(loader=fabricated_fleet(), settings=DEMO_SETTINGS, reader=fabricated_conversation)
+
+
+async def shot() -> str:
+    """Drive the board headlessly and hand back an SVG of what it settled on.
+
+    A screenshot rather than a frame of the recording: the board is driven by the same
+    fabricated fleet either way, but here it is asked for its own state once it has one,
+    rather than sampled from a video at a moment that moves whenever the demo changes.
+    """
+    loader = fabricated_fleet()
+    app = tui.FleetApp(loader=loader, settings=DEMO_SETTINGS, reader=fabricated_conversation)
+    async with app.run_test(size=SHOT_SIZE) as pilot:
+        await pilot.pause()
+        return app.export_screenshot(title="clownhead")
 
 
 def fabricated_fleet() -> Callable[[bool], list[Session]]:

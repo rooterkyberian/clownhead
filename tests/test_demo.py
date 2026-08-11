@@ -140,6 +140,23 @@ def test_the_script_opens_the_board_on_the_fabricated_world(demo_home, monkeypat
     ]
 
 
+async def test_the_screenshot_draws_the_board_the_social_preview_is_made_of(demo_home):
+    svg = await demo_module.shot()
+
+    assert svg.lstrip().startswith("<svg")
+    assert "payments-api-7c" in svg
+    assert "needed" in svg
+
+
+def test_the_screenshot_option_writes_the_svg_instead_of_opening_the_board(demo_home, tmp_path, monkeypatch):
+    monkeypatch.setattr(demo_module.tui, "run", lambda **kwargs: pytest.fail("the board was opened"))
+    destination = tmp_path / "social-preview.svg"
+
+    demo_module.board(screenshot=destination)
+
+    assert destination.read_text().lstrip().startswith("<svg")
+
+
 def test_the_script_needs_nothing_of_the_machine_it_runs_on(demo_home, monkeypatch):
     """A sandboxed shell blocks discovery, and the demo never asks it anything."""
     monkeypatch.setattr(discovery_module, "peer_discovery_available", lambda: False)
