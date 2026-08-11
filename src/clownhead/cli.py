@@ -12,7 +12,7 @@ from rich.console import Console
 from rich.live import Live
 from rich.table import Table
 
-from clownhead import attention, discovery, tui
+from clownhead import __version__, attention, discovery, tui
 from clownhead import settings as settings_store
 from clownhead.models import Session
 from clownhead.render import build_table
@@ -32,6 +32,18 @@ ClosedOption = Annotated[bool, typer.Option("--closed", help="Include sessions t
 IntervalOption = Annotated[float | None, typer.Option("--interval", "-n", help="Seconds between refreshes.")]
 PidOption = Annotated[bool | None, typer.Option("--pid/--no-pid", help="Show the owning process id.")]
 TtyOption = Annotated[bool | None, typer.Option("--tty/--no-tty", help="Show the controlling terminal.")]
+
+
+def _show_version(requested: bool) -> None:
+    if requested:
+        console.print(f"clownhead {__version__}")
+        raise typer.Exit()
+
+
+VersionOption = Annotated[
+    bool,
+    typer.Option("--version", "-V", callback=_show_version, is_eager=True, help="Show the version and exit."),
+]
 
 
 def _require_discovery() -> None:
@@ -66,7 +78,7 @@ def _warn_about_tab_colours(sessions: Iterable[Session]) -> None:
 
 
 @app.callback(invoke_without_command=True)
-def default(ctx: typer.Context) -> None:
+def default(ctx: typer.Context, version: VersionOption = False) -> None:
     """Overseer for local Claude Code sessions."""
     if ctx.invoked_subcommand is None:
         launch_tui()

@@ -1,0 +1,55 @@
+name: Problem report
+description: Something in clownhead is broken or does not behave as documented
+labels: ["bug"]
+body:
+  - type: markdown
+    attributes:
+      value: |
+        clownhead reads what Claude Code publishes about its own sessions, so a problem is
+        often a mismatch between the two versions. Both are required below.
+
+  - type: textarea
+    id: problem
+    attributes:
+      label: What happened
+      description: What you did, what you expected, and what happened instead.
+    validations:
+      required: true
+
+  - type: input
+    id: clownhead-version
+    attributes:
+      label: clownhead version
+      description: Output of `clownhead --version`.
+      placeholder: clownhead 0.2.0
+    validations:
+      required: true
+
+  - type: input
+    id: claude-code-version
+    attributes:
+      label: Claude Code version
+      description: Output of `claude --version`. clownhead is developed against the latest release.
+      placeholder: 2.1.227 (Claude Code)
+    validations:
+      required: true
+
+  - type: textarea
+    id: doctor
+    attributes:
+      label: clownhead doctor
+      description: Output of `clownhead doctor`, which covers discovery, terminal capabilities and auth.
+      render: text
+
+  - type: input
+    id: platform
+    attributes:
+      label: OS and terminal
+      description: The terminal is the one the affected session runs in, not the one clownhead was started from.
+      placeholder: macOS 15.5, iTerm2 3.5.11
+
+  - type: textarea
+    id: reproduce
+    attributes:
+      label: How to reproduce
+      description: The steps that get there, plus any error output.

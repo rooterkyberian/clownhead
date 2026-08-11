@@ -3,6 +3,7 @@ from pathlib import Path
 import pytest
 from typer.testing import CliRunner
 
+import clownhead
 from clownhead import attention, cli, discovery
 from clownhead import terminal as terminal_module
 from clownhead.models import Session, Status
@@ -248,6 +249,15 @@ def test_doctor_reports_blocked_peer_discovery(monkeypatch):
 
     assert result.exit_code == 0
     assert "blocked" in result.stdout
+
+
+def test_version_prints_the_version_without_launching_the_tui(monkeypatch):
+    monkeypatch.setattr(cli.tui, "run", lambda **kwargs: pytest.fail("tui must not launch"))
+
+    result = runner.invoke(cli.app, ["--version"])
+
+    assert result.exit_code == 0
+    assert clownhead.__version__ in result.stdout
 
 
 def test_attention_module_is_reachable_from_cli():

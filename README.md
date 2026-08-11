@@ -52,7 +52,10 @@ Every view is also a one-shot subcommand, so the same data pipes into a script.
 uv tool install git+https://github.com/rooterkyberian/clownhead
 ```
 
-Requires Python 3.12+ and the `claude` CLI on `PATH`.
+Requires Python 3.12+ and Claude Code 2.1.227 or newer on `PATH` — the latest release.
+clownhead reads what a session publishes about itself and talks to it over the socket it
+publishes, both of which move with the CLI, so it is developed against the current version
+rather than a floor held open for older ones. `claude --version` reports yours.
 
 ## Commands
 
@@ -64,6 +67,7 @@ Requires Python 3.12+ and the `claude` CLI on `PATH`.
 | `clownhead paint` | Colour each session's tab to match its state. `--follow` keeps them in sync. |
 | `clownhead focus [name]` | Bounce the dock, raise the terminal, and notify. With no argument, takes every session that is waiting on you. `--no-foreground` leaves your windows where they are. |
 | `clownhead doctor` | Check discovery, terminal capabilities, and auth. |
+| `clownhead --version` | The installed version, which a problem report asks for. |
 
 ## How it works
 
@@ -174,6 +178,12 @@ title and the foreground switch; only the tab tinting and rich notifications are
 Raising a window is macOS-only, because it goes through `open`, and it raises the
 application: JetBrains IDEs expose no way to focus one terminal tab out of many, so the
 marked title is what tells you which tab was asking. CI runs the suite on Linux and macOS.
+
+## Problems
+
+[Open an issue](https://github.com/rooterkyberian/clownhead/issues/new/choose). The form
+asks for `clownhead --version` and `claude --version` up front, since a surprising number
+of surprises are a disagreement between the two.
 
 ## Development
 
