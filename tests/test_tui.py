@@ -6,6 +6,7 @@ from textual.widgets import DataTable, Input, Static, Switch
 
 from clownhead import settings as settings_store
 from clownhead import tui as tui_module
+from clownhead.attention import SignalResult
 from clownhead.discovery import Message
 from clownhead.models import Session, Status
 from clownhead.settings import Settings
@@ -605,6 +606,74 @@ async def test_tui_terminate_on_an_empty_fleet_asks_nothing(monkeypatch):
         await pilot.pause()
 
         assert not isinstance(app.screen, tui_module.ConfirmScreen)
+
+
+async def test_tui_terminate_leaves_the_tab_alone_by_default(monkeypatch):
+    monkeypatch.setattr(tui_module, "terminate", lambda session: None)
+    monkeypatch.setattr(tui_module, "wait_for_exit", lambda pid: pytest.fail("must not wait"))
+    closed: list[str] = []
+    monkeypatch.setattr(tui_module.attention, "close_tab", lambda session, terminal: closed.append(session.label))
+    app = build_app()
+
+    async with app.run_test() as pilot:
+        await settle(app, pilot)
+        await pilot.press("t")
+        await pilot.pause()
+        await pilot.press("y")
+        await settle(app, pilot)
+
+        assert closed == []
+
+
+async def test_tui_terminate_closes_the_tab_once_the_session_has_gone(monkeypatch):
+    waited: list[int] = []
+    closed: list[str] = []
+    monkeypatch.setattr(tui_module, "terminate", lambda session: None)
+    monkeypatch.setattr(tui_module, "wait_for_exit", lambda pid: waited.append(pid) or True)
+    monkeypatch.setattr(
+        tui_module.attention,
+        "close_tab",
+        lambda session, terminal: closed.append(session.label) or SignalResult(session.label, None, True, "tab closed"),
+    )
+    app = build_app(settings=Settings(close_tab_on_terminate=True, paint_tabs=False))
+
+    async with app.run_test() as pilot:
+        await settle(app, pilot)
+        await pilot.press("t")
+        await pilot.pause()
+        await pilot.press("y")
+        await settle(app, pilot)
+
+        assert waited == [77730]
+        assert closed == ["payments-api-7c"]
+
+
+async def test_tui_keeps_the_tab_of_a_session_that_outlasts_the_wait(monkeypatch):
+    monkeypatch.setattr(tui_module, "terminate", lambda session: None)
+    monkeypatch.setattr(tui_module, "wait_for_exit", lambda pid: False)
+    monkeypatch.setattr(tui_module.attention, "close_tab", lambda session, terminal: pytest.fail("must not close"))
+    app = build_app(settings=Settings(close_tab_on_terminate=True, paint_tabs=False))
+
+    async with app.run_test() as pilot:
+        await settle(app, pilot)
+        await pilot.press("t")
+        await pilot.pause()
+        await pilot.press("y")
+        await settle(app, pilot)
+
+        assert [notification.title for notification in app._notifications][-1] == "tab left open"
+
+
+async def test_tui_terminate_says_the_tab_will_close_before_asking(monkeypatch):
+    monkeypatch.setattr(tui_module, "terminate", lambda session: pytest.fail("must not signal"))
+    app = build_app(settings=Settings(close_tab_on_terminate=True, paint_tabs=False))
+
+    async with app.run_test() as pilot:
+        await settle(app, pilot)
+        await pilot.press("t")
+        await pilot.pause()
+
+        assert "terminal tab closes" in str(app.screen.query_one(Static).content)
 
 
 async def test_tui_rename_offers_the_current_name_for_editing():

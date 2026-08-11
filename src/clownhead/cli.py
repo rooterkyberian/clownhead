@@ -208,7 +208,8 @@ def doctor() -> None:
         f"attention={terminal.supports_attention} "
         f"tab_color={terminal.supports_tab_color} "
         f"notifications={terminal.supports_notifications} "
-        f"foreground={terminal.supports_foreground}"
+        f"foreground={terminal.supports_foreground} "
+        f"close_tab={terminal.supports_close_tab}"
     )
 
 

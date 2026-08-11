@@ -6,6 +6,7 @@ import json
 import os
 import signal
 import socket
+import time
 from collections.abc import Mapping
 from pathlib import Path
 from typing import Any
@@ -15,6 +16,8 @@ from clownhead.models import Session
 
 CLAUDE_COMMAND = "claude"
 CONTROL_TIMEOUT = 2.0
+EXIT_TIMEOUT = 10.0
+EXIT_POLL = 0.2
 
 
 def terminate(session: Session, processes: Mapping[int, Process] | None = None) -> None:
@@ -42,6 +45,31 @@ def terminate(session: Session, processes: Mapping[int, Process] | None = None) 
     if CLAUDE_COMMAND not in process.command:
         raise LookupError(f"pid {session.pid} is no longer {session.label}")
     os.kill(session.pid, signal.SIGTERM)
+
+
+def wait_for_exit(pid: int, timeout: float = EXIT_TIMEOUT, poll: float = EXIT_POLL) -> bool:
+    """Whether a process is gone, waiting up to ``timeout`` for it to go.
+
+    Signal zero asks the kernel about a process without disturbing it. A process this one
+    is not allowed to signal answers ``PermissionError``, which is still an answer: it
+    exists.
+
+    Anything that depends on a session having finished has to wait for it rather than
+    assume it, because SIGTERM is a request. Claude Code takes it as one — it has a
+    transcript to finish writing — and a caller that acted the moment the signal was sent
+    would be acting while the session was still shutting down.
+    """
+    deadline = time.monotonic() + timeout
+    while True:
+        try:
+            os.kill(pid, 0)
+        except ProcessLookupError:
+            return True
+        except PermissionError:
+            pass
+        if time.monotonic() >= deadline:
+            return False
+        time.sleep(poll)
 
 
 def rename(session: Session, name: str, registry: Path | None = None) -> None:

@@ -1,6 +1,8 @@
 import json
+import os
 import signal
 import socket
+import subprocess
 import threading
 from pathlib import Path
 
@@ -149,3 +151,39 @@ def test_terminate_reads_the_live_process_table_when_none_is_given(monkeypatch):
     control.terminate(session())
 
     assert signalled == [(77730, signal.SIGTERM)]
+
+
+def test_wait_for_exit_returns_at_once_for_a_process_that_has_gone():
+    finished = subprocess.Popen(["/bin/sh", "-c", "exit 0"])
+    finished.wait()
+
+    assert control.wait_for_exit(finished.pid) is True
+
+
+def test_wait_for_exit_gives_up_on_a_process_that_stays():
+    assert control.wait_for_exit(os.getpid(), timeout=0.05, poll=0.01) is False
+
+
+def test_wait_for_exit_waits_for_a_process_to_finish_shutting_down(monkeypatch):
+    remaining = [True, True, False]
+    monkeypatch.setattr(
+        control.os,
+        "kill",
+        lambda pid, sig: None if remaining.pop(0) else _gone(),
+    )
+
+    assert control.wait_for_exit(4242, timeout=5.0, poll=0.01) is True
+    assert remaining == []
+
+
+def test_wait_for_exit_reads_a_refused_signal_as_still_running(monkeypatch):
+    def refuse(pid, sig):
+        raise PermissionError("not yours")
+
+    monkeypatch.setattr(control.os, "kill", refuse)
+
+    assert control.wait_for_exit(4242, timeout=0.05, poll=0.01) is False
+
+
+def _gone():
+    raise ProcessLookupError

@@ -1,4 +1,5 @@
 import plistlib
+import subprocess
 from pathlib import Path
 
 import pytest
@@ -83,6 +84,54 @@ def test_generic_terminal_set_tab_color_is_a_noop():
     terminal.set_tab_color(TTY, Rgb(220, 50, 47))
 
     assert terminal.written == []
+
+
+def test_generic_terminal_close_tab_is_a_noop():
+    terminal = RecordingTerminal()
+
+    terminal.close_tab(TTY)
+
+    assert terminal.written == []
+
+
+def test_iterm2_closes_the_split_owning_the_tty(monkeypatch):
+    calls: list[tuple[list[str], str]] = []
+
+    def record(args, **kwargs):
+        calls.append((args, kwargs["input"]))
+        return subprocess.CompletedProcess(args, 0, stdout="closed\n", stderr="")
+
+    monkeypatch.setattr(terminal_module.subprocess, "run", record)
+
+    RecordingITerm2().close_tab(TTY)
+
+    args, script = calls[0]
+    assert args == ["/usr/bin/osascript", "-", "/dev/ttys004"]
+    assert "close theSession" in script
+
+
+def test_iterm2_close_tab_reports_a_refusal(monkeypatch):
+    def refuse(args, **kwargs):
+        return subprocess.CompletedProcess(args, 1, stdout="", stderr="Not authorised to send Apple events")
+
+    monkeypatch.setattr(terminal_module.subprocess, "run", refuse)
+
+    with pytest.raises(OSError, match="Apple events"):
+        RecordingITerm2().close_tab(TTY)
+
+
+def test_applescript_arguments_are_never_part_of_the_script(monkeypatch):
+    calls: list[list[str]] = []
+
+    def record(args, **kwargs):
+        calls.append(args)
+        return subprocess.CompletedProcess(args, 0, stdout="", stderr="")
+
+    monkeypatch.setattr(terminal_module.subprocess, "run", record)
+
+    terminal_module.run_applescript('return "hi"', '/dev/tty" & (do shell script "id")')
+
+    assert calls[0][-1] == '/dev/tty" & (do shell script "id")'
 
 
 def test_generic_terminal_sets_title():

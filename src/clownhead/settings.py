@@ -27,6 +27,7 @@ class Settings(BaseModel):
     show_closed: bool = False
     foreground: bool = True
     paint_tabs: bool = True
+    close_tab_on_terminate: bool = False
     history_turns: int = Field(default=20, ge=1, le=200)
 
 

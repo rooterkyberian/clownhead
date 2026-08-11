@@ -43,7 +43,7 @@ the fleet cursor; `←` hands them back. Clicking a row does the same, so
 reaching for the mouse reads a session rather than interrupting it. `f` focuses its
 terminal: attention, then the window brought to the front. `c` folds in
 sessions that have already ended; `y` copies its resume command; `r` renames it; `t` asks
-whether to send its process SIGTERM; `/` filters by name, status, path, or session id;
+whether to send its process SIGTERM, and can close its tab behind it; `/` filters by name, status, path, or session id;
 `,` opens the settings. The board reloads on its own interval, and `R` reloads it now.
 
 Every reload also tints each session's tab to match its state, so the fleet is readable
@@ -110,6 +110,16 @@ table first — a session's pid is up to a refresh old, and a process that has e
 may have had its id handed to something else, which would otherwise be signalled in its
 place.
 
+Terminating a session leaves its terminal sitting at a shell prompt, which is a tab to
+close by hand for every session ended. The settings can close it instead, off by default
+since a closed tab takes its scrollback with it. It closes only once the process is
+actually gone: SIGTERM is a request, and a tab closed while Claude Code was still writing
+its transcript would take away the thing that makes the session resumable — a session that
+outlasts the wait keeps its tab and says so. iTerm2 is the only emulator that can be asked;
+no escape code closes a tab, so it goes through AppleScript, which is also why what closes
+is the split the session was running in rather than the whole tab. iTerm2 closes the tab
+itself once the last split in it is gone, and the panes beside it were never asked about.
+
 **Renaming.** Claude Code names a session after its directory with a couple of hex digits
 on the end — `web-platform-1d`, and a second one in the same tree is `web-platform-0b`.
 That is no help at all once a fleet is a dozen deep, so `r` renames the session under the
@@ -145,8 +155,9 @@ is a narrow column; `code` and **bold** are rendered rather than left as punctua
 **Settings.** `,` opens them, changes apply live, and they persist to
 `settings.json` under the state directory. They cover the columns the board shows, the refresh
 interval, how many turns of history to read, whether closed sessions are in from the
-start, whether focusing raises the window, and whether tabs are tinted at all — a tinted
-tab is a passive report rather than a signal, so a terminal that cannot colour one is
+start, whether focusing raises the window, whether a terminated session's tab is closed
+after it, and whether tabs are tinted at all — a tinted tab is a passive report rather
+than a signal, so a terminal that cannot colour one is
 left alone rather than belled about it. The PID and TTY columns are off by default:
 they matter when a session needs killing or signalling, not while reading the board, and
 every column they take is one the path loses. `clownhead ls --pid --tty` overrides for a

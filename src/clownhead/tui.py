@@ -26,7 +26,7 @@ from textual.widgets import DataTable, Footer, Input, Label, Static, Switch
 
 from clownhead import attention
 from clownhead import settings as settings_store
-from clownhead.control import rename, terminate
+from clownhead.control import rename, terminate, wait_for_exit
 from clownhead.discovery import Message, recent_messages
 from clownhead.models import Session, Status
 from clownhead.render import build_rows, conversation, describe, format_duration
@@ -240,6 +240,7 @@ class SettingsScreen(ModalScreen[Settings | None]):
         ("show_closed", "closed sessions at startup"),
         ("foreground", "raise the window on focus"),
         ("paint_tabs", "tint each session's tab to match"),
+        ("close_tab_on_terminate", "close the tab when a session is terminated"),
     )
 
     def __init__(self, settings: Settings) -> None:
@@ -468,6 +469,8 @@ class FleetApp(App[None]):
             return
         where = f"pid {session.pid}" if session.pid else "no process"
         question = f"[bold]Send SIGTERM to {session.label}?[/]\n[dim]{where} · {session.reason}[/]"
+        if self._settings.close_tab_on_terminate:
+            question += "\n[dim]its terminal tab closes once it has exited[/]"
         self.push_screen(ConfirmScreen(question), partial(self._terminate, session))
 
     def _terminate(self, session: Session, confirmed: bool | None) -> None:
@@ -479,7 +482,27 @@ class FleetApp(App[None]):
             self.notify(str(error), title="not terminated", severity="error")
             return
         self.notify(f"SIGTERM sent to {session.label}", severity="warning")
+        if self._settings.close_tab_on_terminate and session.pid is not None:
+            self._close_tab(session, session.pid)
         self.start_reload()
+
+    @work(thread=True, group="close-tab")
+    def _close_tab(self, session: Session, pid: int) -> None:
+        """Close the session's tab, once the session has actually gone.
+
+        Waiting is the whole point: SIGTERM is a request, and a tab closed while Claude
+        Code was still writing its transcript would take away the thing that makes the
+        session resumable. A session that outlasts the wait keeps its tab, and says so.
+        """
+        if not wait_for_exit(pid):
+            self._hand_back(self._tab_left_open, f"{session.label} is still running")
+            return
+        result = attention.close_tab(session, self._terminal)
+        if not result.delivered:
+            self._hand_back(self._tab_left_open, f"{result.label}: {result.detail}")
+
+    def _tab_left_open(self, detail: str) -> None:
+        self.notify(detail, title="tab left open", severity="warning")
 
     def action_rename(self) -> None:
         """Give the selected session a new name, in the session itself."""
