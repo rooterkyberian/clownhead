@@ -28,7 +28,7 @@ $ clownhead
  timing  started 12d ago · quiet 12d
  resume  (cd /Users/you/dev/payments-api && claude --resume 4e020900-df7c-…)
 
- → history  q quit  r refresh  f focus  c closed  y copy resume  , settings
+ → history  q quit  r refresh  f focus  c closed  y copy  t terminate  , settings
 ```
 
 `QUIET` is time since the session last touched its registry heartbeat — the useful
@@ -40,8 +40,9 @@ id and path, the process and terminal it belongs to, and the command that brings
 the fastest way to tell what a session is actually doing. Clicking a row does the same, so
 reaching for the mouse reads a session rather than interrupting it. `f` focuses its
 terminal: attention, then the window brought to the front. `c` folds in
-sessions that have already ended; `y` copies its resume command; `/` filters by name,
-status, path, or session id; `,` opens the settings.
+sessions that have already ended; `y` copies its resume command; `t` asks whether to send
+its process SIGTERM; `/` filters by name, status, path, or session id; `,` opens the
+settings.
 
 Every view is also a one-shot subcommand, so the same data pipes into a script.
 
@@ -92,6 +93,13 @@ the session to the first ancestor running out of an application bundle answers i
 which is how a session in an IDE's embedded terminal gets its own window raised instead of
 being sent escape codes meant for a terminal it is not in. `clownhead doctor` lists which
 applications the current fleet is spread across.
+
+**Termination.** `t` sends SIGTERM, never SIGKILL, and only after a confirmation: Claude
+Code writes its transcript as it goes, so a session given the chance to shut down cleanly
+leaves a file that can still be resumed. The process id is checked against the process
+table first — a session's pid is up to a refresh old, and a process that has exited since
+may have had its id handed to something else, which would otherwise be signalled in its
+place.
 
 **Conversation.** The turns shown by `→` are read from the tail of the session's
 transcript, never the whole file — they run to megabytes and only the end is ever shown.

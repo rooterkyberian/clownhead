@@ -419,6 +419,80 @@ async def test_tui_copy_resume_on_an_empty_fleet_copies_nothing(monkeypatch):
         assert copied == []
 
 
+async def test_tui_terminate_asks_before_signalling_anything(monkeypatch):
+    killed: list[str] = []
+    monkeypatch.setattr(tui_module, "terminate", lambda session: killed.append(session.label))
+    app = build_app()
+
+    async with app.run_test() as pilot:
+        await settle(app, pilot)
+        await pilot.press("t")
+        await pilot.pause()
+
+        assert isinstance(app.screen, tui_module.ConfirmScreen)
+        assert killed == []
+
+
+async def test_tui_terminate_signals_the_session_once_confirmed(monkeypatch):
+    killed: list[str] = []
+    monkeypatch.setattr(tui_module, "terminate", lambda session: killed.append(session.label))
+    app = build_app()
+
+    async with app.run_test() as pilot:
+        await settle(app, pilot)
+        await pilot.press("t")
+        await pilot.pause()
+        await pilot.press("y")
+        await pilot.pause()
+
+        assert killed == ["payments-api-7c"]
+
+
+@pytest.mark.parametrize("key", ["escape", "n"])
+async def test_tui_terminate_is_dropped_when_the_question_is_declined(monkeypatch, key):
+    killed: list[str] = []
+    monkeypatch.setattr(tui_module, "terminate", lambda session: killed.append(session.label))
+    app = build_app()
+
+    async with app.run_test() as pilot:
+        await settle(app, pilot)
+        await pilot.press("t")
+        await pilot.pause()
+        await pilot.press(key)
+        await pilot.pause()
+
+        assert killed == []
+
+
+async def test_tui_terminate_reports_a_refusal(monkeypatch):
+    def refuse(session):
+        raise LookupError("pid 77730 is gone")
+
+    monkeypatch.setattr(tui_module, "terminate", refuse)
+    app = build_app()
+
+    async with app.run_test() as pilot:
+        await settle(app, pilot)
+        await pilot.press("t")
+        await pilot.pause()
+        await pilot.press("y")
+        await pilot.pause()
+
+        assert [notification.message for notification in app._notifications] == ["pid 77730 is gone"]
+
+
+async def test_tui_terminate_on_an_empty_fleet_asks_nothing(monkeypatch):
+    monkeypatch.setattr(tui_module, "terminate", lambda session: pytest.fail("must not signal"))
+    app = build_app(sessions=[])
+
+    async with app.run_test() as pilot:
+        await settle(app, pilot)
+        await pilot.press("t")
+        await pilot.pause()
+
+        assert not isinstance(app.screen, tui_module.ConfirmScreen)
+
+
 async def test_tui_settings_screen_edits_and_saves(monkeypatch):
     app = build_app()
 

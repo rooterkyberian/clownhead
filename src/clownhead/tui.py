@@ -10,6 +10,7 @@ from __future__ import annotations
 
 from collections.abc import Callable
 from datetime import UTC, datetime, timedelta
+from functools import partial
 from typing import Any, Protocol
 
 from pydantic import ValidationError
@@ -25,6 +26,7 @@ from textual.widgets import DataTable, Footer, Input, Label, Static, Switch
 
 from clownhead import attention
 from clownhead import settings as settings_store
+from clownhead.control import terminate
 from clownhead.discovery import Message, recent_messages
 from clownhead.models import Session, Status
 from clownhead.render import build_rows, conversation, describe, format_duration
@@ -87,6 +89,48 @@ class FleetTable(DataTable[Any]):
         event.stop()
         self.move_cursor(row=row)
         self.post_message(self.RowClicked())
+
+
+class ConfirmScreen(ModalScreen[bool]):
+    """A question that has to be answered before something irreversible happens."""
+
+    CSS = """
+    ConfirmScreen {
+        align: center middle;
+    }
+    #sheet {
+        width: 60;
+        height: auto;
+        padding: 1 2;
+        border: round $error;
+        background: $surface;
+    }
+    """
+
+    BINDINGS = [
+        Binding("y", "confirm", "yes"),
+        Binding("enter", "confirm", "yes"),
+        Binding("n", "cancel", "no"),
+        Binding("escape", "cancel", "no"),
+    ]
+
+    def __init__(self, question: str) -> None:
+        super().__init__()
+        self._question = question
+
+    def compose(self) -> ComposeResult:
+        """Ask, and say which keys answer."""
+        with Vertical(id="sheet"):
+            yield Static(self._question)
+            yield Static("[dim]y to confirm · esc to cancel[/]")
+
+    def action_confirm(self) -> None:
+        """Answer yes."""
+        self.dismiss(True)
+
+    def action_cancel(self) -> None:
+        """Answer no."""
+        self.dismiss(False)
 
 
 class SettingsScreen(ModalScreen[Settings | None]):
@@ -226,6 +270,7 @@ class FleetApp(App[None]):
         Binding("f", "focus_session", "focus"),
         Binding("c", "toggle_closed", "closed"),
         Binding("y", "copy_resume", "copy resume"),
+        Binding("t", "terminate", "terminate"),
         Binding("right", "history", "→ history", show=False),
         Binding("left", "close_history", "← close", show=False),
         Binding("comma", "settings", "settings"),
@@ -341,6 +386,27 @@ class FleetApp(App[None]):
     def action_settings(self) -> None:
         """Edit the overseer's settings without leaving it."""
         self.push_screen(SettingsScreen(self._settings), self._settings_changed)
+
+    def action_terminate(self) -> None:
+        """Ask the selected session's process to exit, once it has been confirmed."""
+        session = self.selected_session
+        if session is None:
+            self.notify("nothing selected", severity="warning")
+            return
+        where = f"pid {session.pid}" if session.pid else "no process"
+        question = f"[bold]Send SIGTERM to {session.label}?[/]\n[dim]{where} · {session.reason}[/]"
+        self.push_screen(ConfirmScreen(question), partial(self._terminate, session))
+
+    def _terminate(self, session: Session, confirmed: bool | None) -> None:
+        if not confirmed:
+            return
+        try:
+            terminate(session)
+        except (LookupError, OSError) as error:
+            self.notify(str(error), title="not terminated", severity="error")
+            return
+        self.notify(f"SIGTERM sent to {session.label}", severity="warning")
+        self.start_reload()
 
     def action_toggle_closed(self) -> None:
         """Show or hide the sessions that have ended but are still resumable."""
