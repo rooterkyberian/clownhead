@@ -221,7 +221,7 @@ async def test_tui_right_arrow_opens_the_conversation_beside_the_fleet(monkeypat
 async def test_tui_clicking_a_row_reads_it_and_leaves_its_terminal_alone(monkeypatch):
     monkeypatch.setattr(tui_module, "recent_messages", lambda session_id, limit: [])
     terminal = SilentTerminal()
-    app = build_app(terminal=terminal)
+    app = build_app(terminal=terminal, settings=Settings(paint_tabs=False))
 
     async with app.run_test() as pilot:
         await settle(app, pilot)
@@ -235,7 +235,7 @@ async def test_tui_clicking_a_row_reads_it_and_leaves_its_terminal_alone(monkeyp
 async def test_tui_clicking_the_selected_row_still_does_not_focus_it(monkeypatch):
     monkeypatch.setattr(tui_module, "recent_messages", lambda session_id, limit: [])
     terminal = SilentTerminal()
-    app = build_app(terminal=terminal)
+    app = build_app(terminal=terminal, settings=Settings(paint_tabs=False))
 
     async with app.run_test() as pilot:
         await settle(app, pilot)
@@ -277,7 +277,7 @@ async def test_tui_closes_the_conversation(monkeypatch, key):
 
 async def test_tui_enter_leaves_the_session_alone():
     terminal = SilentTerminal()
-    app = build_app(terminal=terminal)
+    app = build_app(terminal=terminal, settings=Settings(paint_tabs=False))
 
     async with app.run_test() as pilot:
         await settle(app, pilot)
@@ -345,6 +345,63 @@ async def test_tui_focus_signals_the_selected_session():
         assert app.selected_session is not None
         assert app.selected_session.name == "payments-api-7c"
         assert "\033]1337;StealFocus\a" in terminal.written
+
+
+async def test_tui_tints_every_tab_as_it_reloads():
+    terminal = SilentTerminal()
+    app = build_app(terminal=terminal)
+
+    async with app.run_test() as pilot:
+        await settle(app, pilot)
+
+        assert "brightness;220" in terminal.written[0]
+        assert terminal.written[1] == "\033]6;1;bg;*;default\a"
+
+
+async def test_tui_leaves_the_tabs_alone_when_tinting_is_opted_out_of():
+    terminal = SilentTerminal()
+    app = build_app(terminal=terminal, settings=Settings(paint_tabs=False))
+
+    async with app.run_test() as pilot:
+        await settle(app, pilot)
+
+        assert terminal.written == []
+
+
+async def test_tui_clears_the_tabs_it_tinted_when_the_setting_is_turned_off():
+    terminal = SilentTerminal()
+    app = build_app(terminal=terminal)
+
+    async with app.run_test() as pilot:
+        await settle(app, pilot)
+        await pilot.press("comma")
+        await pilot.pause()
+
+        app.screen.query_one("#paint_tabs", Switch).toggle()
+        await pilot.pause()
+        await pilot.press("escape")
+        await pilot.pause()
+
+        assert terminal.written[-2:] == ["\033]6;1;bg;*;default\a"] * 2
+        assert settings_store.load().paint_tabs is False
+
+
+async def test_tui_tints_the_tabs_the_moment_the_setting_is_turned_on():
+    terminal = SilentTerminal()
+    app = build_app(terminal=terminal, settings=Settings(paint_tabs=False))
+
+    async with app.run_test() as pilot:
+        await settle(app, pilot)
+        await pilot.press("comma")
+        await pilot.pause()
+
+        app.screen.query_one("#paint_tabs", Switch).toggle()
+        await pilot.pause()
+        await pilot.press("escape")
+        await pilot.pause()
+
+        assert "brightness;220" in terminal.written[0]
+        assert settings_store.load().paint_tabs is True
 
 
 async def test_tui_toggles_closed_sessions():

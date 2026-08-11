@@ -44,6 +44,10 @@ sessions that have already ended; `y` copies its resume command; `r` renames it;
 whether to send its process SIGTERM; `/` filters by name, status, path, or session id;
 `,` opens the settings. The board reloads on its own interval, and `R` reloads it now.
 
+Every reload also tints each session's tab to match its state, so the fleet is readable
+from the tab bar of a terminal the board is nowhere near. Turn it off in the settings and
+the tabs it tinted are cleared on the way out.
+
 Every view is also a one-shot subcommand, so the same data pipes into a script.
 
 ## Install
@@ -63,8 +67,7 @@ rather than a floor held open for older ones. `claude --version` reports yours.
 |---|---|
 | `clownhead` | The interactive overseer. Same as `clownhead tui`. |
 | `clownhead ls` | Status board, attention-first. `--cwd` scopes to one tree, `--all` adds background agents, `--closed` adds sessions that have ended, `--pid`/`--tty` add the process columns. |
-| `clownhead watch` | The same table, refreshed on an interval. |
-| `clownhead paint` | Colour each session's tab to match its state. `--follow` keeps them in sync. |
+| `clownhead paint` | Colour each session's tab to match its state, for a board you would rather not keep open. `--follow` keeps them in sync, `--reset` clears them. |
 | `clownhead focus [name]` | Bounce the dock, raise the terminal, and notify. With no argument, takes every session that is waiting on you. `--no-foreground` leaves your windows where they are. |
 | `clownhead doctor` | Check discovery, terminal capabilities, and auth. |
 | `clownhead --version` | The installed version, which a problem report asks for. |
@@ -135,7 +138,9 @@ unfiltered tail is all its own voice and no conversation at all.
 **Settings.** `,` opens them, changes apply live, and they persist to
 `settings.json` under the state directory. They cover the columns the board shows, the refresh
 interval, how many turns of history to read, whether closed sessions are in from the
-start, and whether focusing raises the window. The PID and TTY columns are off by default:
+start, whether focusing raises the window, and whether tabs are tinted at all — a tinted
+tab is a passive report rather than a signal, so a terminal that cannot colour one is
+left alone rather than belled about it. The PID and TTY columns are off by default:
 they matter when a session needs killing or signalling, not while reading the board, and
 every column they take is one the path loses. `clownhead ls --pid --tty` overrides for a
 single run without touching what is saved.

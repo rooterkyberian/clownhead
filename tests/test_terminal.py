@@ -77,6 +77,14 @@ def test_generic_terminal_reset_tab_color_is_a_noop():
     assert terminal.written == []
 
 
+def test_generic_terminal_set_tab_color_is_a_noop():
+    terminal = RecordingTerminal()
+
+    terminal.set_tab_color(TTY, Rgb(220, 50, 47))
+
+    assert terminal.written == []
+
+
 def test_generic_terminal_sets_title():
     terminal = RecordingTerminal()
 

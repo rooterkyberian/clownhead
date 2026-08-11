@@ -4,7 +4,7 @@ build-backend = "uv_build"
 
 [project]
 name = "clownhead"
-version = "0.2.0"
+version = "0.3.0"
 description = "Overseer for local Claude Code sessions: status board, terminal attention signals, and reboot-survivable snapshots."
 readme = "README.md"
 requires-python = ">=3.12"

@@ -9,7 +9,6 @@ from typing import Annotated
 
 import typer
 from rich.console import Console
-from rich.live import Live
 from rich.table import Table
 
 from clownhead import __version__, attention, discovery, tui
@@ -74,7 +73,7 @@ def _warn_about_tab_colours(sessions: Iterable[Session]) -> None:
     terminals = (attention.terminal_of(session) for session in sessions)
     blind = sorted({terminal.name for terminal in terminals if not terminal.supports_tab_color})
     if blind:
-        error_console.print(f"[yellow]{', '.join(blind)} does not support tab colours; those sessions are belled.[/]")
+        error_console.print(f"[yellow]{', '.join(blind)} does not support tab colours; those tabs are left alone.[/]")
 
 
 @app.callback(invoke_without_command=True)
@@ -116,27 +115,6 @@ def list_sessions(
         console.print("[dim]no live sessions[/]")
         return
     console.print(_fleet_table(sessions, show_pid, show_tty))
-
-
-@app.command()
-def watch(
-    cwd: CwdOption = None,
-    include_background: AllOption = False,
-    include_closed: ClosedOption = False,
-    interval: IntervalOption = None,
-    show_pid: PidOption = None,
-    show_tty: TtyOption = None,
-) -> None:
-    """Continuously refresh the fleet table until interrupted."""
-    every = interval if interval is not None else settings_store.load().interval
-
-    def fleet() -> Table:
-        return _fleet_table(_load(cwd, include_background, include_closed), show_pid, show_tty)
-
-    with Live(fleet(), console=console, screen=False) as live:
-        while True:
-            time.sleep(every)
-            live.update(fleet())
 
 
 @app.command()

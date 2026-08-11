@@ -51,7 +51,10 @@ def paint(sessions: Iterable[Session], terminal: Terminal | None = None) -> list
     """Sync every session's tab colour to its current state.
 
     A session whose TTY has gone away is reported rather than raising, so one dead
-    terminal cannot stop the rest of the fleet from being painted.
+    terminal cannot stop the rest of the fleet from being painted. A terminal that cannot
+    tint a tab is reported too, and left untouched: painting is a status sync that repeats
+    for as long as it is followed, and the only fallback signal is a bell, which nobody
+    wants rung every few seconds on the strength of a session merely still being busy.
     """
     results: list[SignalResult] = []
     for session in sessions:
@@ -59,6 +62,9 @@ def paint(sessions: Iterable[Session], terminal: Terminal | None = None) -> list
             results.append(SignalResult(session.label, None, False, "no tty"))
             continue
         emitter = terminal_of(session, terminal)
+        if not emitter.supports_tab_color:
+            results.append(SignalResult(session.label, session.tty, False, f"{emitter.name} has no tab colours"))
+            continue
         color = color_for(session.status)
         try:
             if color is None:

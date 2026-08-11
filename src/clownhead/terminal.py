@@ -101,8 +101,7 @@ class Terminal:
             raise_application(target)
 
     def set_tab_color(self, tty: Path, color: Rgb) -> None:
-        """Tint the tab; a bell where tab colours are unsupported."""
-        self.bell(tty)
+        """Tint the tab; a no-op where tab colours are unsupported."""
 
     def reset_tab_color(self, tty: Path) -> None:
         """Restore the default tab colour; a no-op where unsupported."""

@@ -226,6 +226,7 @@ class SettingsScreen(ModalScreen[Settings | None]):
         ("show_tty", "TTY column"),
         ("show_closed", "closed sessions at startup"),
         ("foreground", "raise the window on focus"),
+        ("paint_tabs", "tint each session's tab to match"),
     )
 
     def __init__(self, settings: Settings) -> None:
@@ -539,11 +540,20 @@ class FleetApp(App[None]):
 
     @work(thread=True, group="reload")
     def _reload(self) -> None:
+        """Load the fleet and, unless told not to, tint the tabs it came from.
+
+        Painting is a write to every session's TTY, so it belongs on this thread beside
+        the discovery it follows rather than in the redraw. Its per-session refusals are
+        dropped: the board repaints on an interval, and a terminal that could not be
+        reached once would otherwise announce itself every few seconds.
+        """
         try:
             sessions = self._loader(self._show_closed)
         except Exception as error:
             self._hand_back(self._reload_failed, str(error))
             return
+        if self._settings.paint_tabs:
+            attention.paint(sessions, self._terminal)
         self._hand_back(self._reload_finished, sessions)
 
     def _hand_back[T](self, callback: Callable[[T], None], value: T) -> None:
@@ -588,6 +598,15 @@ class FleetApp(App[None]):
         terminal = attention.terminal_of(session, self._terminal) if session.app else None
         self.query_one("#details", Static).update(describe(session, terminal=terminal.name if terminal else None))
 
+    def _repaint(self) -> None:
+        """Answer a flipped tab setting now rather than at the next reload.
+
+        Turning it off clears the tabs the overseer tinted, so opting out leaves the
+        terminals as they were found instead of freezing them on the last state seen.
+        """
+        painter = attention.paint if self._settings.paint_tabs else attention.reset
+        painter(self._sessions, self._terminal)
+
     def _rebuild_columns(self) -> None:
         table = self.query_one("#fleet", DataTable)
         table.clear(columns=True)
@@ -598,10 +617,13 @@ class FleetApp(App[None]):
             return
         rebuild = (settings.show_pid, settings.show_tty) != (self._settings.show_pid, self._settings.show_tty)
         retime = settings.interval != self._settings.interval
+        repaint = settings.paint_tabs != self._settings.paint_tabs
         self._settings = settings
         settings_store.save(settings)
         if rebuild:
             self._rebuild_columns()
+        if repaint:
+            self._repaint()
         if retime:
             self._interval = settings.interval
             self._ticker.stop()

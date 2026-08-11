@@ -26,6 +26,7 @@ class Settings(BaseModel):
     show_tty: bool = False
     show_closed: bool = False
     foreground: bool = True
+    paint_tabs: bool = True
     history_turns: int = Field(default=20, ge=1, le=200)
 
 

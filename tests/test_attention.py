@@ -62,6 +62,16 @@ def test_paint_skips_sessions_without_a_tty():
     assert terminal.calls == []
 
 
+def test_paint_leaves_terminals_without_tab_colours_alone():
+    terminal = PlainTerminal()
+
+    results = attention.paint([session(Status.WAITING)], terminal)
+
+    assert results[0].delivered is False
+    assert "no tab colours" in results[0].detail
+    assert terminal.written == []
+
+
 def test_paint_reports_dead_ttys_without_raising():
     results = attention.paint([session(Status.WAITING)], RecordingTerminal(fail=True))
 

@@ -18,6 +18,7 @@ def test_defaults_hide_the_process_columns_and_raise_on_ping():
     assert settings.show_tty is False
     assert settings.show_closed is False
     assert settings.foreground is True
+    assert settings.paint_tabs is True
     assert settings.interval == 5.0
 
 
