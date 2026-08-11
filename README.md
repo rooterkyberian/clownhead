@@ -15,20 +15,18 @@ of whichever session is asking for you.
 uv tool install git+https://github.com/rooterkyberian/clownhead
 ```
 
-Requires Python 3.12+ and Claude Code 2.1.227 or newer on `PATH` — the latest release.
-clownhead reads what a session publishes about itself and talks to it over the socket it
-publishes, both of which move with the CLI, so it is developed against the current version
-rather than a floor held open for older ones. `claude --version` reports yours.
+Requires Python 3.12+ and Claude Code 2.1.227 or newer on `PATH`. clownhead reads what a
+session publishes about itself and talks to it over the socket the CLI publishes, both of
+which move with it — so it tracks the current release rather than holding a floor open for
+older ones.
 
 ## Keys
 
 `QUIET` is time since the session last beat, `AGE` is time since its process started, and
 the pane below the table carries the id, path, process and terminal the columns cannot fit.
 
-- `→` opens that session's conversation beside the herd — usually the fastest way to tell
-  what it is actually doing. It opens on the newest turn and takes the arrow keys while it
-  is up, so `↑` and `↓` read back through it. `←` closes it and hands them back.
-- click a row to read it, rather than interrupting it.
+- `→` (or a click on the row) opens that session's conversation beside the board — usually
+  the fastest way to tell what it is actually doing. `↑` and `↓` scroll it, `←` closes it.
 - `f` focuses its terminal: attention, then the window brought to the front.
 - `/` filters by name, status, path, or session id — or by pull request, below.
 - `c` folds in the sessions that have already ended. The count of them in the top bar is
@@ -42,10 +40,9 @@ the pane below the table carries the id, path, process and terminal the columns 
 
 ## Tab colours
 
-Every reload tints each session's tab to match its state, so the herd is readable from the
-tab bar of a terminal the board is nowhere near. The board takes violet, which no status
-wears, and gives it back when it exits. Turn it off in the settings and the tabs it tinted
-are cleared on the way out.
+**iTerm2 only.** Every reload tints each session's tab to match its state, so the herd is
+readable from the tab bar of a terminal the board is nowhere near. Turn it off in the
+settings and the tabs it tinted are cleared on the way out.
 
 ## Pull requests
 
@@ -94,14 +91,9 @@ payments-api-7c  (cd /Users/you/dev/payments-api && claude --resume 4e020900-df7
 index-rebuild    (cd /Users/you/dev/web-platform && claude --resume 8b1c4f22-0d31-4f0a-9c2e-3a7b1e5d6f08 --worktree search-index)
 ```
 
-Columns holding a word or a duration are as wide as their widest cell. The ones holding a
-name, a path or a command cannot be — any of them outgrows any terminal — so they share
-what is left, the last of them taking the difference. A resume command is the longest thing
-on the board and the one truncation ruins, so naming fewer columns is how you get one
-whole; `--columns name,resume` is the pair worth remembering. Below about a hundred
-columns the default drops the timing and resume columns rather than truncate every cell —
-though a selection made by hand is never thinned, since dropping a column somebody named
-would answer a narrow terminal by ignoring them.
+A resume command is the longest thing on the board and the one truncation ruins, so naming
+fewer columns is how you get one whole; `--columns name,resume` is the pair worth
+remembering.
 
 ## How it works
 
@@ -109,33 +101,12 @@ would answer a narrow terminal by ignoring them.
 control socket behind renaming, and what happens to a session when it is terminated or
 resumed.
 
-## Two things worth knowing
-
-**Run it unsandboxed.** Interactive sessions are discovered through per-process sockets in
-`/tmp/cc-socks`. A sandboxed shell can run the CLI but not list that directory, in which
-case `claude agents --json` silently degrades to background agents only. clownhead checks
-for this and refuses rather than reporting an empty herd.
-
-**It goes where `CLAUDE_CONFIG_DIR` says.** Sessions, transcripts and the registry live
-under `~/.claude` unless that variable moves them, and the CLI scopes its listing to
-whichever directory it was invoked under — a shell with it set lists that herd, a shell
-without it lists the other. clownhead reads the same variable, so the herd is listed and
-enriched out of one directory rather than listed from one and enriched from another. Get
-that wrong and `QUIET` empties out: the heartbeats are being looked for somewhere those
-sessions never wrote one. A board that is watching a relocated directory says so in its
-top bar, since a herd listed out of the wrong one looks exactly like a quiet machine;
-`clownhead doctor` prints the directory it settled on either way.
-
 ## Platform support
 
-macOS with iTerm2 is the developed-against configuration. The discovery layer is portable
-(`ps` behaves the same on Linux, yielding `/dev/pts/N`), and terminal support is a small
-class per emulator — kitty is wired up, others fall back to the bell. An application with
-no class of its own, such as an IDE's embedded terminal, still gets the bell, a marked tab
-title and the foreground switch; only the tab tinting and rich notifications are iTerm2's.
-Raising a window is macOS-only, because it goes through `open`, and it raises the
-application: JetBrains IDEs expose no way to focus one terminal tab out of many, so the
-marked title is what tells you which tab was asking. CI runs the suite on Linux and macOS.
+Developed on macOS with iTerm2; CI runs the suite on Linux and macOS. Discovery is
+portable, the signals are not: tab colours are iTerm2's alone, kitty gets notifications,
+and everything else — an IDE's embedded terminal included — falls back to the bell and a
+tab renamed to `⚠ <session>: <why>`. Raising a window is macOS-only.
 
 ## Problems
 
@@ -150,7 +121,3 @@ mise install
 mise run check    # lint + typecheck + test
 mise run demo     # re-record docs/demo.gif from docs/demo.tape, which needs vhs
 ```
-
-## License
-
-MIT

@@ -8,6 +8,20 @@ people's processes can work at all, and for whoever has to fix it.
 is enriched with the controlling TTY from `ps` and the last heartbeat from the session
 registry under the Claude Code config directory.
 
+Interactive sessions are found through per-process sockets in `/tmp/cc-socks`. A sandboxed
+shell can run the CLI but not list that directory, in which case `claude agents --json`
+silently degrades to background agents only; clownhead checks for this and refuses rather
+than reporting an empty herd.
+
+**Where it looks.** Sessions, transcripts and the registry live under `~/.claude` unless
+`CLAUDE_CONFIG_DIR` moves them, and the CLI scopes its listing to whichever directory it
+was invoked under. clownhead reads the same variable, so the herd is listed and enriched
+out of one directory rather than listed from one and enriched from another. Get that wrong
+and `QUIET` empties out: the heartbeats are being looked for somewhere those sessions never
+wrote one. A board watching a relocated directory says so in its top bar, since a herd
+listed out of the wrong one looks exactly like a quiet machine; `clownhead doctor` prints
+the directory it settled on either way.
+
 **Pull requests.** Nothing on a session records which pull request it belonged to, so the
 question is answered from the transcripts, matching the `repo/pull/309` of a URL and the
 `repo#309` of a mention, subagents included. What it finds is remembered until `R` reads
