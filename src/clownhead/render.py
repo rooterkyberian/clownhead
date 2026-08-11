@@ -16,8 +16,10 @@ import re
 from collections.abc import Iterable, Sequence
 from dataclasses import dataclass
 from datetime import UTC, datetime, timedelta
+from enum import StrEnum
 from pathlib import Path
 
+from rich.console import JustifyMethod
 from rich.markup import escape
 from rich.table import Table
 
@@ -46,8 +48,30 @@ NARROW_WIDTH = 100
 DEFAULT_WIDTH = 160
 NAME_CAP = 32
 WHERE_MIN = 14
+RESUME_MIN = 24
 MESSAGE_CAP = 110
 GAP = 2
+
+
+class Column(StrEnum):
+    """A column of the fleet table, named as ``--columns`` spells it."""
+
+    STATUS = "status"
+    NAME = "name"
+    QUIET = "quiet"
+    AGE = "age"
+    PID = "pid"
+    TTY = "tty"
+    WHERE = "where"
+    RESUME = "resume"
+
+
+FLEXIBLE: dict[Column, tuple[int, int | None]] = {
+    Column.NAME: (len("NAME"), NAME_CAP),
+    Column.WHERE: (WHERE_MIN, None),
+    Column.RESUME: (RESUME_MIN, None),
+}
+RIGHT_ALIGNED = frozenset({Column.QUIET, Column.AGE, Column.PID})
 
 
 def format_duration(delta: timedelta | None) -> str:
@@ -90,7 +114,7 @@ def truncate(text: str, limit: int) -> str:
 
 @dataclass(frozen=True)
 class Row:
-    """One rendered fleet row, before width fitting."""
+    """One rendered fleet row, before width fitting, with a field per :class:`Column`."""
 
     status: str
     style: str
@@ -100,6 +124,7 @@ class Row:
     pid: str
     tty: str
     where: str
+    resume: str
 
 
 def build_rows(sessions: Iterable[Session], moment: datetime) -> list[Row]:
@@ -114,6 +139,7 @@ def build_rows(sessions: Iterable[Session], moment: datetime) -> list[Row]:
             pid=str(session.pid) if session.pid else "-",
             tty=session.tty.name if session.tty else "-",
             where=shorten_path(session.cwd),
+            resume=resume_shell_command(session),
         )
         for session in sessions
     ]
@@ -190,61 +216,97 @@ def _spoken(text: str) -> str:
     return STRONG.sub(r"[bold]\1[/]", marked)
 
 
-def _column_width(header: str, values: Sequence[str], cap: int | None = None) -> int:
-    widest = max((len(value) for value in values), default=0)
-    width = max(len(header), widest)
-    return min(width, cap) if cap else width
+def parse_columns(selection: str) -> tuple[Column, ...]:
+    """Read a comma-separated column selection, kept in the order it was written.
+
+    The order is the caller's, not a canonical one: a selection is as much about what to
+    read first as about what to leave out.
+    """
+    names = [part.strip().lower() for part in selection.split(",") if part.strip()]
+    if not names:
+        raise ValueError("no columns named")
+    unknown = [name for name in names if name not in set(Column)]
+    if unknown:
+        raise ValueError(f"unknown column{'' if len(unknown) == 1 else 's'} {', '.join(unknown)}")
+    return tuple(Column(name) for name in names)
+
+
+def default_columns(width: int, show_pid: bool = False, show_tty: bool = False) -> tuple[Column, ...]:
+    """The columns to show when none were asked for.
+
+    PID and TTY are off unless asked for: they matter when a session needs killing or
+    signalling, not when you are reading the board. Below :data:`NARROW_WIDTH` the timing
+    and resume columns go too; losing whole columns reads better than truncating the start
+    of every cell, and a resume command cut to fit is worse than absent — it looks
+    copyable and is not. A selection made by hand is never thinned this way, since
+    dropping a column somebody named would answer a narrow terminal by ignoring them.
+    """
+    if width < NARROW_WIDTH:
+        return (Column.STATUS, Column.NAME, Column.WHERE)
+    optional = (Column.PID,) * show_pid + (Column.TTY,) * show_tty
+    return (Column.STATUS, Column.NAME, Column.QUIET, Column.AGE, *optional, Column.WHERE, Column.RESUME)
 
 
 def build_table(
     sessions: Iterable[Session],
     now: datetime | None = None,
     width: int | None = None,
-    show_pid: bool = False,
-    show_tty: bool = False,
+    columns: Sequence[Column] | None = None,
 ) -> Table:
-    """Build the fleet status table, fitted to ``width``.
-
-    PID and TTY are off unless asked for: they matter when a session needs killing or
-    signalling, not when you are reading the board, and every column they take is one
-    the path loses. Below :data:`NARROW_WIDTH` the timing columns go too; losing whole
-    columns reads better than truncating the start of every cell.
-    """
+    """Build the fleet status table, fitted to ``width``."""
     moment = now or datetime.now(tz=UTC)
-    rows = build_rows(sessions, moment)
     total = width or DEFAULT_WIDTH
-    compact = total < NARROW_WIDTH
-
-    status_width = _column_width("STATUS", [row.status for row in rows])
-    optional: list[tuple[str, str, int]] = []
-    if not compact:
-        optional.append(("QUIET", "quiet", _column_width("QUIET", [row.quiet for row in rows])))
-        optional.append(("AGE", "age", _column_width("AGE", [row.age for row in rows])))
-        if show_pid:
-            optional.append(("PID", "pid", _column_width("PID", [row.pid for row in rows])))
-        if show_tty:
-            optional.append(("TTY", "tty", _column_width("TTY", [row.tty for row in rows])))
-
-    columns = 3 + len(optional)
-    fixed = status_width + sum(column_width for _, _, column_width in optional)
-    available = total - fixed - GAP * (columns - 1)
-
-    name_width = _column_width("NAME", [row.name for row in rows], cap=NAME_CAP)
-    name_width = max(len("NAME"), min(name_width, available - WHERE_MIN))
-    where_width = max(WHERE_MIN, available - name_width)
+    chosen = tuple(columns) if columns is not None else default_columns(total)
+    rows = build_rows(sessions, moment)
+    widths = _fit(chosen, rows, total)
 
     table = Table(box=None, pad_edge=False, header_style="bold", padding=(0, 1))
-    table.add_column("STATUS", no_wrap=True, width=status_width)
-    table.add_column("NAME", no_wrap=True, width=name_width)
-    for header, _, column_width in optional:
-        table.add_column(header, justify="left" if header == "TTY" else "right", no_wrap=True, width=column_width)
-    table.add_column("WHERE", no_wrap=True, width=where_width)
-
+    for column in chosen:
+        justify: JustifyMethod = "right" if column in RIGHT_ALIGNED else "left"
+        table.add_column(column.value.upper(), justify=justify, no_wrap=True, width=widths[column])
     for row in rows:
-        table.add_row(
-            f"[{row.style}]{row.status}[/]",
-            truncate(row.name, name_width),
-            *(getattr(row, field) for _, field, _ in optional),
-            truncate(row.where, where_width),
-        )
+        table.add_row(*(_cell(row, column, widths[column]) for column in chosen))
     return table
+
+
+def _cell(row: Row, column: Column, width: int) -> str:
+    if column is Column.STATUS:
+        return f"[{row.style}]{row.status}[/]"
+    return truncate(str(getattr(row, column.value)), width)
+
+
+def _fit(columns: Sequence[Column], rows: Sequence[Row], total: int) -> dict[Column, int]:
+    """Width per column, sized to content and then squared with the space there is.
+
+    Columns that hold a word or a duration are simply as wide as their widest cell. The
+    ones that hold a name, a path or a command cannot be: any of them will outgrow any
+    terminal. Those take what is left over, the last of them absorbing the difference in
+    either direction — the surplus when the row comes up short, the shortfall when it runs
+    long — and the one before it giving up the rest only once the last has hit its floor.
+    """
+    widths = {column: _natural_width(column, rows) for column in columns}
+    flexible = [column for column in columns if column in FLEXIBLE]
+    if not flexible:
+        return widths
+
+    fixed = sum(width for column, width in widths.items() if column not in FLEXIBLE)
+    available = total - fixed - GAP * (len(columns) - 1)
+    slack = available - sum(widths[column] for column in flexible)
+    for column in reversed(flexible):
+        given = max(FLEXIBLE[column][0], widths[column] + slack)
+        slack -= given - widths[column]
+        widths[column] = given
+        if slack >= 0:
+            break
+    return widths
+
+
+def _natural_width(column: Column, rows: Sequence[Row]) -> int:
+    cap = FLEXIBLE[column][1] if column in FLEXIBLE else None
+    return _column_width(column.value.upper(), [str(getattr(row, column.value)) for row in rows], cap)
+
+
+def _column_width(header: str, values: Sequence[str], cap: int | None = None) -> int:
+    widest = max((len(value) for value in values), default=0)
+    width = max(len(header), widest)
+    return min(width, cap) if cap else width

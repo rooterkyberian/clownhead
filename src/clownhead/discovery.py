@@ -332,6 +332,20 @@ def transcript_path(session_id: str, root: Path | None = None) -> Path | None:
     return next(iter(sorted(directory.glob(f"*/{session_id}.jsonl"))), None)
 
 
+def transcript_paths(session_id: str, root: Path | None = None) -> list[Path]:
+    """Everything a session wrote down: its own transcript, and its subagents' beside it.
+
+    A subagent's conversation is the session's work too. A pull request a subagent read
+    and reported on, which the main thread only ever discussed in the abstract, was still
+    worked on here — so a question asked of a session has to be asked of the directory
+    named after it as well.
+    """
+    path = transcript_path(session_id, root)
+    if path is None:
+        return []
+    return [path, *sorted(path.with_suffix("").glob("*.jsonl"))]
+
+
 def transcript_sessions(root: Path | None = None) -> list[Session]:
     """Every session with a transcript on disk, live or long gone.
 

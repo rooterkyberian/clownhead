@@ -46,6 +46,26 @@ sessions that have already ended; `y` copies its resume command; `r` renames it;
 whether to send its process SIGTERM, and can close its tab behind it; `/` filters by name, status, path, or session id;
 `,` opens the settings. The board reloads on its own interval, and `R` reloads it now.
 
+Paste a pull request URL into `/` and it stops filtering the board and starts reading it.
+Which pull request a session belongs to is in none of the columns — it is in what was
+said — so that needle sends clownhead through the transcripts of whatever the board is
+showing. Finished work is usually in a session that has ended, so `c` first, then the URL:
+
+```
+ 🤡  2 of 137 sessions · acme/data-platform#309                       ⟳ 5s
+ STATUS  NAME                             WHERE
+ idle    invoice-parser        data-platform ⇢ invoice-parser
+ closed  design-system:87e26be1  ~/dev/acme/design-system
+```
+
+A search of the live fleet alone that comes back empty says so, and says that `c` would
+widen it — rather than folding the closed ones in uninvited, which would answer a question
+about the board by changing which board you were looking at.
+
+`owner/repo#309` and `repo#309` name the same thing more briefly. A bare `#309` does not:
+it means a different pull request in every checkout on the machine, so it stays an
+ordinary filter needle rather than answering with all of them at once.
+
 Every reload also tints each session's tab to match its state, so the fleet is readable
 from the tab bar of a terminal the board is nowhere near. Turn it off in the settings and
 the tabs it tinted are cleared on the way out.
@@ -68,11 +88,33 @@ rather than a floor held open for older ones. `claude --version` reports yours.
 | Command | What it does |
 |---|---|
 | `clownhead` | The interactive overseer. Same as `clownhead tui`. |
-| `clownhead ls` | Status board, attention-first. `--cwd` scopes to one tree, `--all` adds background agents, `--closed` adds sessions that have ended, `--pid`/`--tty` add the process columns. |
+| `clownhead ls` | Status board, attention-first. `--cwd` scopes to one tree, `--all` adds background agents, `--closed` adds sessions that have ended, `--pr` keeps only the ones whose transcript names a pull request, `--columns` picks the columns and their order. |
 | `clownhead paint` | Colour each session's tab to match its state, for a board you would rather not keep open. `--follow` keeps them in sync, `--reset` clears them. |
 | `clownhead focus [name]` | Bounce the dock, raise the terminal, and notify. With no argument, takes every session that is waiting on you. `--no-foreground` leaves your windows where they are. |
 | `clownhead doctor` | Check discovery, terminal capabilities, and auth. |
 | `clownhead --version` | The installed version, which a problem report asks for. |
+
+`--columns` names what `ls` shows and the order to show it in: `status`, `name`, `quiet`,
+`age`, `pid`, `tty`, `where`, `resume`. Everything but `pid` and `tty` is on by default,
+`resume` included — a listing you are reading in order to get back into something should
+hand you the command that does it:
+
+```bash
+$ clownhead ls --pr acme/payments-api#309 --closed --columns name,resume
+acme/payments-api#309 · 2 of 74 sessions
+NAME             RESUME
+payments-api-7c  (cd /Users/you/dev/payments-api && claude --resume 4e020900-df7c-4665-a804-d973b14a1926)
+index-rebuild    (cd /Users/you/dev/web-platform && claude --resume 8b1c4f22-0d31-4f0a-9c2e-3a7b1e5d6f08 --worktree search-index)
+```
+
+Columns holding a word or a duration are as wide as their widest cell. The ones holding a
+name, a path or a command cannot be — any of them outgrows any terminal — so they share
+what is left, the last of them taking the difference. A resume command is the longest thing
+on the board and the one truncation ruins, so naming fewer columns is how you get one
+whole; `--columns name,resume` is the pair worth remembering. Below about a hundred
+columns the default drops the timing and resume columns rather than truncate every cell —
+though a selection made by hand is never thinned, since dropping a column somebody named
+would answer a narrow terminal by ignoring them.
 
 ## How it works
 
@@ -80,6 +122,15 @@ rather than a floor held open for older ones. `claude --version` reports yours.
 is enriched with the controlling TTY (from `ps`) and the last heartbeat (from
 `sessions/<pid>.json` under the Claude Code config directory, which a crashed session
 leaves behind, so entries are only trusted when the CLI still reports the session as live).
+
+**Pull requests.** A session says nothing about which pull request it was for, so the
+question is answered from the transcripts, matching both the `repo/pull/309` of a URL and
+the `repo#309` of a mention — anchored at both ends, because `pull/309` is otherwise a
+substring of `pull/3090` and `data-platform` one of `my-data-platform`. A subagent's
+transcript counts as its parent's: a pull request read by a subagent and reported upwards
+in the abstract was still worked on there. That is a few hundred megabytes of JSONL across
+a fleet, scanned as bytes rather than parsed, and what it finds is remembered until you ask
+for a reload — `R` in the overseer reads them again.
 
 **Attention.** Signals are OSC escape sequences written to a session's TTY. The emulator
 consumes them before the running application sees them, so they are safe to inject into a

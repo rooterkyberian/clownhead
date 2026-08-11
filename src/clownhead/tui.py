@@ -31,6 +31,7 @@ from clownhead.discovery import Message, recent_messages, relocated_config_dir
 from clownhead.models import Session, Status
 from clownhead.render import build_rows, conversation, describe, format_duration, shorten_path, truncate
 from clownhead.resume import resume_shell_command
+from clownhead.search import PullRequest, parse_pull_request, sessions_mentioning
 from clownhead.settings import Settings
 from clownhead.terminal import Terminal, copy_to_pasteboard
 
@@ -383,6 +384,10 @@ class FleetApp(App[None]):
         self._previews: dict[str, list[Message]] = {}
         self._preview_asked: set[str] = set()
         self._needle = ""
+        self._pull_request: PullRequest | None = None
+        self._read: dict[PullRequest, set[str]] = {}
+        self._named: dict[PullRequest, set[str]] = {}
+        self._searching: PullRequest | None = None
         self._failure: str | None = None
         self._loading = False
 
@@ -397,7 +402,7 @@ class FleetApp(App[None]):
             with HistoryPanel(id="history"):
                 yield Static(id="history-body")
         yield Static(id="details")
-        yield Input(placeholder="filter sessions", id="filter")
+        yield Input(placeholder="filter sessions, or paste a pull request url", id="filter")
         yield Footer()
 
     def on_mount(self) -> None:
@@ -430,7 +435,17 @@ class FleetApp(App[None]):
         self._reload()
 
     def action_refresh(self) -> None:
-        """Reload the fleet now."""
+        """Reload the fleet now, and read the transcripts again if one is being searched.
+
+        What a pull request search found is otherwise remembered for as long as the board
+        is open, because re-reading the fleet's transcripts on every interval would be an
+        expensive way to learn nothing. Asking for a reload by hand is the moment to look
+        again — a session that has since started talking about the pull request is exactly
+        what someone pressing this is hoping to catch.
+        """
+        self._read.clear()
+        self._named.clear()
+        self._searching = None
         self.start_reload()
 
     def action_focus_session(self) -> None:
@@ -586,6 +601,7 @@ class FleetApp(App[None]):
         if event.input.id != "filter":
             return
         self._needle = event.value
+        self._retarget(parse_pull_request(event.value))
         self._draw()
 
     def on_input_submitted(self, event: Input.Submitted) -> None:
@@ -620,6 +636,7 @@ class FleetApp(App[None]):
         self._failure = None
         self._sessions = sessions
         self._preview_asked.clear()
+        self._ensure_search()
         self._draw()
 
     def _reload_failed(self, detail: str) -> None:
@@ -628,9 +645,57 @@ class FleetApp(App[None]):
         self._draw()
         self.notify(detail, title="discovery failed", severity="error")
 
+    def _retarget(self, pull_request: PullRequest | None) -> None:
+        """Point the filter at a pull request, or back at the metadata it usually reads.
+
+        Which pull request a session was for is only ever in what it said, so answering
+        that means reading transcripts — of whichever sessions the board is showing, and
+        no others. Finished work is usually in a session that has ended, but whether those
+        are on the board is what `c` is for, and a filter is not the place to overrule it.
+        """
+        if pull_request == self._pull_request:
+            return
+        self._pull_request = pull_request
+        self._ensure_search()
+
+    def _ensure_search(self) -> None:
+        """Read whatever the pull request being filtered on has not been looked for in yet.
+
+        Sessions already read for it are skipped, so folding the closed ones in costs only
+        the transcripts that arrived with them. One search runs at a time: the first is
+        slow enough that the refresh interval would otherwise start a second over the same
+        transcripts before it had finished with them.
+        """
+        if self._pull_request is None or self._searching is not None:
+            return
+        read = self._read.setdefault(self._pull_request, set())
+        pending = [session for session in self._sessions if session.session_id not in read]
+        if not pending:
+            return
+        self._searching = self._pull_request
+        self._search(self._pull_request, pending)
+
+    @work(thread=True, group="search")
+    def _search(self, pull_request: PullRequest, sessions: list[Session]) -> None:
+        """Read transcripts for a pull request off the event loop, where they cannot stutter it."""
+        try:
+            named = sessions_mentioning(pull_request, sessions)
+        except OSError:
+            named = set()
+        read = {session.session_id for session in sessions}
+        self._hand_back(self._search_finished, (pull_request, read, named))
+
+    def _search_finished(self, found: tuple[PullRequest, set[str], set[str]]) -> None:
+        pull_request, read, named = found
+        self._searching = None
+        self._read.setdefault(pull_request, set()).update(read)
+        self._named.setdefault(pull_request, set()).update(named)
+        self._draw()
+        self._ensure_search()
+
     def _draw(self) -> None:
         previous = self.selected_session
-        self._visible = [session for session in self._sessions if matches(session, self._needle)]
+        self._visible = self._filtered()
 
         table = self.query_one("#fleet", DataTable)
         table.clear()
@@ -644,6 +709,18 @@ class FleetApp(App[None]):
 
         self.query_one("#title", Static).update(self._summary())
         self._draw_details()
+
+    def _filtered(self) -> list[Session]:
+        """The fleet the filter leaves, by transcript for a pull request and by metadata otherwise.
+
+        A search still running shows nothing rather than everything: the rows that survive
+        it are a small handful of the fleet, and a table that emptied out as the answer
+        arrived would invite acting on a session that was never a match.
+        """
+        if self._pull_request is None:
+            return [session for session in self._sessions if matches(session, self._needle)]
+        named = self._named.get(self._pull_request, set())
+        return [session for session in self._sessions if session.session_id in named]
 
     def _draw_details(self) -> None:
         session = self.selected_session
@@ -726,6 +803,12 @@ class FleetApp(App[None]):
         total = len(self._sessions)
         scope = f"{len(self._visible)} of {total}" if self._needle else str(total)
         parts = [f"{scope} session{'' if total == 1 else 's'}"]
+        if self._pull_request is not None:
+            parts.append(f"[cyan]{self._pull_request}[/]")
+            if self._searching is not None:
+                parts.append("[dim]reading transcripts…[/]")
+            elif not self._visible and not self._show_closed:
+                parts.append("[dim]c searches the ones that have ended too[/]")
         waiting = sum(1 for session in self._visible if session.needs_attention)
         if waiting:
             parts.append(f"[bold red]{waiting} waiting on you[/]")

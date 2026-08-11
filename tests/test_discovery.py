@@ -571,6 +571,30 @@ def test_transcript_path_finds_a_session_in_any_project(tmp_path):
     assert discovery.transcript_path("c-d", tmp_path) == tmp_path / "-tmp-two" / "c-d.jsonl"
 
 
+def test_transcript_paths_include_the_subagents_of_a_session(tmp_path):
+    transcript_file(tmp_path, "a-b")
+    nested = tmp_path / "-tmp-one" / "a-b"
+    nested.mkdir(parents=True)
+    (nested / "d-e.jsonl").write_text("{}")
+    (nested / "c-d.jsonl").write_text("{}")
+
+    assert discovery.transcript_paths("a-b", tmp_path) == [
+        tmp_path / "-tmp-one" / "a-b.jsonl",
+        nested / "c-d.jsonl",
+        nested / "d-e.jsonl",
+    ]
+
+
+def test_transcript_paths_of_a_session_with_nothing_on_disk(tmp_path):
+    assert discovery.transcript_paths("a-b", tmp_path) == []
+
+
+def test_transcript_paths_of_a_session_without_subagents(tmp_path):
+    transcript_file(tmp_path, "a-b")
+
+    assert discovery.transcript_paths("a-b", tmp_path) == [tmp_path / "-tmp-one" / "a-b.jsonl"]
+
+
 def test_closed_sessions_include_transcripts_the_registry_has_forgotten(tmp_path):
     transcript_file(tmp_path / "projects", "a-b")
     transcript_file(tmp_path / "projects", "c-d")

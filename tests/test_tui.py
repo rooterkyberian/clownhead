@@ -1,3 +1,4 @@
+import json
 from pathlib import Path
 
 import pytest
@@ -205,6 +206,84 @@ async def test_tui_escape_clears_the_filter():
 
         assert table_of(app).row_count == 2
         assert table_of(app).has_focus
+
+
+def transcript(root: Path, session_id: str, said: str, cwd: str = "/tmp/payments-api") -> Path:
+    project = root / "projects" / cwd.replace("/", "-")
+    project.mkdir(parents=True, exist_ok=True)
+    path = project / f"{session_id}.jsonl"
+    path.write_text(json.dumps({"sessionId": session_id, "cwd": cwd, "type": "user", "message": {"content": said}}))
+    return path
+
+
+async def filter_by(app: FleetApp, pilot, needle: str) -> None:
+    """Put a whole needle in the filter box, which a pasted URL is faster typed as."""
+    app.query_one("#filter", Input).value = needle
+    await settle(app, pilot)
+    await settle(app, pilot)
+
+
+async def test_tui_filters_the_fleet_by_pull_request(monkeypatch, tmp_path):
+    monkeypatch.setenv("CLAUDE_CONFIG_DIR", str(tmp_path))
+    transcript(tmp_path, "4e020900-df7c", "https://github.com/acme/widgets/pull/42 is ready")
+    transcript(tmp_path, "cef6830d-aaaa", "widgets#420 is somebody else's", cwd="/tmp/web-platform")
+    app = build_app()
+
+    async with app.run_test() as pilot:
+        await settle(app, pilot)
+        await filter_by(app, pilot, "https://github.com/acme/widgets/pull/42")
+
+        assert table_of(app).row_count == 1
+        assert "payments-api-7c" in str(table_of(app).get_row_at(0))
+        assert "acme/widgets#42" in title_of(app)
+
+
+async def test_tui_pull_request_filter_leaves_the_closed_setting_alone(monkeypatch, tmp_path):
+    monkeypatch.setenv("CLAUDE_CONFIG_DIR", str(tmp_path))
+    asked: list[bool] = []
+    app = build_app(loader=lambda include_closed: asked.append(include_closed) or fleet())
+
+    async with app.run_test() as pilot:
+        await settle(app, pilot)
+        await filter_by(app, pilot, "acme/widgets#42")
+        await pilot.press("escape")
+        await settle(app, pilot)
+
+        assert not any(asked)
+
+
+async def test_tui_pull_request_filter_points_at_the_sessions_it_did_not_search(monkeypatch, tmp_path):
+    monkeypatch.setenv("CLAUDE_CONFIG_DIR", str(tmp_path))
+    app = build_app()
+
+    async with app.run_test() as pilot:
+        await settle(app, pilot)
+        await filter_by(app, pilot, "acme/widgets#42")
+
+        assert table_of(app).row_count == 0
+        assert "c searches the ones that have ended too" in title_of(app)
+
+
+async def test_tui_pull_request_filter_says_nothing_about_closed_once_they_are_shown(monkeypatch, tmp_path):
+    monkeypatch.setenv("CLAUDE_CONFIG_DIR", str(tmp_path))
+    app = build_app(include_closed=True)
+
+    async with app.run_test() as pilot:
+        await settle(app, pilot)
+        await filter_by(app, pilot, "acme/widgets#42")
+
+        assert "c searches" not in title_of(app)
+
+
+async def test_tui_filter_still_matches_metadata_when_it_is_not_a_pull_request():
+    app = build_app()
+
+    async with app.run_test() as pilot:
+        await settle(app, pilot)
+        await filter_by(app, pilot, "payments")
+
+        assert table_of(app).row_count == 1
+        assert "widgets" not in title_of(app)
 
 
 def headers_of(app: FleetApp) -> list[str]:

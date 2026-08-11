@@ -7,7 +7,16 @@ from rich.markup import render as render_markup
 
 from clownhead.discovery import Message
 from clownhead.models import Session, Status
-from clownhead.render import build_table, conversation, describe, format_duration, shorten_path
+from clownhead.render import (
+    Column,
+    build_table,
+    conversation,
+    default_columns,
+    describe,
+    format_duration,
+    parse_columns,
+    shorten_path,
+)
 
 NOW = datetime(2026, 8, 10, tzinfo=UTC)
 
@@ -62,7 +71,7 @@ def test_build_table_renders_a_row_per_session():
     ]
 
     console = Console(width=200, record=True)
-    console.print(build_table(sessions, now=NOW, show_pid=True, show_tty=True))
+    console.print(build_table(sessions, now=NOW, columns=default_columns(200, show_pid=True, show_tty=True)))
     output = console.export_text()
 
     assert "input needed" in output
@@ -80,7 +89,7 @@ def test_build_table_shows_the_owning_process_when_asked():
     ]
 
     console = Console(width=200, record=True)
-    console.print(build_table(sessions, now=NOW, show_pid=True, show_tty=True))
+    console.print(build_table(sessions, now=NOW, columns=default_columns(200, show_pid=True, show_tty=True)))
     lines = console.export_text().splitlines()
 
     assert "PID" in lines[0]
@@ -101,6 +110,77 @@ def test_build_table_hides_the_process_columns_by_default():
     assert "77730" not in output
     assert "ttys004" not in output
     assert "one" in output
+
+
+@pytest.mark.parametrize(
+    ("selection", "expected"),
+    [
+        ("status,name,where", (Column.STATUS, Column.NAME, Column.WHERE)),
+        ("where,name", (Column.WHERE, Column.NAME)),
+        (" NAME , Resume ", (Column.NAME, Column.RESUME)),
+        ("name,,where", (Column.NAME, Column.WHERE)),
+        ("name,name", (Column.NAME, Column.NAME)),
+    ],
+)
+def test_parse_columns_keeps_the_order_it_was_given(selection, expected):
+    assert parse_columns(selection) == expected
+
+
+@pytest.mark.parametrize(
+    ("selection", "complaint"),
+    [("", "no columns named"), ("   ", "no columns named"), ("nope", "unknown column nope"), (",", "no columns named")],
+)
+def test_parse_columns_refuses_what_is_not_a_column(selection, complaint):
+    with pytest.raises(ValueError, match=complaint):
+        parse_columns(selection)
+
+
+def test_parse_columns_names_every_column_it_did_not_recognise():
+    with pytest.raises(ValueError, match="unknown columns nope, worse"):
+        parse_columns("name,nope,worse")
+
+
+def test_default_columns_drop_the_timing_ones_when_narrow():
+    assert default_columns(60) == (Column.STATUS, Column.NAME, Column.WHERE)
+
+
+def test_default_columns_add_the_process_ones_only_when_asked():
+    assert default_columns(200) == (Column.STATUS, Column.NAME, Column.QUIET, Column.AGE, Column.WHERE, Column.RESUME)
+    assert Column.PID in default_columns(200, show_pid=True)
+    assert Column.TTY in default_columns(200, show_tty=True)
+
+
+def test_build_table_shows_the_resume_command_when_the_column_is_asked_for():
+    session = Session(session_id="4e020900-df7c", cwd=Path("/tmp/repo"), name="one")
+
+    console = Console(width=200, record=True)
+    console.print(build_table([session], now=NOW, width=200, columns=(Column.NAME, Column.RESUME)))
+    lines = console.export_text().splitlines()
+
+    assert "RESUME" in lines[0]
+    assert "(cd /tmp/repo && claude --resume 4e020900-df7c)" in lines[1]
+
+
+def test_build_table_keeps_the_resume_command_whole_when_there_is_room():
+    session = Session(session_id="4e020900-df7c", cwd=Path("/tmp/repo"), name="one")
+    command = "(cd /tmp/repo && claude --resume 4e020900-df7c)"
+
+    console = Console(width=len(command) + len("NAME") + 2, record=True)
+    console.print(
+        build_table([session], now=NOW, width=len(command) + len("NAME") + 2, columns=(Column.NAME, Column.RESUME))
+    )
+
+    assert command in console.export_text()
+
+
+def test_build_table_renders_the_columns_in_the_order_given():
+    session = Session(session_id="a-b", cwd=Path("/tmp/repo"), name="one", pid=77730)
+
+    console = Console(width=200, record=True)
+    console.print(build_table([session], now=NOW, width=200, columns=(Column.WHERE, Column.PID, Column.NAME)))
+    header = console.export_text().splitlines()[0].split()
+
+    assert header == ["WHERE", "PID", "NAME"]
 
 
 def test_build_table_keeps_one_line_per_session_when_narrow():
@@ -198,7 +278,7 @@ def test_table_never_overflows_with_every_column_on(width):
     ]
 
     console = Console(width=width, record=True)
-    console.print(build_table(sessions, now=NOW, width=width, show_pid=True, show_tty=True))
+    console.print(build_table(sessions, now=NOW, width=width, columns=tuple(Column)))
 
     assert all(len(line.rstrip()) <= width for line in console.export_text().splitlines())
 
