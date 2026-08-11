@@ -869,10 +869,10 @@ class FleetApp(App[None]):
             if self._searching is not None:
                 parts.append("[dim]reading transcripts…[/]")
             elif not self._visible and not self._show_closed:
-                parts.append("[dim]c searches the ones that have ended too[/]")
+                parts.append("[bold]c[/][dim] searches the ones that have ended too[/]")
         waiting = sum(1 for session in self._visible if session.needs_attention)
         if waiting:
-            parts.append(f"[bold red]{waiting} waiting on you[/]")
+            parts.append(f"[bold red]{waiting} waiting[/]")
         parts.append(self._closed_switch())
         return parts
 

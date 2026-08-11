@@ -137,7 +137,7 @@ async def test_tui_lists_the_fleet():
         assert table_of(app).row_count == 2
         assert "payments-api-7c" in str(table_of(app).get_row_at(0))
         assert "2 sessions" in title_of(app)
-        assert "1 waiting on you" in title_of(app)
+        assert "1 waiting" in title_of(app)
 
 
 async def test_tui_wears_a_clown():
@@ -178,7 +178,7 @@ async def test_tui_names_a_relocated_config_dir_after_the_counts(monkeypatch):
         await settle(app, pilot)
 
         assert title_of(app).endswith("· [dim]~/.claude-personal[/]")
-        assert "1 waiting on you" in title_of(app)
+        assert "1 waiting" in title_of(app)
 
 
 async def test_tui_names_a_relocated_config_dir_an_empty_fleet_came_out_of(monkeypatch):
@@ -198,9 +198,7 @@ async def test_tui_says_nothing_about_the_default_config_dir():
     async with app.run_test() as pilot:
         await settle(app, pilot)
 
-        assert title_of(app) == (
-            r"2 sessions · [bold red]1 waiting on you[/] · [@click=app.toggle_closed]show \[c]losed[/]"
-        )
+        assert title_of(app) == r"2 sessions · [bold red]1 waiting[/] · [@click=app.toggle_closed]show \[c]losed[/]"
 
 
 async def test_tui_reports_an_empty_fleet():
@@ -290,7 +288,7 @@ async def test_tui_pull_request_filter_points_at_the_sessions_it_did_not_search(
         await filter_by(app, pilot, "acme/widgets#42")
 
         assert table_of(app).row_count == 0
-        assert "c searches the ones that have ended too" in title_of(app)
+        assert "[bold]c[/][dim] searches the ones that have ended too" in title_of(app)
 
 
 async def test_tui_pull_request_filter_says_nothing_about_closed_once_they_are_shown(monkeypatch, tmp_path):
