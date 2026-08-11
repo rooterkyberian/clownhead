@@ -241,25 +241,6 @@ def test_focus_unknown_name_fails(live_fleet, monkeypatch):
     assert result.exit_code == 1
 
 
-def test_doctor_flags_a_leaked_api_key(monkeypatch):
-    monkeypatch.setenv("ANTHROPIC_API_KEY", "sk-ant-whatever")
-
-    result = runner.invoke(cli.app, ["doctor"])
-
-    assert result.exit_code == 0
-    assert "ANTHROPIC_API_KEY set" in result.stdout
-
-
-def test_doctor_confirms_subscription_auth(monkeypatch):
-    for name in cli.BILLING_SENSITIVE_VARS:
-        monkeypatch.delenv(name, raising=False)
-
-    result = runner.invoke(cli.app, ["doctor"])
-
-    assert result.exit_code == 0
-    assert "subscription auth" in result.stdout
-
-
 def test_doctor_reports_blocked_peer_discovery(monkeypatch):
     monkeypatch.setattr(discovery, "peer_discovery_available", lambda: False)
 

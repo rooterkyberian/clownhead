@@ -135,10 +135,6 @@ that stops is easier to recover from than one that quietly does the wrong thing.
 case `claude agents --json` silently degrades to background agents only. clownhead checks
 for this and refuses rather than reporting an empty fleet.
 
-**Watch `ANTHROPIC_API_KEY`.** Claude Code prefers an API key over subscription OAuth when
-both are present, so a stray key in a shell profile moves a resumed fleet onto metered
-billing. `clownhead doctor` warns if one is set.
-
 ## Platform support
 
 macOS with iTerm2 is the developed-against configuration. The discovery layer is portable

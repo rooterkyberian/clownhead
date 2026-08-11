@@ -2,7 +2,6 @@
 
 from __future__ import annotations
 
-import os
 import time
 from collections.abc import Iterable
 from pathlib import Path
@@ -26,8 +25,6 @@ app = typer.Typer(
 )
 console = Console()
 error_console = Console(stderr=True)
-
-BILLING_SENSITIVE_VARS = ("ANTHROPIC_API_KEY", "ANTHROPIC_AUTH_TOKEN")
 
 CwdOption = Annotated[Path | None, typer.Option("--cwd", help="Only sessions started under this path.")]
 AllOption = Annotated[bool, typer.Option("--all", help="Include background agents.")]
@@ -207,15 +204,6 @@ def doctor() -> None:
         f"notifications={terminal.supports_notifications} "
         f"foreground={terminal.supports_foreground}"
     )
-
-    leaked = [name for name in BILLING_SENSITIVE_VARS if os.environ.get(name)]
-    if leaked:
-        console.print(
-            f"billing             [bold red]{', '.join(leaked)} set[/] — Claude Code prefers an API key "
-            "over subscription OAuth, so a resumed session would bill per token"
-        )
-    else:
-        console.print("billing             [green]subscription auth (no API key in env)[/]")
 
 
 def main() -> None:

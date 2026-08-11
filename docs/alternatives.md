@@ -79,8 +79,8 @@ OAuth when both are present**, so a stray key in a shell profile silently moves 
 onto metered billing. Both vibe-kanban (an opt-in `disable_api_key` toggle) and nimbalyst
 (stripping the variable at process bootstrap) added defences only after users were burned.
 
-clownhead strips `ANTHROPIC_API_KEY` and `ANTHROPIC_AUTH_TOKEN` from every session it
-resumes, and `clownhead doctor` warns when either is set.
+clownhead leaves the environment alone: a session it resumes inherits whatever the shell
+it was started from already had, exactly as one started by hand would.
 
 ## Worth stealing
 
