@@ -4,4 +4,4 @@ from clownhead.models import Kind, Session, Status
 
 __all__ = ["Kind", "Session", "Status", "__version__"]
 
-__version__ = "0.3.0"
+__version__ = "0.4.0"
