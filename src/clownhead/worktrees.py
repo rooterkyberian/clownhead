@@ -38,6 +38,20 @@ It writes ``claude session judge (pid 72883 start Tue Aug 11 09:20:08 2026)``, a
 is the part that makes a lock checkable rather than merely present.
 """
 
+COLLAPSED_IDENT = {
+    "GIT_AUTHOR_NAME": "clownhead",
+    "GIT_AUTHOR_EMAIL": "clownhead@invalid",
+    "GIT_COMMITTER_NAME": "clownhead",
+    "GIT_COMMITTER_EMAIL": "clownhead@invalid",
+}
+"""Who writes the throwaway commit the squash check compares against.
+
+Git will not write a commit object for a machine it cannot name an author for, and one with
+no identity configured — a CI runner, a fresh container — has none to offer. The object is
+read once for its patch and never reaches a branch, a remote or anyone's history, so it
+carries a name of its own rather than borrowing whoever happens to be logged in.
+"""
+
 DEFAULT_BRANCHES = ("origin/HEAD", "origin/main", "origin/master", "main", "master")
 """Where finished work would have landed, best answer first.
 
@@ -376,7 +390,9 @@ def _squashed_into(worktree: Worktree, target: str) -> bool:
     try:
         base = _git(worktree.repo, "merge-base", target, head).strip()
         tree = _git(worktree.repo, "rev-parse", f"{head}^{{tree}}").strip()
-        collapsed = _git(worktree.repo, "commit-tree", tree, "-p", base, "-m", "merged check").strip()
+        collapsed = _git(
+            worktree.repo, "commit-tree", tree, "-p", base, "-m", "merged check", env=COLLAPSED_IDENT
+        ).strip()
         answer = _git(worktree.repo, "cherry", target, collapsed).strip()
     except LookupError:
         return False
@@ -418,13 +434,13 @@ def _admin_dir(worktree: Worktree) -> Path:
     return Path(target.strip()) if target.strip() else pointer
 
 
-def _git(directory: Path, *args: str) -> str:
+def _git(directory: Path, *args: str, env: Mapping[str, str] | None = None) -> str:
     """Run one git command and return what it printed.
 
     Raises:
         LookupError: git could not be run, or refused.
     """
-    completed = _run(directory, *args)
+    completed = _run(directory, *args, env=env)
     if completed.returncode != 0:
         raise LookupError(completed.stderr.strip().splitlines()[-1] if completed.stderr.strip() else "git refused")
     return completed.stdout
@@ -442,7 +458,7 @@ def _git_ok(directory: Path, *args: str) -> bool:
         return False
 
 
-def _run(directory: Path, *args: str) -> subprocess.CompletedProcess[str]:
+def _run(directory: Path, *args: str, env: Mapping[str, str] | None = None) -> subprocess.CompletedProcess[str]:
     try:
         return subprocess.run(  # noqa: S603
             [git_binary(), *args],
@@ -451,6 +467,7 @@ def _run(directory: Path, *args: str) -> subprocess.CompletedProcess[str]:
             text=True,
             check=False,
             timeout=GIT_TIMEOUT,
+            env={**os.environ, **env} if env is not None else None,
         )
     except (OSError, subprocess.SubprocessError) as error:
         raise LookupError(f"git could not be run in {directory}: {error}") from error

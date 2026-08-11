@@ -292,6 +292,18 @@ def test_a_branch_squashed_into_the_default_branch_is_merged(repo):
     assert worktrees.is_merged(worktrees.worktrees_of(repo)[0]) is True
 
 
+def test_a_squash_is_seen_where_git_has_no_identity_to_write_with(repo, monkeypatch):
+    """The squash check writes a commit object, which a machine with no `user.email` cannot."""
+    git(repo, "merge", "--squash", "feature")
+    git(repo, "commit", "-m", "squashed feature")
+    monkeypatch.setenv("GIT_CONFIG_GLOBAL", "/dev/null")
+    monkeypatch.setenv("GIT_CONFIG_SYSTEM", "/dev/null")
+    for name in ("GIT_AUTHOR_NAME", "GIT_AUTHOR_EMAIL", "GIT_COMMITTER_NAME", "GIT_COMMITTER_EMAIL"):
+        monkeypatch.setenv(name, "")
+
+    assert worktrees.is_merged(worktrees.worktrees_of(repo)[0]) is True
+
+
 def test_a_worktree_with_uncommitted_work_is_dirty(repo):
     entry = worktrees.worktrees_of(repo)[0]
     (entry.path / "scratch.txt").write_text("unsaved\n")
