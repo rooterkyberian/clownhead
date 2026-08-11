@@ -117,6 +117,25 @@ reset the very age the sweep asked for, and nothing would ever look old twice. F
 reason the dirt check is `--no-optional-locks`, which stops `git status` rewriting the index
 it refreshed.
 
+A lock is not always a guard. Claude Code holds one for as long as a session is in the
+worktree and drops it on the way out, so a lock outliving its process is what a crash left
+behind — that one is cleared and the worktree retired, which is the leak nothing else
+reaches. A lock somebody else took names no process, and is left alone.
+
 Removal is `git worktree remove` and never `--force`. Git refuses a worktree with changes
 in it, and that refusal is a last guard rather than an obstacle: everything clownhead knows
 was read a moment ago, and a moment is long enough for somebody to have started typing.
+
+The branch is a second question, asked separately and answered no by default. A worktree is
+a checkout that can be made again from its branch; the branch is where the work is. Deleting
+one is `git branch -d`, which refuses anything that is not an ancestor of what it would have
+merged into — the same question the merged check asks, and answers better, since a squash
+leaves no ancestry to find. `-D` follows only where clownhead's own check says the work is
+upstream already, never on git's refusal alone. The checkout goes first either way, because
+git will not delete a branch a worktree is on.
+
+Neither command has a key. Both are occasional and destructive, and a letter spent on them
+is a letter that can be pressed by accident over whichever row the cursor happened to be
+on; the palette is arrived at by typing the name of the thing you went looking for. It
+carries the keyed actions as well, since a board whose footer has to truncate needs
+somewhere the dropped ones are still findable.

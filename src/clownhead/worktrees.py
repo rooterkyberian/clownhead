@@ -126,20 +126,22 @@ def survey(
     return candidates
 
 
-def remove(worktree: Worktree, processes: Mapping[int, Process] | None = None) -> None:
-    """Retire a worktree, leaving its branch where it is.
+def remove(worktree: Worktree, processes: Mapping[int, Process] | None = None, *, branch: bool = False) -> None:
+    """Retire a worktree, and its branch as well when asked.
 
-    Never ``--force``. Git refuses a worktree with changes in it, and that refusal is a
-    last guard rather than an obstacle — everything this module knows about a worktree was
-    read a moment ago, and the moment is long enough for somebody to have started typing
-    in it.
+    Never ``--force`` on the worktree. Git refuses one with changes in it, and that refusal
+    is a last guard rather than an obstacle — everything this module knows about a worktree
+    was read a moment ago, and the moment is long enough for somebody to have started
+    typing in it.
 
     A lock is cleared only when the process that took it has gone. Claude Code holds one
     for as long as a session is in the worktree, so a lock outliving its process is what a
     crash leaves behind, and clearing that is the whole point of being able to.
 
+    The checkout goes first, since git will not delete a branch that one is on.
+
     Raises:
-        LookupError: the worktree is in use, or git refused to remove it.
+        LookupError: the worktree is in use, or git refused to remove it or its branch.
     """
     if worktree.lock is not None:
         holder = lock_holder(worktree.lock)
@@ -148,6 +150,29 @@ def remove(worktree: Worktree, processes: Mapping[int, Process] | None = None) -
             raise LookupError(f"{worktree.name} is locked by a live session")
         _git(worktree.repo, "worktree", "unlock", str(worktree.path))
     _git(worktree.repo, "worktree", "remove", str(worktree.path))
+    if branch and worktree.branch is not None:
+        remove_branch(worktree)
+
+
+def remove_branch(worktree: Worktree) -> None:
+    """Delete a worktree's branch, once its work is somewhere else.
+
+    ``git branch -d`` first, which refuses a branch that is not an ancestor of the one it
+    would be merged into. That refusal is the same question :func:`is_merged` asks and
+    answers better: a squash merge leaves no ancestry behind, so git declines branches that
+    are demonstrably finished with. ``-D`` follows only where this module's own check says
+    the work is upstream already — never on git's refusal alone.
+
+    Raises:
+        LookupError: the branch has no name, or its work is not upstream.
+    """
+    if worktree.branch is None:
+        raise LookupError(f"{worktree.name} is on a detached HEAD")
+    if _git_ok(worktree.repo, "branch", "-d", worktree.branch):
+        return
+    if not is_merged(worktree):
+        raise LookupError(f"{worktree.branch} is not merged")
+    _git(worktree.repo, "branch", "-D", worktree.branch)
 
 
 def repos_of(sessions: Iterable[Session]) -> set[Path]:

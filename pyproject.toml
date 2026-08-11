@@ -5,13 +5,13 @@ build-backend = "uv_build"
 [project]
 name = "clownhead"
 version = "0.5.0"
-description = "Overseer for local Claude Code sessions: status board, terminal attention signals, and a way back into whichever one is waiting on you."
+description = "A status board for the Claude Code sessions already running on your machine: which are busy, which are idle, and which one is blocked waiting on you."
 readme = "README.md"
 requires-python = ">=3.12"
 license = "MIT"
 license-files = ["LICENSE"]
 authors = [{ name = "Maciej Urbański", email = "rooter@kyberian.net" }]
-keywords = ["claude-code", "cli", "session-manager", "tmux", "iterm2"]
+keywords = ["claude", "claude-code", "developer-tools"]
 classifiers = [
     "Development Status :: 3 - Alpha",
     "Environment :: Console",

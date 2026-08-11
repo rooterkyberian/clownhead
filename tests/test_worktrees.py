@@ -313,6 +313,48 @@ def test_removing_a_worktree_takes_the_checkout_and_leaves_the_branch(repo):
     assert "feature" in git(repo, "branch", "--list", "feature")
 
 
+def test_removing_a_worktree_leaves_its_branch_unless_asked(repo):
+    worktrees.remove(worktrees.worktrees_of(repo)[0], branch=False)
+
+    assert "feature" in git(repo, "branch", "--list", "feature")
+
+
+def test_removing_a_worktree_takes_a_merged_branch_when_asked(repo):
+    git(repo, "merge", "--no-ff", "-m", "merge feature", "feature")
+
+    worktrees.remove(worktrees.worktrees_of(repo)[0], branch=True)
+
+    assert git(repo, "branch", "--list", "feature").strip() == ""
+
+
+def test_removing_a_worktree_takes_a_squash_merged_branch_git_would_refuse(repo):
+    """`git branch -d` refuses a squash merge; the module's own check knows better."""
+    entry = worktrees.worktrees_of(repo)[0]
+    git(repo, "merge", "--squash", "feature")
+    git(repo, "commit", "-m", "squashed feature")
+
+    assert not worktrees._git_ok(repo, "branch", "-d", "feature")
+
+    worktrees.remove(entry, branch=True)
+
+    assert git(repo, "branch", "--list", "feature").strip() == ""
+
+
+def test_removing_a_worktree_keeps_a_branch_whose_work_is_nowhere_else(repo):
+    entry = worktrees.worktrees_of(repo)[0]
+
+    with pytest.raises(LookupError, match="not merged"):
+        worktrees.remove(entry, branch=True)
+
+    assert not entry.path.exists()
+    assert "feature" in git(repo, "branch", "--list", "feature")
+
+
+def test_removing_a_detached_worktrees_branch_says_there_is_none(tmp_path):
+    with pytest.raises(LookupError, match="detached HEAD"):
+        worktrees.remove_branch(worktree(tmp_path, branch=None))
+
+
 def test_removing_a_worktree_a_running_session_locked_is_refused(tmp_path):
     entry = worktree(tmp_path, lock="claude session judge (pid 4242 start x)")
 

@@ -64,6 +64,9 @@ OlderThanOption = Annotated[
 MergedOption = Annotated[
     bool, typer.Option("--merged", help="Only worktrees whose work is already in the default branch.")
 ]
+BranchesOption = Annotated[
+    bool, typer.Option("--branches", help="Delete each worktree's branch as well. Implies --merged.")
+]
 DryRunOption = Annotated[bool, typer.Option("--dry-run", help="Show what would be removed and stop.")]
 YesOption = Annotated[bool, typer.Option("--yes", "-y", help="Remove without asking first.")]
 
@@ -233,6 +236,7 @@ def worktrees_cleanup(
     cwd: CwdOption = None,
     older_than: OlderThanOption = DEFAULT_AGE,
     merged_only: MergedOption = False,
+    branches: BranchesOption = False,
     dry_run: DryRunOption = False,
     assume_yes: YesOption = False,
 ) -> None:
@@ -245,10 +249,15 @@ def worktrees_cleanup(
 
     Nothing is removed that a live session is in, that a running session has locked, that
     has uncommitted changes, that holds commits on no remote, or that has been used more
-    recently than ``--older-than``. What is removed loses only the checkout: the branch,
-    and every commit on it, stays exactly where it was.
+    recently than ``--older-than``. What is removed loses only the checkout, unless
+    ``--branches`` is given: the branch, and every commit on it, otherwise stays exactly
+    where it was.
+
+    ``--branches`` only ever deletes one whose work is upstream already, so it implies
+    ``--merged`` rather than quietly widening what it takes.
     """
     age = _older_than(older_than)
+    merged_only = merged_only or branches
     sessions = _load(cwd, include_background=True, include_closed=True)
     candidates = worktrees.survey(sessions, older_than=age)
     if merged_only:
@@ -265,10 +274,11 @@ def worktrees_cleanup(
     if dry_run:
         console.print("[dim]--dry-run · nothing removed[/]")
         return
-    if not assume_yes and not typer.confirm(f"remove {len(going)} worktree{'' if len(going) == 1 else 's'}?"):
+    what = "worktree and branch" if branches else "worktree"
+    if not assume_yes and not typer.confirm(f"remove {len(going)} {what}{'' if len(going) == 1 else 's'}?"):
         console.print("[dim]nothing removed[/]")
         return
-    _remove_all(going)
+    _remove_all(going, branches)
 
 
 def _older_than(text: str) -> timedelta:
@@ -320,12 +330,12 @@ def _cleanup_table(candidates: Sequence[worktrees.Candidate]) -> Table:
     return table
 
 
-def _remove_all(going: Sequence[worktrees.Candidate]) -> None:
-    """Remove each worktree, reporting failures without abandoning the rest of the sweep."""
+def _remove_all(going: Sequence[worktrees.Candidate], branches: bool = False) -> None:
+    """Remove each worktree, reporting failures without abandoning the rest of the run."""
     removed = 0
     for candidate in going:
         try:
-            worktrees.remove(candidate.worktree)
+            worktrees.remove(candidate.worktree, branch=branches)
         except (LookupError, OSError) as error:
             error_console.print(f"[yellow]kept[/] {candidate.worktree.name}: {error}")
             continue

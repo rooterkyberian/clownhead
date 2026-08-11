@@ -8,7 +8,7 @@ without a live fleet.
 
 from __future__ import annotations
 
-from collections.abc import Callable, Mapping, Sequence
+from collections.abc import Callable, Iterable, Mapping, Sequence
 from datetime import UTC, datetime, timedelta
 from functools import partial
 from typing import Any, Protocol
@@ -17,12 +17,12 @@ from pydantic import ValidationError
 from rich.markup import escape
 from rich.text import Text
 from textual import events, work
-from textual.app import App, ComposeResult
+from textual.app import App, ComposeResult, SystemCommand
 from textual.binding import Binding
 from textual.containers import Horizontal, Vertical, VerticalScroll
 from textual.message import Message as TextualMessage
 from textual.notifications import SeverityLevel
-from textual.screen import ModalScreen
+from textual.screen import ModalScreen, Screen
 from textual.widgets import DataTable, Footer, Input, Label, Static, Switch
 
 from clownhead import attention
@@ -42,8 +42,8 @@ BASE_COLUMNS = ("STATUS", "NAME", "QUIET", "AGE")
 DEFAULT_INTERVAL = 5.0
 CLOWN = "\N{CLOWN FACE}"
 CONFIG_DIR_CAP = 40
-SWEEP_AGE = timedelta(0)
-"""No age filter on the sweep: being merged is the stronger answer, and a worktree whose
+CLEANUP_AGE = timedelta(0)
+"""No age filter on a cleanup: being merged is the stronger answer, and a worktree whose
 work is already upstream is finished with whether that happened this morning or last month."""
 
 
@@ -182,19 +182,28 @@ class ConfirmScreen(ModalScreen[bool]):
         self.dismiss(False)
 
 
-class SweepScreen(ModalScreen[bool]):
+class CleanupScreen(ModalScreen[bool | None]):
     """The merged worktrees, and one question over the lot of them.
 
     A list rather than a picker on purpose. Everything offered has already passed every
     guard, so choosing between them is a decision without a difference, and a screen that
-    invited one would turn a sweep into thirteen keystrokes — which is the thing that made
-    the worktrees pile up in the first place. Anything being kept is named underneath with
-    its reason, because a sweep that silently skipped half of what it found would read as
-    having cleaned up more than it had.
+    invited one would turn a cleanup into thirteen keystrokes — which is the thing that
+    made the worktrees pile up in the first place. Anything being kept is named underneath
+    with its reason, because a cleanup that silently skipped half of what it found would
+    read as having tidied more than it had.
+
+    The branches are the second question, because they are a second thing to lose. A
+    worktree is a checkout that can be made again from a branch; the branch is where the
+    work is. Both are only ever offered for worktrees whose work is already in the default
+    branch, so the answer is safe either way — but it is asked rather than assumed, and it
+    starts at no.
+
+    It answers ``True`` for the worktrees and their branches, ``False`` for the worktrees
+    alone, and ``None`` for neither.
     """
 
     CSS = """
-    SweepScreen {
+    CleanupScreen {
         align: center middle;
     }
     #sheet {
@@ -205,7 +214,7 @@ class SweepScreen(ModalScreen[bool]):
         border: round $error;
         background: $surface;
     }
-    #sweep-list {
+    #cleanup-list {
         height: auto;
         max-height: 20;
     }
@@ -214,6 +223,7 @@ class SweepScreen(ModalScreen[bool]):
     BINDINGS = [
         Binding("y", "confirm", "yes"),
         Binding("enter", "confirm", "yes"),
+        Binding("b", "toggle_branches", "branches"),
         Binding("n", "cancel", "no"),
         Binding("escape", "cancel", "no"),
     ]
@@ -222,28 +232,41 @@ class SweepScreen(ModalScreen[bool]):
         super().__init__()
         self._going = list(going)
         self._kept = list(kept)
+        self._branches = False
 
     def compose(self) -> ComposeResult:
         """Ask once, over a list of what the answer applies to."""
         count = len(self._going)
         with Vertical(id="sheet"):
             yield Static(f"[bold]Remove {count} merged worktree{'' if count == 1 else 's'}?[/]")
-            yield Static("[dim]their branches stay; only the checkouts go[/]")
-            with VerticalScroll(id="sweep-list"):
+            with VerticalScroll(id="cleanup-list"):
                 yield Static(self._listing())
-            yield Static("[dim]y to remove · esc to cancel[/]")
+            yield Static(self._branch_line(), id="branches")
+            yield Static("[dim]y to remove · b for branches too · esc to cancel[/]")
+
+    def action_toggle_branches(self) -> None:
+        """Take the branches as well, or stop taking them."""
+        self._branches = not self._branches
+        self.query_one("#branches", Static).update(self._branch_line())
 
     def action_confirm(self) -> None:
-        """Answer yes."""
-        self.dismiss(True)
+        """Answer yes, to whatever the branch line currently says."""
+        self.dismiss(self._branches)
 
     def action_cancel(self) -> None:
         """Answer no."""
-        self.dismiss(False)
+        self.dismiss(None)
+
+    def _branch_line(self) -> str:
+        if self._branches:
+            return "[bold]branches go too[/]"
+        return "[dim]branches stay; only the checkouts go[/]"
 
     def _listing(self) -> str:
         lines = [
-            f"  {escape(candidate.worktree.name)}  [dim]{_candidate_age(candidate)}[/]" for candidate in self._going
+            f"  {escape(candidate.worktree.name)}  [dim]{_candidate_age(candidate)}[/]"
+            f"  [dim]{escape(candidate.worktree.branch or 'detached')}[/]"
+            for candidate in self._going
         ]
         if self._kept:
             lines.append("")
@@ -456,10 +479,8 @@ class FleetApp(App[None]):
         Binding("y", "copy_resume", "copy resume"),
         Binding("r", "rename", "rename"),
         Binding("t", "terminate", "terminate"),
-        Binding("w", "remove_worktree", "worktree"),
         Binding("comma", "settings", "settings"),
         Binding("q", "quit", "quit"),
-        Binding("ctrl+w", "sweep_worktrees", "sweep merged", show=False),
         Binding("ctrl+r", "refresh", "refresh", show=False),
         Binding("right", "history", "→ history", show=False),
         Binding("left", "close_history", "← close", show=False),
@@ -475,10 +496,11 @@ class FleetApp(App[None]):
     says it better — the count of closed sessions is the switch, and a switch that shows
     the number it would fold in needs no key advertised beside it.
 
-    `w` retires the worktree of the session under the cursor and sits with the other things
-    done to one session, after `t`. `^w` sweeps every merged worktree at once and is
-    hidden: it acts on the whole machine rather than on anything the cursor is pointing at,
-    which is not what a footer beside a highlighted row should be offering.
+    Retiring a worktree has no key at all, and is in the palette instead — see
+    :meth:`FleetApp.get_system_commands`, which carries everything here by name as well. A
+    key is for what you do to a session while reading the board, and worktrees are not
+    that: they are tidied occasionally, on purpose, and a letter spent on them is a letter
+    that can be pressed by accident.
     """
 
     def __init__(
@@ -540,6 +562,63 @@ class FleetApp(App[None]):
         no longer there, which is worse than no tint at all.
         """
         self._tint_own_tab(False)
+
+    def get_system_commands(self, screen: Screen[Any]) -> Iterable[SystemCommand]:
+        """Everything the board can do, by name.
+
+        A key is for what you reach for while reading the board, and the footer has room
+        for a handful of them. The palette is the other half of the same list: you arrive
+        at a command having typed its name, which suits the occasional and the destructive,
+        and gives the keys the footer had to truncate away somewhere they are still
+        findable. Every entry says what it does rather than restating its own title, since
+        a palette is read by somebody who does not already know.
+        """
+        yield from super().get_system_commands(screen)
+        yield SystemCommand(
+            "Reload the board",
+            "Read the fleet again now rather than on the next tick",
+            self.action_refresh,
+        )
+        yield SystemCommand(
+            "Settings",
+            "Columns, refresh interval, history, and whether tabs are tinted",
+            self.action_settings,
+        )
+        yield SystemCommand(
+            "Closed sessions",
+            "Fold the sessions that have ended into the board, or back out of it",
+            self.action_toggle_closed,
+        )
+        yield SystemCommand(
+            "Focus this session's terminal",
+            "Signal it, and bring the window it is running in to the front",
+            self.action_focus_session,
+        )
+        yield SystemCommand(
+            "Rename this session",
+            "Ask the session itself for a name that says what the job is",
+            self.action_rename,
+        )
+        yield SystemCommand(
+            "Copy this session's resume command",
+            "Put the command that brings it back on the clipboard",
+            self.action_copy_resume,
+        )
+        yield SystemCommand(
+            "Terminate this session",
+            "Send its process SIGTERM, once it has been confirmed",
+            self.action_terminate,
+        )
+        yield SystemCommand(
+            "Retire this session's worktree",
+            "Remove the checkout it worked in, leaving its branch behind",
+            self.action_remove_worktree,
+        )
+        yield SystemCommand(
+            "Cleanup worktrees",
+            "Remove every worktree whose work is already in its default branch, branches optional",
+            self.action_cleanup_worktrees,
+        )
 
     @property
     def columns(self) -> tuple[str, ...]:
@@ -695,7 +774,7 @@ class FleetApp(App[None]):
 
     @work(thread=True, group="worktree")
     def _inspect_worktree(self, session: Session) -> None:
-        found = survey([session], older_than=SWEEP_AGE, only=session.cwd)
+        found = survey([session], older_than=CLEANUP_AGE, only=session.cwd)
         if not found:
             self._hand_back(self._worktree_kept, f"git does not know {shorten_path(session.cwd)}")
             return
@@ -712,51 +791,59 @@ class FleetApp(App[None]):
             f"[dim]{escape(str(candidate.worktree.path))} · last worked in {_candidate_age(candidate)}[/]\n"
             f"[dim]{escape(branch)} stays; only the checkout goes[/]"
         )
-        self.push_screen(ConfirmScreen(question), partial(self._remove_worktree, [candidate]))
+        self.push_screen(ConfirmScreen(question), partial(self._confirmed_worktree, [candidate]))
 
-    def action_sweep_worktrees(self) -> None:
+    def action_cleanup_worktrees(self) -> None:
         """Retire every worktree whose work is already in its default branch.
 
         The board is a herd of repositories, not one, so this asks about all of them at
         once — which is the shape the problem has: worktrees pile up across every checkout
         a fleet touches, and clearing one repository at a time is how they got here.
         """
-        self._sweep_worktrees()
+        self._cleanup_worktrees()
 
     @work(thread=True, group="worktree")
-    def _sweep_worktrees(self) -> None:
-        candidates = [candidate for candidate in survey(self._sessions, older_than=SWEEP_AGE) if candidate.merged]
-        self._hand_back(self._ask_sweep, candidates)
+    def _cleanup_worktrees(self) -> None:
+        candidates = [candidate for candidate in survey(self._sessions, older_than=CLEANUP_AGE) if candidate.merged]
+        self._hand_back(self._ask_cleanup, candidates)
 
-    def _ask_sweep(self, candidates: Sequence[Candidate]) -> None:
+    def _ask_cleanup(self, candidates: Sequence[Candidate]) -> None:
         going = [candidate for candidate in candidates if candidate.removable]
         kept = [candidate for candidate in candidates if not candidate.removable]
         if not going:
             detail = f"{len(kept)} merged, all kept" if kept else "no merged worktrees"
-            self.notify(detail, title="nothing to sweep", severity="information")
+            self.notify(detail, title="nothing to clean up", severity="information")
             return
-        self.push_screen(SweepScreen(going, kept), partial(self._remove_worktree, going))
+        self.push_screen(CleanupScreen(going, kept), partial(self._cleaned_up, going))
 
-    def _remove_worktree(self, going: Sequence[Candidate], confirmed: bool | None) -> None:
+    def _confirmed_worktree(self, going: Sequence[Candidate], confirmed: bool | None) -> None:
         if not confirmed:
             return
-        self._remove_all(list(going))
+        self._remove_all(list(going), branches=False)
+
+    def _cleaned_up(self, going: Sequence[Candidate], branches: bool | None) -> None:
+        """Act on the cleanup screen's answer, which says whether the branches go too."""
+        if branches is None:
+            return
+        self._remove_all(list(going), branches=branches)
 
     @work(thread=True, group="worktree")
-    def _remove_all(self, going: Sequence[Candidate]) -> None:
+    def _remove_all(self, going: Sequence[Candidate], branches: bool = False) -> None:
         removed = 0
         for candidate in going:
             try:
-                remove_worktree(candidate.worktree)
+                remove_worktree(candidate.worktree, branch=branches)
             except (LookupError, OSError) as error:
                 self._hand_back(self._worktree_kept, f"{candidate.worktree.name}: {error}")
                 continue
             removed += 1
         if removed:
-            self._hand_back(self._worktrees_removed, removed)
+            self._hand_back(self._worktrees_removed, (removed, branches))
 
-    def _worktrees_removed(self, removed: int) -> None:
-        self.notify(f"removed {removed} worktree{'' if removed == 1 else 's'}", severity="warning")
+    def _worktrees_removed(self, outcome: tuple[int, bool]) -> None:
+        removed, branches = outcome
+        what = "worktree and branch" if branches else "worktree"
+        self.notify(f"removed {removed} {what}{'' if removed == 1 else 's'}", severity="warning")
         self.start_reload()
 
     def _worktree_kept(self, detail: str) -> None:

@@ -30,8 +30,8 @@ and the pane below the table carries the id, path, process and terminal the colu
 - `y` copies its resume command.
 - `r` renames it.
 - `t` asks whether to send its process SIGTERM, and can close its tab behind it.
-- `w` retires the worktree it worked in; `^w` sweeps every worktree already merged.
 - `,` opens the settings.
+- `^p` opens the command palette.
 - `q` quits.
 
 ## Tab colours
@@ -66,20 +66,24 @@ so it stays an ordinary filter needle.
 
 ## Worktrees
 
-Claude Code checks a job out into `.claude/worktrees/<name>` and never removes the
-directory afterwards. They accumulate, and a repository carrying a dozen finished ones
+Claude Code checks a job out into `.claude/worktrees/<name>`
+and never removes the directory afterwards.
+They accumulate,
+and a repository carrying a dozen finished ones
 gives every session in it a sandbox rule set past what is workable.
 
-`w` retires the worktree of the session under the cursor; `^w` sweeps every worktree whose
-work is already in the default branch, across every repository the board is showing.
-Neither takes anything a `git worktree remove` would not: the branch, and every commit on
-it, stays where it was.
+The command palette has two:
+**Retire this session's worktree** takes the one the selected session worked in,
+**Cleanup worktrees** takes every worktree
+whose work is already in the default branch.
+Branches stay unless you ask for them —
+`b` in the cleanup modal, `--branches` on the command line —
+and are only ever offered where the work is already somewhere else.
 
-Nothing goes that a live session is in, that a running session has locked, that has
-uncommitted changes, that holds commits on no remote, or — for `worktrees-cleanup` — that
-has been worked in more recently than `--older-than`. What is being kept is listed with the
-reason beside it rather than left out, since a sweep that quietly skipped half of what it
-found would read as having cleaned up more than it had:
+Nothing goes that a live session is in, that a running session has locked,
+that has uncommitted changes, that holds commits on no remote,
+or that has been worked in more recently than `--older-than`.
+What is kept is listed with the reason beside it:
 
 ```bash
 $ clownhead worktrees-cleanup --older-than 7d --dry-run
@@ -91,10 +95,6 @@ df729-uv-lambda              42d  -
 httpx2                       20d  -
 ```
 
-A lock is not always a guard. Claude Code holds one for as long as a session is in the
-worktree, so a lock outliving its process is what a crash left behind — that one is cleared
-and the worktree retired, which is the leak nothing else reaches.
-
 ## Commands
 
 Every view is also a one-shot subcommand, so the same data pipes into a script.
@@ -103,7 +103,7 @@ Every view is also a one-shot subcommand, so the same data pipes into a script.
 |---|---|
 | `clownhead` | The interactive overseer. Same as `clownhead tui`. |
 | `clownhead ls` | Status board, attention-first. `--cwd` scopes to one tree, `--all` adds background agents, `--closed` adds sessions that have ended, `--pr` keeps only the ones whose transcript names a pull request, `--columns` picks the columns and their order. |
-| `clownhead worktrees-cleanup` | Retire the worktrees Claude Code left behind. `--older-than` sets how long untouched is long enough (default `7d`), `--merged` keeps to the ones already in the default branch, `--dry-run` shows what would go, `--yes` skips the question. |
+| `clownhead worktrees-cleanup` | Retire the worktrees Claude Code left behind. `--older-than` sets how long untouched is long enough (default `7d`), `--merged` keeps to the ones already in the default branch, `--branches` deletes those branches too, `--dry-run` shows what would go, `--yes` skips the question. |
 | `clownhead paint` | Colour each session's tab to match its state, for a board you would rather not keep open. `--follow` keeps them in sync, `--reset` clears them. |
 | `clownhead focus [name]` | Bounce the dock, raise the terminal, and notify. With no argument, takes every session that is waiting on you. `--no-foreground` leaves your windows where they are. |
 | `clownhead doctor` | Check discovery, terminal capabilities, and auth. |

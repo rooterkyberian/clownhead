@@ -879,9 +879,9 @@ async def test_tui_terminate_on_an_empty_fleet_asks_nothing(monkeypatch):
 @pytest.fixture
 def retired(monkeypatch) -> list[str]:
     """Worktree removal recorded rather than performed, with one worktree to survey."""
-    removed: list[str] = []
+    removed: list[tuple[str, bool]] = []
     monkeypatch.setattr(tui_module, "survey", lambda sessions, **kwargs: [candidate()])
-    monkeypatch.setattr(tui_module, "remove_worktree", lambda entry: removed.append(entry.name))
+    monkeypatch.setattr(tui_module, "remove_worktree", lambda entry, branch=False: removed.append((entry.name, branch)))
     return removed
 
 
@@ -890,7 +890,7 @@ async def test_tui_remove_worktree_asks_before_removing_anything(retired):
 
     async with app.run_test() as pilot:
         await settle(app, pilot)
-        await pilot.press("w")
+        app.action_remove_worktree()
         await settle(app, pilot)
 
         assert isinstance(app.screen, tui_module.ConfirmScreen)
@@ -902,12 +902,12 @@ async def test_tui_remove_worktree_removes_it_once_confirmed(retired):
 
     async with app.run_test() as pilot:
         await settle(app, pilot)
-        await pilot.press("w")
+        app.action_remove_worktree()
         await settle(app, pilot)
         await pilot.press("y")
         await settle(app, pilot)
 
-        assert retired == ["search-index"]
+        assert retired == [("search-index", False)]
 
 
 @pytest.mark.parametrize("key", ["escape", "n"])
@@ -916,7 +916,7 @@ async def test_tui_remove_worktree_is_dropped_when_the_question_is_declined(reti
 
     async with app.run_test() as pilot:
         await settle(app, pilot)
-        await pilot.press("w")
+        app.action_remove_worktree()
         await settle(app, pilot)
         await pilot.press(key)
         await settle(app, pilot)
@@ -926,12 +926,12 @@ async def test_tui_remove_worktree_is_dropped_when_the_question_is_declined(reti
 
 async def test_tui_remove_worktree_says_what_is_keeping_it_rather_than_asking(monkeypatch):
     monkeypatch.setattr(tui_module, "survey", lambda sessions, **kwargs: [candidate(kept_for="uncommitted changes")])
-    monkeypatch.setattr(tui_module, "remove_worktree", lambda entry: pytest.fail("must not remove"))
+    monkeypatch.setattr(tui_module, "remove_worktree", lambda entry, branch=False: pytest.fail("must not remove"))
     app = build_app(sessions=worktree_fleet())
 
     async with app.run_test() as pilot:
         await settle(app, pilot)
-        await pilot.press("w")
+        app.action_remove_worktree()
         await settle(app, pilot)
 
         assert not isinstance(app.screen, tui_module.ConfirmScreen)
@@ -944,7 +944,7 @@ async def test_tui_remove_worktree_on_a_session_outside_one_asks_nothing(monkeyp
 
     async with app.run_test() as pilot:
         await settle(app, pilot)
-        await pilot.press("w")
+        app.action_remove_worktree()
         await settle(app, pilot)
 
         assert not isinstance(app.screen, tui_module.ConfirmScreen)
@@ -956,14 +956,14 @@ async def test_tui_remove_worktree_on_an_empty_fleet_asks_nothing():
 
     async with app.run_test() as pilot:
         await settle(app, pilot)
-        await pilot.press("w")
+        app.action_remove_worktree()
         await settle(app, pilot)
 
         assert [n.message for n in app._notifications] == ["nothing selected"]
 
 
 async def test_tui_remove_worktree_reports_a_refusal(monkeypatch):
-    def refuse(entry):
+    def refuse(entry, branch=False):
         raise LookupError("git refused")
 
     monkeypatch.setattr(tui_module, "survey", lambda sessions, **kwargs: [candidate()])
@@ -972,7 +972,7 @@ async def test_tui_remove_worktree_reports_a_refusal(monkeypatch):
 
     async with app.run_test() as pilot:
         await settle(app, pilot)
-        await pilot.press("w")
+        app.action_remove_worktree()
         await settle(app, pilot)
         await pilot.press("y")
         await settle(app, pilot)
@@ -980,51 +980,122 @@ async def test_tui_remove_worktree_reports_a_refusal(monkeypatch):
         assert [n.message for n in app._notifications] == ["search-index: git refused"]
 
 
-async def test_tui_sweep_lists_the_merged_worktrees_and_what_is_being_kept(monkeypatch):
+async def test_tui_cleanup_lists_the_merged_worktrees_and_what_is_being_kept(monkeypatch):
     surveyed = [candidate("done"), candidate("busy", kept_for="uncommitted changes")]
     monkeypatch.setattr(tui_module, "survey", lambda sessions, **kwargs: surveyed)
-    monkeypatch.setattr(tui_module, "remove_worktree", lambda entry: pytest.fail("must not remove"))
+    monkeypatch.setattr(tui_module, "remove_worktree", lambda entry, branch=False: pytest.fail("must not remove"))
     app = build_app(sessions=worktree_fleet())
 
     async with app.run_test() as pilot:
         await settle(app, pilot)
-        await pilot.press("ctrl+w")
+        app.action_cleanup_worktrees()
         await settle(app, pilot)
 
-        assert isinstance(app.screen, tui_module.SweepScreen)
+        assert isinstance(app.screen, tui_module.CleanupScreen)
         listing = "\n".join(str(widget.content) for widget in app.screen.query(Static))
         assert "Remove 1 merged worktree?" in listing
         assert "done" in listing
         assert "busy · kept · uncommitted changes" in listing
 
 
-async def test_tui_sweep_removes_only_what_it_offered(monkeypatch):
+async def test_tui_cleanup_removes_only_what_it_offered(monkeypatch):
     removed: list[str] = []
     surveyed = [candidate("done"), candidate("busy", kept_for="uncommitted changes"), candidate("plain", merged=False)]
     monkeypatch.setattr(tui_module, "survey", lambda sessions, **kwargs: surveyed)
-    monkeypatch.setattr(tui_module, "remove_worktree", lambda entry: removed.append(entry.name))
+    monkeypatch.setattr(tui_module, "remove_worktree", lambda entry, branch=False: removed.append((entry.name, branch)))
     app = build_app(sessions=worktree_fleet())
 
     async with app.run_test() as pilot:
         await settle(app, pilot)
-        await pilot.press("ctrl+w")
+        app.action_cleanup_worktrees()
         await settle(app, pilot)
         await pilot.press("y")
         await settle(app, pilot)
 
-        assert removed == ["done"]
+        assert removed == [("done", False)]
 
 
-@pytest.mark.parametrize("key", ["escape", "n"])
-async def test_tui_sweep_removes_nothing_when_declined(monkeypatch, key):
-    removed: list[str] = []
+async def test_tui_cleanup_leaves_the_branches_unless_asked(monkeypatch):
+    removed: list[tuple[str, bool]] = []
     monkeypatch.setattr(tui_module, "survey", lambda sessions, **kwargs: [candidate("done")])
-    monkeypatch.setattr(tui_module, "remove_worktree", lambda entry: removed.append(entry.name))
+    monkeypatch.setattr(tui_module, "remove_worktree", lambda entry, branch=False: removed.append((entry.name, branch)))
     app = build_app(sessions=worktree_fleet())
 
     async with app.run_test() as pilot:
         await settle(app, pilot)
-        await pilot.press("ctrl+w")
+        app.action_cleanup_worktrees()
+        await settle(app, pilot)
+
+        assert "branches stay" in str(app.screen.query_one("#branches", Static).content)
+        await pilot.press("y")
+        await settle(app, pilot)
+
+        assert removed == [("done", False)]
+
+
+async def test_tui_cleanup_takes_the_branches_when_asked(monkeypatch):
+    removed: list[tuple[str, bool]] = []
+    monkeypatch.setattr(tui_module, "survey", lambda sessions, **kwargs: [candidate("done")])
+    monkeypatch.setattr(tui_module, "remove_worktree", lambda entry, branch=False: removed.append((entry.name, branch)))
+    app = build_app(sessions=worktree_fleet())
+
+    async with app.run_test() as pilot:
+        await settle(app, pilot)
+        app.action_cleanup_worktrees()
+        await settle(app, pilot)
+        await pilot.press("b")
+        await pilot.pause()
+
+        assert "branches go too" in str(app.screen.query_one("#branches", Static).content)
+        await pilot.press("y")
+        await settle(app, pilot)
+
+        assert removed == [("done", True)]
+
+
+async def test_tui_cleanup_branches_can_be_asked_for_and_taken_back(monkeypatch):
+    removed: list[tuple[str, bool]] = []
+    monkeypatch.setattr(tui_module, "survey", lambda sessions, **kwargs: [candidate("done")])
+    monkeypatch.setattr(tui_module, "remove_worktree", lambda entry, branch=False: removed.append((entry.name, branch)))
+    app = build_app(sessions=worktree_fleet())
+
+    async with app.run_test() as pilot:
+        await settle(app, pilot)
+        app.action_cleanup_worktrees()
+        await settle(app, pilot)
+        await pilot.press("b")
+        await pilot.press("b")
+        await pilot.pause()
+        await pilot.press("y")
+        await settle(app, pilot)
+
+        assert removed == [("done", False)]
+
+
+async def test_tui_cleanup_names_the_branch_each_worktree_is_on(monkeypatch):
+    """The branches are what `b` would take, so the answer needs them on the screen."""
+    monkeypatch.setattr(tui_module, "survey", lambda sessions, **kwargs: [candidate("done")])
+    app = build_app(sessions=worktree_fleet())
+
+    async with app.run_test() as pilot:
+        await settle(app, pilot)
+        app.action_cleanup_worktrees()
+        await settle(app, pilot)
+
+        listing = "\n".join(str(widget.content) for widget in app.screen.query(Static))
+        assert "feature/done" in listing
+
+
+@pytest.mark.parametrize("key", ["escape", "n"])
+async def test_tui_cleanup_removes_nothing_when_declined(monkeypatch, key):
+    removed: list[str] = []
+    monkeypatch.setattr(tui_module, "survey", lambda sessions, **kwargs: [candidate("done")])
+    monkeypatch.setattr(tui_module, "remove_worktree", lambda entry, branch=False: removed.append((entry.name, branch)))
+    app = build_app(sessions=worktree_fleet())
+
+    async with app.run_test() as pilot:
+        await settle(app, pilot)
+        app.action_cleanup_worktrees()
         await settle(app, pilot)
         await pilot.press(key)
         await settle(app, pilot)
@@ -1032,30 +1103,92 @@ async def test_tui_sweep_removes_nothing_when_declined(monkeypatch, key):
         assert removed == []
 
 
-async def test_tui_sweep_with_nothing_merged_asks_nothing(monkeypatch):
+async def test_tui_cleanup_with_nothing_merged_asks_nothing(monkeypatch):
     monkeypatch.setattr(tui_module, "survey", lambda sessions, **kwargs: [candidate(merged=False)])
     app = build_app(sessions=worktree_fleet())
 
     async with app.run_test() as pilot:
         await settle(app, pilot)
-        await pilot.press("ctrl+w")
+        app.action_cleanup_worktrees()
         await settle(app, pilot)
 
-        assert not isinstance(app.screen, tui_module.SweepScreen)
+        assert not isinstance(app.screen, tui_module.CleanupScreen)
         assert [n.message for n in app._notifications] == ["no merged worktrees"]
 
 
-async def test_tui_sweep_says_when_every_merged_worktree_is_being_kept(monkeypatch):
+async def test_tui_cleanup_says_when_every_merged_worktree_is_being_kept(monkeypatch):
     held = [candidate(kept_for="a live session is in it")]
     monkeypatch.setattr(tui_module, "survey", lambda sessions, **kwargs: held)
     app = build_app(sessions=worktree_fleet())
 
     async with app.run_test() as pilot:
         await settle(app, pilot)
-        await pilot.press("ctrl+w")
+        app.action_cleanup_worktrees()
         await settle(app, pilot)
 
         assert [n.message for n in app._notifications] == ["1 merged, all kept"]
+
+
+async def test_the_palette_carries_every_action_the_board_has():
+    app = build_app(sessions=worktree_fleet())
+
+    async with app.run_test() as pilot:
+        await settle(app, pilot)
+        offered = {command.title: command.callback for command in app.get_system_commands(app.screen)}
+
+        assert set(offered) >= {
+            "Reload the board",
+            "Settings",
+            "Closed sessions",
+            "Focus this session's terminal",
+            "Rename this session",
+            "Copy this session's resume command",
+            "Terminate this session",
+            "Retire this session's worktree",
+            "Cleanup worktrees",
+        }
+        assert offered["Settings"] == app.action_settings
+        assert offered["Terminate this session"] == app.action_terminate
+        assert offered["Retire this session's worktree"] == app.action_remove_worktree
+        assert offered["Cleanup worktrees"] == app.action_cleanup_worktrees
+
+
+async def test_every_command_the_palette_offers_explains_itself():
+    """A palette is read by somebody who does not already know what the entry does."""
+    app = build_app()
+
+    async with app.run_test() as pilot:
+        await settle(app, pilot)
+
+        for command in app.get_system_commands(app.screen):
+            assert command.help
+            assert command.help.lower() != command.title.lower()
+
+
+async def test_the_worktree_commands_are_on_no_key():
+    app = build_app(sessions=worktree_fleet())
+
+    assert not [binding for binding in app.BINDINGS if "worktree" in str(binding.action)]
+
+
+async def test_a_worktree_command_run_from_the_palette_still_knows_the_selected_session(retired):
+    """The palette is a screen of its own, and the row the cursor was on has to survive it."""
+    app = build_app(sessions=worktree_fleet())
+
+    async with app.run_test() as pilot:
+        await settle(app, pilot)
+        await pilot.press("ctrl+p")
+        await pilot.pause()
+        app.screen.query_one(Input).value = "Retire this session"
+        await pilot.pause(0.5)
+        await pilot.press("enter")
+        await settle(app, pilot)
+
+        assert isinstance(app.screen, tui_module.ConfirmScreen)
+        await pilot.press("y")
+        await settle(app, pilot)
+
+        assert retired == [("search-index", False)]
 
 
 async def test_tui_worktree_column_appears_when_the_setting_is_on():

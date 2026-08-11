@@ -412,14 +412,14 @@ def worktree_candidate(tmp_path, name="httpx2", **overrides):
 @pytest.fixture
 def swept(monkeypatch, tmp_path):
     """A survey of one removable worktree and one being kept, with removal recorded."""
-    removed: list[str] = []
+    removed: list[tuple[str, bool]] = []
     candidates = [
         worktree_candidate(tmp_path, "httpx2"),
         worktree_candidate(tmp_path, "judge", merged=True, kept_for="uncommitted changes"),
     ]
     monkeypatch.setattr(discovery, "list_sessions", lambda *a, **k: fleet())
     monkeypatch.setattr(cli.worktrees, "survey", lambda *a, **k: candidates)
-    monkeypatch.setattr(cli.worktrees, "remove", lambda entry: removed.append(entry.name))
+    monkeypatch.setattr(cli.worktrees, "remove", lambda entry, branch=False: removed.append((entry.name, branch)))
     return removed
 
 
@@ -445,7 +445,7 @@ def test_worktrees_cleanup_removes_what_it_offered_once_confirmed(swept):
     result = runner.invoke(cli.app, ["worktrees-cleanup"], input="y\n")
 
     assert result.exit_code == 0
-    assert swept == ["httpx2"]
+    assert swept == [("httpx2", False)]
     assert "removed 1 of 1 worktrees" in result.stdout
 
 
@@ -453,14 +453,14 @@ def test_worktrees_cleanup_does_not_ask_when_yes_was_given(swept):
     result = runner.invoke(cli.app, ["worktrees-cleanup", "--yes"])
 
     assert result.exit_code == 0
-    assert swept == ["httpx2"]
+    assert swept == [("httpx2", False)]
 
 
 def test_worktrees_cleanup_keeps_going_when_one_removal_fails(monkeypatch, tmp_path):
     candidates = [worktree_candidate(tmp_path, "one"), worktree_candidate(tmp_path, "two")]
     removed: list[str] = []
 
-    def remove(entry):
+    def remove(entry, branch=False):
         if entry.name == "one":
             raise LookupError("git refused")
         removed.append(entry.name)
@@ -481,13 +481,40 @@ def test_worktrees_cleanup_merged_narrows_to_the_merged_ones(monkeypatch, tmp_pa
     candidates = [worktree_candidate(tmp_path, "plain"), worktree_candidate(tmp_path, "done", merged=True)]
     monkeypatch.setattr(discovery, "list_sessions", lambda *a, **k: fleet())
     monkeypatch.setattr(cli.worktrees, "survey", lambda *a, **k: candidates)
-    monkeypatch.setattr(cli.worktrees, "remove", lambda entry: None)
+    monkeypatch.setattr(cli.worktrees, "remove", lambda entry, branch=False: None)
 
     result = runner.invoke(cli.app, ["worktrees-cleanup", "--merged", "--dry-run"])
 
     assert result.exit_code == 0
     assert "merged only" in result.stdout
     assert "done" in result.stdout
+    assert "plain" not in result.stdout
+
+
+def test_worktrees_cleanup_branches_takes_them_alongside_the_worktrees(monkeypatch, tmp_path):
+    removed: list[tuple[str, bool]] = []
+    candidates = [worktree_candidate(tmp_path, "done", merged=True)]
+    monkeypatch.setattr(discovery, "list_sessions", lambda *a, **k: fleet())
+    monkeypatch.setattr(cli.worktrees, "survey", lambda *a, **k: candidates)
+    monkeypatch.setattr(cli.worktrees, "remove", lambda entry, branch=False: removed.append((entry.name, branch)))
+
+    result = runner.invoke(cli.app, ["worktrees-cleanup", "--branches", "--yes"])
+
+    assert result.exit_code == 0
+    assert removed == [("done", True)]
+
+
+def test_worktrees_cleanup_branches_only_offers_the_merged_ones(monkeypatch, tmp_path):
+    """A branch is only ever deleted where its work is upstream, so --branches implies --merged."""
+    candidates = [worktree_candidate(tmp_path, "plain"), worktree_candidate(tmp_path, "done", merged=True)]
+    monkeypatch.setattr(discovery, "list_sessions", lambda *a, **k: fleet())
+    monkeypatch.setattr(cli.worktrees, "survey", lambda *a, **k: candidates)
+    monkeypatch.setattr(cli.worktrees, "remove", lambda entry, branch=False: None)
+
+    result = runner.invoke(cli.app, ["worktrees-cleanup", "--branches", "--dry-run"])
+
+    assert result.exit_code == 0
+    assert "merged only" in result.stdout
     assert "plain" not in result.stdout
 
 
