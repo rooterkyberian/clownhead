@@ -9,6 +9,7 @@ import clownhead
 from clownhead import attention, cli, discovery
 from clownhead import terminal as terminal_module
 from clownhead.models import Session, Status
+from clownhead.resume import Launch
 from clownhead.terminal import ITerm2Terminal, Terminal
 from clownhead.worktrees import Candidate, Worktree
 
@@ -75,9 +76,15 @@ def test_no_arguments_launches_the_tui(live_fleet, monkeypatch):
     assert launched["loader"](False) == fleet()
 
 
+def run_and_quit(kwargs, include_closed: bool) -> None:
+    """Stand in for a board that loaded the fleet once and was then quit, running nothing."""
+    kwargs["loader"](include_closed)
+    return None
+
+
 def test_tui_command_scopes_the_loader(live_fleet, monkeypatch):
     seen: dict[str, object] = {}
-    monkeypatch.setattr(cli.tui, "run", lambda **kwargs: kwargs["loader"](False))
+    monkeypatch.setattr(cli.tui, "run", lambda **kwargs: run_and_quit(kwargs, False))
     monkeypatch.setattr(discovery, "list_sessions", lambda cwd=None, **k: seen.setdefault("cwd", cwd) and [])
 
     result = runner.invoke(cli.app, ["tui", "--cwd", "/tmp/payments-api", "--interval", "1"])
@@ -88,7 +95,7 @@ def test_tui_command_scopes_the_loader(live_fleet, monkeypatch):
 
 def test_tui_command_passes_the_closed_flag_through(live_fleet, monkeypatch):
     seen: dict[str, object] = {}
-    monkeypatch.setattr(cli.tui, "run", lambda **kwargs: kwargs["loader"](kwargs["include_closed"]))
+    monkeypatch.setattr(cli.tui, "run", lambda **kwargs: run_and_quit(kwargs, kwargs["include_closed"]))
     monkeypatch.setattr(
         discovery,
         "list_sessions",
@@ -566,3 +573,114 @@ def test_ls_can_show_the_worktree_column(monkeypatch):
     assert result.exit_code == 0
     assert result.stdout.splitlines()[0].split() == ["NAME", "WORKTREE"]
     assert "search-index" in result.stdout
+
+
+ISSUE_URL = "https://github.com/acme/widgets/issues/2"
+
+
+@pytest.fixture
+def one_checkout(monkeypatch):
+    """A fleet standing in one repository, which git says is the reference's own."""
+    monkeypatch.setattr(cli.checkouts.worktrees, "remote_of", lambda repo: ("acme", "widgets"))
+    monkeypatch.setattr(cli.issues, "fetch_title", lambda query: "Open a session")
+
+
+def test_open_lists_the_sessions_that_named_the_issue(live_fleet, tmp_path, one_checkout):
+    transcript(tmp_path, "4e020900-df7c", f"picking up {ISSUE_URL}")
+
+    result = runner.invoke(cli.app, ["open", ISSUE_URL, "--print"])
+
+    assert result.exit_code == 0
+    assert "acme/widgets#2 · 1 of 2 sessions" in result.stdout
+    assert "payments-api-7c" in result.stdout
+    assert "web-platform-1d" not in result.stdout
+
+
+def test_open_prints_the_command_that_starts_a_session_for_it(live_fleet, tmp_path, one_checkout):
+    transcript(tmp_path, "4e020900-df7c", f"picking up {ISSUE_URL}")
+
+    result = runner.invoke(cli.app, ["open", ISSUE_URL, "--print"])
+
+    assert "--worktree issue-2-open-a-session" in result.stdout
+    assert "--name issue-2-open-a-session" in result.stdout
+    assert ISSUE_URL in result.stdout
+
+
+def test_open_names_the_worktree_for_the_issue_alone_when_gh_says_nothing(live_fleet, monkeypatch):
+    monkeypatch.setattr(cli.checkouts.worktrees, "remote_of", lambda repo: None)
+    monkeypatch.setenv("CLOWNHEAD_GH_BIN", "/nonexistent/gh")
+
+    result = runner.invoke(cli.app, ["open", ISSUE_URL, "--print"])
+
+    assert "--worktree issue-2 " in result.stdout
+
+
+def test_open_searches_the_sessions_that_have_ended_too(monkeypatch):
+    seen: dict[str, object] = {}
+    monkeypatch.setattr(discovery, "list_sessions", lambda cwd=None, **kwargs: seen.update(kwargs) or fleet())
+
+    runner.invoke(cli.app, ["open", ISSUE_URL, "--print"])
+
+    assert seen["include_closed"] is True
+
+
+def test_open_says_so_when_the_fleet_names_no_repository(monkeypatch):
+    monkeypatch.setattr(discovery, "list_sessions", lambda *a, **k: [])
+
+    result = runner.invoke(cli.app, ["open", ISSUE_URL, "--print"])
+
+    assert result.exit_code == 0
+    assert "no repository to start one in" in result.stdout
+
+
+@pytest.mark.parametrize(
+    "reference",
+    [ISSUE_URL, "https://github.com/acme/widgets/pull/42", "https://craft.atlassian.net/browse/PLAT-4471"],
+)
+def test_a_bare_reference_reaches_open_without_naming_it(live_fleet, monkeypatch, reference, one_checkout):
+    result = runner.invoke(cli.app, [reference, "--print"])
+
+    assert result.exit_code == 0
+    assert "of 2 sessions" in result.stdout
+
+
+def test_a_mistyped_command_is_still_a_mistyped_command(live_fleet):
+    result = runner.invoke(cli.app, ["lss"])
+
+    assert result.exit_code == 2
+    assert "Did you mean 'ls'?" in result.stdout + result.stderr
+
+
+def test_open_refuses_a_reference_that_names_nothing(monkeypatch):
+    monkeypatch.setattr(discovery, "list_sessions", lambda *a, **k: pytest.fail("the fleet was read"))
+
+    result = runner.invoke(cli.app, ["open", "payments-api"])
+
+    assert result.exit_code == 2
+    assert "does not name a pull request or an issue" in result.stderr
+
+
+def test_open_becomes_the_session_the_board_was_left_for(monkeypatch, live_fleet):
+    plan = Launch(Path("/tmp/payments-api"), ("claude", "--resume", "4e020900-df7c"))
+    monkeypatch.setattr(cli.tui, "run", lambda **kwargs: plan)
+    monkeypatch.setenv("CLOWNHEAD_CLAUDE_BIN", "/usr/local/bin/claude")
+    became: list[tuple[str, list[str]]] = []
+    monkeypatch.setattr(cli.os, "chdir", lambda directory: became.append(("cd", [str(directory)])))
+    monkeypatch.setattr(cli.os, "execvp", lambda binary, argv: became.append((binary, argv)))
+
+    result = runner.invoke(cli.app, ["open", ISSUE_URL])
+
+    assert result.exit_code == 0
+    assert became == [
+        ("cd", ["/tmp/payments-api"]),
+        ("/usr/local/bin/claude", ["claude", "--resume", "4e020900-df7c"]),
+    ]
+
+
+def test_the_board_runs_nothing_when_it_was_simply_quit(monkeypatch, live_fleet):
+    monkeypatch.setattr(cli.tui, "run", lambda **kwargs: None)
+    monkeypatch.setattr(cli.os, "execvp", lambda binary, argv: pytest.fail("a session was started"))
+
+    result = runner.invoke(cli.app, ["tui"])
+
+    assert result.exit_code == 0

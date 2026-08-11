@@ -9,6 +9,7 @@ from textual.widgets import DataTable, Input, Static, Switch
 from clownhead import settings as settings_store
 from clownhead import tui as tui_module
 from clownhead.discovery import Message, Process
+from clownhead.issues import Issue, Tracker
 from clownhead.models import Session, Status
 from clownhead.settings import Settings
 from clownhead.terminal import ITerm2Terminal
@@ -121,13 +122,21 @@ class SilentTerminal(ITerm2Terminal):
         self.written.append(sequence)
 
 
-def build_app(sessions=None, loader=None, terminal=None, include_closed=False, settings=None) -> FleetApp:
+def build_app(
+    sessions=None,
+    loader=None,
+    terminal=None,
+    include_closed=False,
+    settings=None,
+    target=None,
+) -> FleetApp:
     return FleetApp(
         loader=loader or (lambda include_closed: fleet() if sessions is None else sessions),
         interval=3600,
         terminal=terminal or SilentTerminal(),
         include_closed=include_closed,
         settings=settings or Settings(),
+        target=target,
     )
 
 
@@ -138,6 +147,10 @@ async def settle(app: FleetApp, pilot) -> None:
 
 def table_of(app: FleetApp) -> DataTable:
     return app.query_one("#fleet", DataTable)
+
+
+def notified(app: FleetApp) -> str:
+    return "\n".join(str(notification.message) for notification in app._notifications)
 
 
 def title_of(app: FleetApp) -> str:
@@ -337,6 +350,188 @@ async def test_tui_filter_still_matches_metadata_when_it_is_not_a_pull_request()
         assert "widgets" not in title_of(app)
 
 
+async def test_tui_filters_the_fleet_by_issue(monkeypatch, tmp_path):
+    monkeypatch.setenv("CLAUDE_CONFIG_DIR", str(tmp_path))
+    transcript(tmp_path, "4e020900-df7c", "picking up https://github.com/acme/widgets/issues/2")
+    app = build_app()
+
+    async with app.run_test() as pilot:
+        await settle(app, pilot)
+        await filter_by(app, pilot, "https://github.com/acme/widgets/issues/2")
+
+        assert table_of(app).row_count == 1
+        assert "payments-api-7c" in str(table_of(app).get_row_at(0))
+        assert "acme/widgets#2" in title_of(app)
+
+
+async def test_tui_opens_already_pointed_at_a_reference(monkeypatch, tmp_path):
+    monkeypatch.setenv("CLAUDE_CONFIG_DIR", str(tmp_path))
+    transcript(tmp_path, "4e020900-df7c", "https://craft.atlassian.net/browse/PLAT-4471 it is")
+    ticket = Issue(tracker=Tracker.JIRA, key="PLAT-4471", host="craft.atlassian.net")
+    app = build_app(target=ticket)
+
+    async with app.run_test() as pilot:
+        await settle(app, pilot)
+        await settle(app, pilot)
+
+        assert table_of(app).row_count == 1
+        assert "PLAT-4471" in title_of(app)
+        assert app.query_one("#filter", Input).value == "https://craft.atlassian.net/browse/PLAT-4471"
+
+
+async def test_tui_opened_on_an_issue_does_not_read_it_back_as_a_pull_request(monkeypatch, tmp_path):
+    monkeypatch.setenv("CLAUDE_CONFIG_DIR", str(tmp_path))
+    app = build_app(target=ISSUE)
+
+    async with app.run_test() as pilot:
+        await settle(app, pilot)
+        await settle(app, pilot)
+
+        assert app._target == ISSUE
+
+
+def resolved(monkeypatch, repos, title="Open a session"):
+    monkeypatch.setattr(tui_module.checkouts, "repos_for", lambda reference, sessions, named: list(repos))
+    monkeypatch.setattr(tui_module.issues, "fetch_title", lambda query: title)
+
+
+ISSUE = Issue(tracker=Tracker.GITHUB, key="2", repo="widgets", owner="acme")
+
+
+async def test_tui_start_offers_the_command_for_the_reference_it_is_filtered_to(monkeypatch):
+    resolved(monkeypatch, [Path("/tmp/widgets")])
+    app = build_app(target=ISSUE)
+
+    async with app.run_test() as pilot:
+        await settle(app, pilot)
+        await pilot.press("n")
+        await settle(app, pilot)
+
+        assert isinstance(app.screen, tui_module.StartScreen)
+        shown = str(app.screen.query_one("#command", Static).content)
+        assert "--worktree issue-2-open-a-session" in shown
+        assert "--name issue-2-open-a-session" in shown
+        assert "https://github.com/acme/widgets/issues/2" in shown
+
+
+async def test_tui_start_leaves_the_board_with_the_command_to_run(monkeypatch):
+    resolved(monkeypatch, [Path("/tmp/widgets")])
+    app = build_app(target=ISSUE)
+
+    async with app.run_test() as pilot:
+        await settle(app, pilot)
+        await pilot.press("n")
+        await settle(app, pilot)
+        await pilot.press("enter")
+        await pilot.pause()
+
+    assert app.launch is not None
+    assert app.launch.directory == Path("/tmp/widgets")
+    assert app.launch.argv == (
+        "claude",
+        "--worktree",
+        "issue-2-open-a-session",
+        "--name",
+        "issue-2-open-a-session",
+        "https://github.com/acme/widgets/issues/2",
+    )
+
+
+async def test_tui_start_copies_the_command_rather_than_running_it(monkeypatch):
+    resolved(monkeypatch, [Path("/tmp/widgets")])
+    copied: list[str] = []
+    monkeypatch.setattr(tui_module, "copy_to_pasteboard", lambda text: bool(copied.append(text)))
+    app = build_app(target=ISSUE)
+
+    async with app.run_test() as pilot:
+        await settle(app, pilot)
+        await pilot.press("n")
+        await settle(app, pilot)
+        await pilot.press("y")
+        await settle(app, pilot)
+
+        assert app.launch is None
+        assert copied == [
+            "(cd /tmp/widgets && claude --worktree issue-2-open-a-session "
+            "--name issue-2-open-a-session https://github.com/acme/widgets/issues/2)"
+        ]
+
+
+async def test_tui_start_lets_you_pick_between_checkouts(monkeypatch):
+    resolved(monkeypatch, [Path("/tmp/widgets"), Path("/tmp/other")])
+    app = build_app(target=ISSUE)
+
+    async with app.run_test() as pilot:
+        await settle(app, pilot)
+        await pilot.press("n")
+        await settle(app, pilot)
+        await pilot.press("down")
+        await pilot.pause()
+        await pilot.press("enter")
+        await pilot.pause()
+
+    assert app.launch is not None
+    assert app.launch.directory == Path("/tmp/other")
+
+
+async def test_tui_start_can_be_abandoned_without_starting_anything(monkeypatch):
+    resolved(monkeypatch, [Path("/tmp/widgets")])
+    app = build_app(target=ISSUE)
+
+    async with app.run_test() as pilot:
+        await settle(app, pilot)
+        await pilot.press("n")
+        await settle(app, pilot)
+        await pilot.press("escape")
+        await settle(app, pilot)
+
+        assert not isinstance(app.screen, tui_module.StartScreen)
+        assert app.launch is None
+        assert app.is_running
+
+
+async def test_tui_start_names_the_worktree_for_the_issue_alone_when_gh_says_nothing(monkeypatch):
+    resolved(monkeypatch, [Path("/tmp/widgets")], title=None)
+    app = build_app(target=ISSUE)
+
+    async with app.run_test() as pilot:
+        await settle(app, pilot)
+        await pilot.press("n")
+        await settle(app, pilot)
+
+        assert "--worktree issue-2 " in str(app.screen.query_one("#command", Static).content)
+
+
+async def test_tui_start_says_so_when_the_fleet_names_no_repository(monkeypatch):
+    resolved(monkeypatch, [])
+    app = build_app(target=ISSUE)
+
+    async with app.run_test() as pilot:
+        await settle(app, pilot)
+        await pilot.press("n")
+        await settle(app, pilot)
+
+        assert not isinstance(app.screen, tui_module.StartScreen)
+        assert "no repository" in notified(app)
+
+
+async def test_tui_start_needs_a_reference_to_start_anything_for(monkeypatch):
+    monkeypatch.setattr(
+        tui_module.checkouts,
+        "repos_for",
+        lambda reference, sessions, named: pytest.fail("a repository was resolved without a reference"),
+    )
+    app = build_app()
+
+    async with app.run_test() as pilot:
+        await settle(app, pilot)
+        await pilot.press("n")
+        await settle(app, pilot)
+
+        assert not isinstance(app.screen, tui_module.StartScreen)
+        assert "paste a pull request or issue url" in notified(app)
+
+
 def headers_of(app: FleetApp) -> list[str]:
     return [str(column.label) for column in table_of(app).columns.values()]
 
@@ -523,7 +718,7 @@ async def test_tui_closes_the_conversation(monkeypatch, key):
         assert table_of(app).has_focus
 
 
-async def test_tui_enter_leaves_the_session_alone():
+async def test_tui_enter_signals_a_live_session_rather_than_reading_it():
     terminal = SilentTerminal()
     app = build_app(terminal=terminal, settings=Settings(paint_tabs=False))
 
@@ -531,8 +726,38 @@ async def test_tui_enter_leaves_the_session_alone():
         await settle(app, pilot)
         await pilot.press("enter")
 
-        assert terminal.written == []
+        assert "RequestAttention" in "".join(terminal.written)
+        assert app.launch is None
         assert not app.query_one("#history").display
+
+
+async def test_tui_enter_on_a_closed_session_leaves_the_board_to_resume_it():
+    ended = Session(session_id="87e26be1-0000", cwd=Path("/tmp/design-system"), status=Status.CLOSED)
+    app = build_app(sessions=[ended], settings=Settings(paint_tabs=False))
+
+    async with app.run_test() as pilot:
+        await settle(app, pilot)
+        await pilot.press("enter")
+        await pilot.pause()
+
+    assert app.launch is not None
+    assert app.launch.directory == Path("/tmp/design-system")
+    assert app.launch.argv == ("claude", "--resume", "87e26be1-0000")
+
+
+async def test_tui_clicking_a_row_reads_it_rather_than_going_to_it(monkeypatch):
+    monkeypatch.setattr(tui_module, "recent_messages", lambda session_id, limit: [])
+    terminal = SilentTerminal()
+    app = build_app(terminal=terminal, settings=Settings(paint_tabs=False))
+
+    async with app.run_test() as pilot:
+        await settle(app, pilot)
+        await pilot.click(table_of(app), offset=(4, 2))
+        await settle(app, pilot)
+
+        assert app.query_one("#history").display
+        assert app.launch is None
+        assert terminal.written == []
 
 
 async def test_tui_arrow_keys_leave_the_filter_alone():

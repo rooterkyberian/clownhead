@@ -7,14 +7,15 @@ import time
 from collections.abc import Iterable, Sequence
 from datetime import UTC, datetime, timedelta
 from pathlib import Path
-from typing import Annotated
+from typing import Annotated, Any
 
 import typer
 from rich.console import Console
 from rich.table import Table
 from rich.text import Text
+from typer.core import TyperGroup
 
-from clownhead import __version__, attention, discovery, search, tui, worktrees
+from clownhead import __version__, attention, checkouts, discovery, issues, search, tui, worktrees
 from clownhead import settings as settings_store
 from clownhead.models import Session
 from clownhead.render import (
@@ -26,10 +27,38 @@ from clownhead.render import (
     parse_columns,
     parse_duration,
 )
-from clownhead.search import PullRequest
+from clownhead.resume import Launch, start_plan
+from clownhead.search import PullRequest, Reference
 from clownhead.terminal import detect_terminal
 
+
+class ReferenceGroup(TyperGroup):
+    """The command group, with a bare reference routed to ``open``.
+
+    ``clownhead <url>`` is how you arrive at a ticket — you have the URL in the clipboard
+    already, and typing a subcommand in front of it is a step that exists only to satisfy
+    the parser. So the parser is given the step instead.
+
+    The redirect is gated on the argument actually parsing as a reference rather than on
+    it merely not being a known command, which is what keeps ``clownhead lss`` answering
+    "Did you mean 'ls'?" instead of being sent to ``open`` to fail there about a URL
+    nobody typed.
+    """
+
+    def parse_args(self, ctx: Any, args: list[str]) -> list[str]:
+        """Put ``open`` in front of a first argument that names a pull request or issue.
+
+        The context is passed straight through untouched, and is typed as it is because
+        the click it belongs to is the copy vendored inside typer, which has no public
+        name to import it by.
+        """
+        if args and args[0] not in self.commands and search.parse_reference(args[0]) is not None:
+            args = ["open", *args]
+        return super().parse_args(ctx, args)
+
+
 app = typer.Typer(
+    cls=ReferenceGroup,
     name="clownhead",
     help="Overseer for local Claude Code sessions.",
     add_completion=False,
@@ -48,6 +77,17 @@ PrOption = Annotated[
         metavar="URL",
         help="Only sessions whose transcript names this pull request, by URL or owner/repo#123.",
     ),
+]
+ReferenceArgument = Annotated[
+    str,
+    typer.Argument(
+        metavar="REF",
+        help="A GitHub pull request or issue URL, a Jira URL, or owner/repo#123.",
+    ),
+]
+PrintOption = Annotated[
+    bool,
+    typer.Option("--print", help="Write the sessions and the start command out, without the board."),
 ]
 ColumnsOption = Annotated[
     str | None,
@@ -101,6 +141,24 @@ def _load(cwd: Path | None, include_background: bool, include_closed: bool = Fal
     return discovery.list_sessions(cwd, interactive_only=not include_background, include_closed=include_closed)
 
 
+def _reference(text: str) -> Reference:
+    """Read what ``open`` was pointed at, refusing anything that names nothing.
+
+    Failing here rather than falling back to a plain text search is the same choice
+    :func:`_pull_request` makes, and matters more: this command is about to offer to start
+    a session, and a reference nobody could parse would seed it with a prompt that means
+    nothing to whoever picks the work up.
+    """
+    parsed = search.parse_reference(text)
+    if parsed is None:
+        error_console.print(
+            f"[bold red]{text} does not name a pull request or an issue[/] — pass a GitHub "
+            "pull request or issue URL, a Jira URL, or owner/repo#123."
+        )
+        raise typer.Exit(code=2)
+    return parsed
+
+
 def _pull_request(reference: str | None) -> PullRequest | None:
     """Read the ``--pr`` reference, refusing anything that does not name a pull request.
 
@@ -119,7 +177,7 @@ def _pull_request(reference: str | None) -> PullRequest | None:
     return parsed
 
 
-def _search_note(reference: PullRequest, matched: int, searched: int, include_closed: bool) -> str:
+def _search_note(reference: Reference, matched: int, searched: int, include_closed: bool) -> str:
     """What a transcript search covered and found, and where else it could have looked.
 
     A search that comes back empty is ambiguous — nothing worked on this pull request, or
@@ -190,12 +248,14 @@ def launch_tui(
 ) -> None:
     """Browse the fleet interactively — what bare `clownhead` runs."""
     _require_discovery()
-    tui.run(
-        loader=lambda closed: discovery.list_sessions(
-            cwd, interactive_only=not include_background, include_closed=closed
-        ),
-        interval=interval,
-        include_closed=include_closed or None,
+    _run_launch(
+        tui.run(
+            loader=lambda closed: discovery.list_sessions(
+                cwd, interactive_only=not include_background, include_closed=closed
+            ),
+            interval=interval,
+            include_closed=include_closed or None,
+        )
     )
 
 
@@ -229,6 +289,85 @@ def list_sessions(
         console.print("[dim]no live sessions[/]")
     if sessions:
         console.print(_fleet_table(sessions, chosen))
+
+
+@app.command("open")
+def open_reference(
+    reference: ReferenceArgument,
+    cwd: CwdOption = None,
+    include_background: AllOption = False,
+    show: PrintOption = False,
+) -> None:
+    """Find the sessions for a pull request or issue, or start one for it.
+
+    What bare `clownhead <url>` runs. The board opens filtered to the reference, with the
+    sessions that have ended already folded in — work on a ticket has usually finished, and
+    a board that made you press `c` to see the session you came looking for would be asking
+    you to guess that it was there.
+
+    `enter` gets you into whichever session you pick: the terminal of a live one, or an
+    ended one resumed in this very terminal. `n` starts a new one instead, in a worktree
+    named after the reference and with its URL as the first thing the session reads.
+
+    `--print` writes the same answer out and stops, for a shell that wanted the list rather
+    than the board.
+    """
+    target = _reference(reference)
+    if show:
+        _print_reference(target, _load(cwd, include_background, include_closed=True))
+        return
+    _require_discovery()
+    _run_launch(
+        tui.run(
+            loader=lambda closed: discovery.list_sessions(
+                cwd, interactive_only=not include_background, include_closed=closed
+            ),
+            include_closed=True,
+            target=target,
+        )
+    )
+
+
+def _print_reference(target: Reference, sessions: list[Session]) -> None:
+    """The sessions naming a reference and the command that would start another, as text."""
+    matched = search.sessions_mentioning(target, sessions)
+    named = [session for session in sessions if session.session_id in matched]
+    console.print(f"[dim]{_search_note(target, len(named), len(sessions), include_closed=True)}[/]")
+    if named:
+        console.print(_fleet_table(named, _columns(None)))
+    repos = checkouts.repos_for(target, sessions, matched)
+    if not repos:
+        console.print("[dim]no repository to start one in — the fleet names none[/]")
+        return
+    name = issues.slug(target.base_slug, issues.fetch_title(target.title_query))
+    _print_command(start_plan(repos[0], name=name, prompt=target.prompt).shell_command)
+
+
+def _print_command(command: str) -> None:
+    """Write a command out whole, for a terminal to wrap rather than the renderer.
+
+    A start command is longer than most terminals are wide and exists to be copied, so a
+    newline folded into the middle of it by Rich would be carried along with it — pasting
+    a command that a renderer has already broken in half is how you run the first half.
+    Markup and highlighting are off for the same reason: it is a command, not prose, and
+    the brackets in one are its own.
+    """
+    console.print(command, soft_wrap=True, markup=False, highlight=False)
+
+
+def _run_launch(launch: Launch | None) -> None:
+    """Become the session the board was left for, in the terminal the board was using.
+
+    ``execvp`` rather than a subprocess: clownhead has nothing left to do, and a session
+    running as a child of a status board is one that dies when the board is closed and
+    holds a process nobody can see the point of in the meantime. It replaces this process
+    only once the app has given the terminal back, which is why the board hands the command
+    out rather than running it.
+    """
+    if launch is None:
+        return
+    os.chdir(launch.directory)
+    os.execvp(discovery.claude_binary(), [*launch.argv])  # noqa: S606
 
 
 @app.command("worktrees-cleanup")

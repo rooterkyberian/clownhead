@@ -34,10 +34,14 @@ and the pane below the table carries the id, path, process and terminal the colu
   usually the fastest way to tell what it is actually doing.
   `↑` and `↓` scroll it,
   `←` closes it.
+- `enter` gets you into that session:
+  a live one has its terminal focused,
+  and one that has ended is resumed here, which ends the board.
 - `f` focuses its terminal:
   attention, then the window brought to the front.
 - `/` filters by name, status, path, or session id —
-  or by pull request, below.
+  or by pull request or issue, below.
+- `n` starts a new session for the pull request or issue being filtered on.
 - `c` folds in the sessions that have already ended.
   The count in the top bar is that same switch,
   and clicking it works too.
@@ -55,11 +59,11 @@ Every reload tints each session's tab to match its state,
 so the herd is readable from the tab bar of a terminal the board is nowhere near.
 Turn it off in the settings and the tabs it tinted are cleared on the way out.
 
-## Pull requests
+## Pull requests and issues
 
-Nothing on a session records which pull request it belongs to,
+Nothing on a session records which pull request or ticket it belongs to,
 so no column can show one.
-Paste a pull request URL into `/` and clownhead reads the transcripts of whatever the board is showing.
+Paste a pull request or issue URL into `/` and clownhead reads the transcripts of whatever the board is showing.
 Finished work is usually in a session that has ended,
 so `c` first, then the URL:
 
@@ -78,6 +82,47 @@ instead of folding the closed ones in uninvited.
 A bare `#309` does not:
 it means a different pull request in every checkout on the machine,
 so it stays an ordinary filter needle.
+A bare `PLAT-4471` is refused too:
+the pattern that matches it also matches `UTF-8` and `SHA-256`,
+so Jira is named by its URL.
+
+## Starting one
+
+Every ticket starts with the same three steps:
+find the checkout, make a worktree, tell a fresh session what to work on.
+`clownhead <url>` does all three.
+
+```bash
+$ clownhead https://github.com/acme/data-platform/issues/2
+```
+
+The board opens filtered to that issue with the ended sessions already folded in,
+which is where the session that worked on it last usually is.
+`enter` gets you back into whichever one you pick.
+`n` starts a new one instead:
+
+```
+┌────────────────────────────────────────────────────────────┐
+│ Start a session for acme/data-platform#2                   │
+│ in ~/dev/acme/data-platform                                │
+│ (cd ~/dev/acme/data-platform && claude                     │
+│  --worktree issue-2-rate-limit-the-scan-queue              │
+│  --name issue-2-rate-limit-the-scan-queue <url>)           │
+│ enter to start · y to copy · esc to cancel                 │
+└────────────────────────────────────────────────────────────┘
+```
+
+The worktree is named for the issue and its title, which `gh` is asked for
+and which is simply left off when it cannot answer.
+The checkout is whichever one `origin` says is the right repository;
+a Jira URL names no repository at all,
+so those fall back to the ones the herd is already checked out in, best guess first,
+and the list is there to be argued with either way.
+The new session's first prompt is the URL you passed.
+
+`enter` and `n` both end the board and hand this terminal to `claude`,
+since becoming the session is the point.
+`y` copies the command instead, for a session that belongs in another window.
 
 ## Commands
 
@@ -87,6 +132,7 @@ so the same data pipes into a script.
 | Command | What it does |
 |---|---|
 | `clownhead` | The interactive overseer. Same as `clownhead tui`. |
+| `clownhead open <ref>` | The board filtered to a pull request or issue, ended sessions included, ready to start one for it. What a bare `clownhead <url>` runs. Takes a GitHub pull request or issue URL, a Jira URL, or `owner/repo#123`. `--print` writes the sessions and the start command out instead of opening the board. |
 | `clownhead ls` | Status board, attention-first. `--cwd` scopes to one tree, `--all` adds background agents, `--closed` adds sessions that have ended, `--pr` keeps only the ones whose transcript names a pull request, `--columns` picks the columns and their order. |
 | `clownhead worktrees-cleanup` | Retire the worktrees Claude Code left behind. `--older-than` sets how long untouched is long enough (default `7d`), `--merged` keeps to the ones already in the default branch, `--branches` deletes those branches too, `--dry-run` shows what would go, `--yes` skips the question. |
 | `clownhead paint` | Colour each session's tab to match its state, for a board you would rather not keep open. `--follow` keeps them in sync, `--reset` clears them. |

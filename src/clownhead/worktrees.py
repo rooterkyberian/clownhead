@@ -52,6 +52,16 @@ read once for its patch and never reaches a branch, a remote or anyone's history
 carries a name of its own rather than borrowing whoever happens to be logged in.
 """
 
+REMOTE_URL = re.compile(r"(?P<owner>[\w.-]+)/(?P<repo>[\w.-]+?)(?:\.git)?/?$")
+"""The owner and repository at the end of a remote URL, however the remote spells it.
+
+``git@github.com:acme/widgets.git``, ``https://github.com/acme/widgets``,
+``ssh://git@github.com:22/acme/widgets`` and a path to a local mirror all name the same
+thing, and differ only in the part before the tail. So the tail is all that is read: the
+last two segments, with any ``.git`` and trailing slash taken off. Anything else is a
+scheme, a host, a port or a user, and none of those say which repository this is.
+"""
+
 DEFAULT_BRANCHES = ("origin/HEAD", "origin/main", "origin/master", "main", "master")
 """Where finished work would have landed, best answer first.
 
@@ -198,6 +208,28 @@ def repos_of(sessions: Iterable[Session]) -> set[Path]:
     and those are what lead back to the abandoned ones.
     """
     return {split_worktree(session.cwd)[0] for session in sessions}
+
+
+def remote_of(repo: Path) -> tuple[str, str] | None:
+    """The owner and repository name ``origin`` points at, or ``None`` if git will not say.
+
+    Asked of ``origin`` alone. A checkout with several remotes is one where the question
+    "which repository is this?" has more than one true answer, and ``origin`` is the one
+    the clone was made from.
+    """
+    try:
+        url = _git(repo, "remote", "get-url", "origin").strip()
+    except LookupError:
+        return None
+    return parse_remote(url)
+
+
+def parse_remote(url: str) -> tuple[str, str] | None:
+    """Read the owner and repository out of a remote URL, in any spelling git accepts."""
+    found = REMOTE_URL.search(url.strip())
+    if found is None:
+        return None
+    return found["owner"], found["repo"]
 
 
 def worktrees_of(repo: Path) -> list[Worktree]:

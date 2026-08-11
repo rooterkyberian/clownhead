@@ -1,7 +1,7 @@
 from pathlib import Path
 
 from clownhead.models import Session
-from clownhead.resume import resume_argv, resume_plan, resume_shell_command
+from clownhead.resume import Launch, resume_argv, resume_plan, resume_shell_command, start_plan
 
 
 def session(cwd: Path, session_id: str = "a-b") -> Session:
@@ -34,10 +34,10 @@ def test_resume_re_enters_a_live_worktree_from_its_repository(tmp_path):
 def test_resume_rebuilds_a_worktree_that_has_been_pruned(tmp_path):
     cwd = worktree(tmp_path, exists=False)
 
-    directory, argv = resume_plan(session(cwd))
+    plan = resume_plan(session(cwd))
 
-    assert directory == tmp_path
-    assert argv == ["claude", "--resume", "a-b", "--worktree", "dbx-spot"]
+    assert plan.directory == tmp_path
+    assert plan.argv == ("claude", "--resume", "a-b", "--worktree", "dbx-spot")
 
 
 def test_resume_rebuilds_a_worktree_only_while_its_repository_stands(tmp_path):
@@ -50,3 +50,31 @@ def test_resume_keeps_a_cd_that_will_fail_rather_than_land_in_the_wrong_project(
     gone = tmp_path / "long-gone"
 
     assert resume_shell_command(session(gone)) == f"(cd {gone} && claude --resume a-b)"
+
+
+def test_start_plan_makes_the_worktree_and_names_the_session_after_it(tmp_path):
+    plan = start_plan(tmp_path, name="issue-2-open-a-session", prompt="https://github.com/acme/widgets/issues/2")
+
+    assert plan.directory == tmp_path
+    assert plan.argv == (
+        "claude",
+        "--worktree",
+        "issue-2-open-a-session",
+        "--name",
+        "issue-2-open-a-session",
+        "https://github.com/acme/widgets/issues/2",
+    )
+
+
+def test_start_shell_command_runs_from_the_repository(tmp_path):
+    plan = start_plan(tmp_path, name="plat-4471", prompt="https://craft.atlassian.net/browse/PLAT-4471")
+
+    assert plan.shell_command == (
+        f"(cd {tmp_path} && claude --worktree plat-4471 --name plat-4471 https://craft.atlassian.net/browse/PLAT-4471)"
+    )
+
+
+def test_a_launch_quotes_what_a_shell_would_otherwise_read_as_its_own(tmp_path):
+    plan = Launch(tmp_path, ("claude", "--name", "issue 2", "widgets#2 & more"))
+
+    assert plan.shell_command == f"(cd {tmp_path} && claude --name 'issue 2' 'widgets#2 & more')"

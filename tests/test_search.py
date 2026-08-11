@@ -4,8 +4,9 @@ from pathlib import Path
 import pytest
 
 from clownhead import search
+from clownhead.issues import Issue, Tracker
 from clownhead.models import Session
-from clownhead.search import PullRequest, mention_pattern, mentions, parse_pull_request, sessions_mentioning
+from clownhead.search import PullRequest, mentions, parse_pull_request, parse_reference, sessions_mentioning
 
 
 @pytest.mark.parametrize(
@@ -50,9 +51,32 @@ def test_parse_pull_request_refuses_what_does_not_name_one(reference):
     ],
 )
 def test_mention_pattern_needs_the_repository_and_the_whole_number(text, expected):
-    pattern = mention_pattern(PullRequest("data-platform", 309))
+    pattern = PullRequest("data-platform", 309).mention_pattern()
 
     assert bool(pattern.search(text.encode())) is expected
+
+
+@pytest.mark.parametrize(
+    ("reference", "expected"),
+    [
+        ("https://github.com/acme/widgets/pull/7", PullRequest("widgets", 7, "acme")),
+        ("acme/widgets#7", PullRequest("widgets", 7, "acme")),
+        ("widgets#7", PullRequest("widgets", 7, None)),
+        (
+            "https://github.com/acme/widgets/issues/7",
+            Issue(tracker=Tracker.GITHUB, key="7", repo="widgets", owner="acme"),
+        ),
+        (
+            "https://craft.atlassian.net/browse/PLAT-4471",
+            Issue(tracker=Tracker.JIRA, key="PLAT-4471", host="craft.atlassian.net"),
+        ),
+        ("payments", None),
+        ("#309", None),
+        ("PLAT-4471", None),
+    ],
+)
+def test_parse_reference_reads_either_kind_and_leaves_the_shorthand_to_pull_requests(reference, expected):
+    assert parse_reference(reference) == expected
 
 
 def test_mentions_finds_a_reference_split_across_a_chunk_boundary(monkeypatch, tmp_path):
@@ -60,11 +84,11 @@ def test_mentions_finds_a_reference_split_across_a_chunk_boundary(monkeypatch, t
     path = tmp_path / "transcript.jsonl"
     path.write_text(" " * 10 + "widgets#42" + " " * 10)
 
-    assert mentions(path, mention_pattern(PullRequest("widgets", 42))) is True
+    assert mentions(path, PullRequest("widgets", 42).mention_pattern()) is True
 
 
 def test_mentions_reports_no_match_for_an_unreadable_file(tmp_path):
-    assert mentions(tmp_path / "gone.jsonl", mention_pattern(PullRequest("widgets", 42))) is False
+    assert mentions(tmp_path / "gone.jsonl", PullRequest("widgets", 42).mention_pattern()) is False
 
 
 def transcript(root: Path, session_id: str, said: str, cwd: str = "/tmp/one") -> Path:
@@ -112,6 +136,34 @@ def test_sessions_mentioning_tolerates_a_session_without_a_transcript(tmp_path):
     assert sessions_mentioning(PullRequest("widgets", 42), [session("a-b")], tmp_path) == set()
 
 
+def test_sessions_mentioning_searches_for_an_issue_the_same_way(tmp_path):
+    transcript(tmp_path, "a-b", "picking up https://craft.atlassian.net/browse/PLAT-4471")
+    transcript(tmp_path, "c-d", "nothing to do with it", cwd="/tmp/two")
+    issue = Issue(tracker=Tracker.JIRA, key="PLAT-4471", host="craft.atlassian.net")
+
+    found = sessions_mentioning(issue, [session("a-b"), session("c-d", "/tmp/two")], tmp_path)
+
+    assert found == {"a-b"}
+
+
 def test_pull_request_renders_back_the_reference_it_was_given():
     assert str(PullRequest("data-platform", 309, "acme")) == "acme/data-platform#309"
     assert str(PullRequest("data-platform", 309)) == "data-platform#309"
+
+
+@pytest.mark.parametrize(
+    ("reference", "prompt", "base", "query"),
+    [
+        (
+            PullRequest("widgets", 7, "acme"),
+            "https://github.com/acme/widgets/pull/7",
+            "pr-7",
+            ["pr", "view", "7", "--repo", "acme/widgets"],
+        ),
+        (PullRequest("widgets", 7), "widgets#7", "pr-7", None),
+    ],
+)
+def test_pull_request_names_itself_for_a_session_started_from_it(reference, prompt, base, query):
+    assert reference.prompt == prompt
+    assert reference.base_slug == base
+    assert reference.title_query == query

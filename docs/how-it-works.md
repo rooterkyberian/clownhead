@@ -36,6 +36,46 @@ matching the `repo/pull/309` of a URL and the `repo#309` of a mention,
 subagents included.
 What it finds is remembered until `^r` reads them again.
 
+## Issues
+
+The same search, over the `repo/issues/2` of a URL and the Jira key of a browse URL.
+Both are read out of URLs alone.
+A bare `#309` means a different pull request in every checkout on the machine,
+and the pattern that would match a bare `PLAT-4471` also matches `UTF-8`, `SHA-256` and `ISO-8601`.
+Either would turn a filter into a search of every transcript on the machine
+that came back empty,
+which reads as nothing having worked on the ticket.
+
+GitHub numbers issues and pull requests together and writes both as `repo#2`.
+That spelling stays a pull request,
+and a search for either finds mentions of the other;
+nothing in the text can separate them.
+
+## Starting a session
+
+A session for a reference is `claude --worktree <name> --name <name> <url>` run in the repository.
+That is the same `--worktree` that rebuilds a pruned worktree on resume,
+so Claude Code makes the checkout and clownhead asks git for nothing.
+
+The name is the reference plus as much of its title as fits,
+cut on a word boundary and reduced to what a directory and a branch will both take,
+since it becomes each of those.
+The title is `gh`'s answer.
+Every way of failing to get one (no `gh`, no auth, no network, a Jira key) leaves the name as `issue-2`,
+which is worth having on its own.
+
+Which checkout is ranked and offered.
+A repository whose `origin` is the reference's own leads,
+then the ones holding a session that named it,
+then every repository the herd is checked out in.
+A Jira URL only ever has the second of those,
+and a repository mirrored twice satisfies the first,
+so the choice stays with whoever is reading the list.
+
+`enter` and `n` both end the board and hand the terminal to `claude`.
+The board puts the command down and whoever launched it runs it,
+since a process replaced while a screen is still up would leave the shell wearing a terminal in raw mode.
+
 ## Attention
 
 Signals are OSC escape sequences written to a session's TTY,
@@ -134,6 +174,8 @@ A session is a transcript on disk,
 so killing the terminal loses nothing and `claude --resume <id>` in the original directory brings the conversation back.
 `y` in the overseer puts that command for the selected session on the clipboard,
 `cd` included.
+`enter` runs it here,
+which ends the board you were reading in order to decide.
 
 Worktree sessions resume from the owning repository with `--worktree <name>`,
 which attaches to the worktree that still stands and rebuilds the one that has been pruned.

@@ -9,8 +9,10 @@ without a live fleet.
 from __future__ import annotations
 
 from collections.abc import Callable, Iterable, Mapping, Sequence
+from dataclasses import dataclass
 from datetime import UTC, datetime, timedelta
 from functools import partial
+from pathlib import Path
 from typing import Any, Protocol
 
 from pydantic import ValidationError
@@ -23,16 +25,16 @@ from textual.containers import Horizontal, Vertical, VerticalScroll
 from textual.message import Message as TextualMessage
 from textual.notifications import SeverityLevel
 from textual.screen import ModalScreen, Screen
-from textual.widgets import DataTable, Footer, Input, Label, Static, Switch
+from textual.widgets import DataTable, Footer, Input, Label, OptionList, Static, Switch
 
-from clownhead import attention
+from clownhead import attention, checkouts, issues
 from clownhead import settings as settings_store
 from clownhead.control import close_tab, rename, shell_of, terminate, wait_for_exit
 from clownhead.discovery import Message, Process, process_table, recent_messages, relocated_config_dir
 from clownhead.models import Session, Status, split_worktree
 from clownhead.render import build_rows, conversation, describe, format_duration, shorten_path, truncate
-from clownhead.resume import resume_shell_command
-from clownhead.search import PullRequest, parse_pull_request, sessions_mentioning
+from clownhead.resume import Launch, resume_plan, resume_shell_command, start_plan
+from clownhead.search import Reference, parse_reference, sessions_mentioning
 from clownhead.settings import Settings
 from clownhead.terminal import Terminal, copy_to_pasteboard
 from clownhead.worktrees import Candidate, survey
@@ -81,6 +83,17 @@ def config_dir_notice() -> str:
     """
     directory = relocated_config_dir()
     return "" if directory is None else truncate(shorten_path(directory), CONFIG_DIR_CAP)
+
+
+def seeded_needle(target: Reference | None) -> str:
+    """What the filter box shows on a board opened already pointed at a reference.
+
+    Spelled as the URL rather than as the short ``repo#2``. The box is live, so whatever is
+    put in it is read straight back out by the parser — and GitHub writes an issue and a
+    pull request the same short way, so seeding an issue with its shorthand would hand back
+    the pull request of the same number and search for that instead.
+    """
+    return target.prompt if target is not None else ""
 
 
 def matches(session: Session, needle: str) -> bool:
@@ -330,6 +343,125 @@ class PromptScreen(ModalScreen[str | None]):
         self.dismiss(None)
 
 
+@dataclass(frozen=True)
+class StartChoice:
+    """Where a new session was chosen to be started, and whether to run it or copy it."""
+
+    repo: Path
+    copy: bool = False
+
+
+class StartScreen(ModalScreen[StartChoice | None]):
+    """Where to start a session for a reference, and the command that would do it.
+
+    The name is generated rather than asked for, so the command is shown in full: a
+    worktree is about to be made and a branch named after it, and the one thing worse than
+    being asked to name it is finding out afterwards what it was called.
+
+    Which repository is a real question and only sometimes an open one. A pull request
+    names its own, and matching that against what ``origin`` says is about as sure as this
+    gets — so the list starts on the best answer, and a fleet spread across one repository
+    has nothing to choose between. A Jira key names nothing at all, which is exactly when
+    the list earns its place.
+
+    ``y`` copies the command instead of running it, which is the way out for a session
+    that belongs in another window, or on another machine entirely.
+    """
+
+    CSS = """
+    StartScreen {
+        align: center middle;
+    }
+    #sheet {
+        width: 78;
+        max-height: 80%;
+        height: auto;
+        padding: 1 2;
+        border: round $panel;
+        background: $surface;
+    }
+    #repos {
+        height: auto;
+        max-height: 10;
+        margin: 1 0;
+    }
+    #command {
+        margin: 1 0;
+    }
+    """
+
+    BINDINGS = [
+        Binding("enter", "start", "start"),
+        Binding("y", "copy", "copy"),
+        Binding("escape", "cancel", "cancel"),
+    ]
+
+    def __init__(self, reference: Reference, name: str, repos: Sequence[Path]) -> None:
+        super().__init__()
+        self._reference = reference
+        self._start_name = name
+        self._repos = list(repos)
+        self._index = 0
+
+    def compose(self) -> ComposeResult:
+        """Show what is about to be run, and where the choice of repository is one."""
+        with Vertical(id="sheet"):
+            yield Static(f"[bold]Start a session for {escape(str(self._reference))}[/]")
+            if len(self._repos) > 1:
+                yield OptionList(*(escape(shorten_path(repo)) for repo in self._repos), id="repos")
+            else:
+                yield Static(f"[dim]in[/] {escape(shorten_path(self._repos[0]))}", id="repos")
+            yield Static(self._command_line(), id="command")
+            yield Static("[dim]enter to start · y to copy · esc to cancel[/]")
+
+    def on_mount(self) -> None:
+        """Put the cursor on the best guess, which is the first one."""
+        if len(self._repos) > 1:
+            self.query_one("#repos", OptionList).focus()
+
+    def on_option_list_option_highlighted(self, event: OptionList.OptionHighlighted) -> None:
+        """Re-render the command for whichever repository is now under the cursor.
+
+        The list highlights its first entry as it mounts, which is before the line showing
+        the command exists — so the line is updated where there is one and the index kept
+        either way, rather than the sheet failing to open over the order things arrive in.
+        """
+        event.stop()
+        self._index = event.option_index
+        for command in self.query("#command").results(Static):
+            command.update(self._command_line())
+
+    def on_option_list_option_selected(self, event: OptionList.OptionSelected) -> None:
+        """Answer the sheet with the repository chosen from the list.
+
+        ``OptionList`` binds enter to its own selection and consumes it before the screen's
+        binding is reached, so the one key that starts a session has to be answered here as
+        well as there — otherwise it works with one repository and does nothing with two.
+        """
+        event.stop()
+        self._index = event.option_index
+        self.action_start()
+
+    def action_start(self) -> None:
+        """Hand back the chosen repository, to be started in."""
+        self.dismiss(StartChoice(self._chosen()))
+
+    def action_copy(self) -> None:
+        """Hand back the chosen repository, to be copied rather than run."""
+        self.dismiss(StartChoice(self._chosen(), copy=True))
+
+    def action_cancel(self) -> None:
+        """Leave without starting anything."""
+        self.dismiss(None)
+
+    def _chosen(self) -> Path:
+        return self._repos[self._index]
+
+    def _command_line(self) -> str:
+        plan = start_plan(self._chosen(), name=self._start_name, prompt=self._reference.prompt)
+        return f"[dim]{escape(plan.shell_command)}[/]"
+
+
 class SettingsScreen(ModalScreen[Settings | None]):
     """The settings sheet, dismissed with whatever it was left showing.
 
@@ -473,8 +605,10 @@ class FleetApp(App[None]):
     """
 
     BINDINGS = [
+        Binding("enter", "go", "go"),
         Binding("f", "focus_session", "focus"),
         Binding("slash", "filter", "filter"),
+        Binding("n", "start", "new session"),
         Binding("c", "toggle_closed", "closed", show=False),
         Binding("y", "copy_resume", "copy resume"),
         Binding("r", "rename", "rename"),
@@ -496,6 +630,11 @@ class FleetApp(App[None]):
     says it better — the count of closed sessions is the switch, and a switch that shows
     the number it would fold in needs no key advertised beside it.
 
+    `enter` leads because it is the one key that means the same thing on every row — get me
+    into this session — and the board answers it by whichever route that row needs, rather
+    than by asking which of `f` and `y` the row happens to want. It is the only key that
+    ends the board, which is what running something in its terminal has to cost.
+
     Retiring a worktree has no key at all, and is in the palette instead — see
     :meth:`FleetApp.get_system_commands`, which carries everything here by name as well. A
     key is for what you do to a session while reading the board, and worktrees are not
@@ -511,6 +650,7 @@ class FleetApp(App[None]):
         include_closed: bool | None = None,
         settings: Settings | None = None,
         reader: Reader | None = None,
+        target: Reference | None = None,
     ) -> None:
         super().__init__()
         self._loader = loader
@@ -523,14 +663,16 @@ class FleetApp(App[None]):
         self._visible: list[Session] = []
         self._previews: dict[str, list[Message]] = {}
         self._preview_asked: set[str] = set()
-        self._needle = ""
-        self._pull_request: PullRequest | None = None
-        self._read: dict[PullRequest, set[str]] = {}
-        self._named: dict[PullRequest, set[str]] = {}
-        self._searching: PullRequest | None = None
+        self._needle = seeded_needle(target)
+        self._target: Reference | None = target
+        self._read: dict[Reference, set[str]] = {}
+        self._named: dict[Reference, set[str]] = {}
+        self._searching: Reference | None = None
         self._failure: str | None = None
         self._loading = False
         self._own_tab_tinted = False
+        self._launch: Launch | None = None
+        self._starting = False
 
     def compose(self) -> ComposeResult:
         """Lay out the summary bar, the fleet table, the detail pane, the filter and hints."""
@@ -543,7 +685,11 @@ class FleetApp(App[None]):
             with HistoryPanel(id="history"):
                 yield Static(id="history-body")
         yield Static(id="details")
-        yield Input(placeholder="filter sessions, or paste a pull request url", id="filter")
+        yield Input(
+            value=self._needle,
+            placeholder="filter sessions, or paste a pull request or issue url",
+            id="filter",
+        )
         yield Footer()
 
     def on_mount(self) -> None:
@@ -590,6 +736,16 @@ class FleetApp(App[None]):
             self.action_toggle_closed,
         )
         yield SystemCommand(
+            "Go to this session",
+            "Focus the terminal of a live one, or resume an ended one right here",
+            self.action_go,
+        )
+        yield SystemCommand(
+            "Start a new session for this reference",
+            "Make a worktree named after the pull request or issue being filtered on",
+            self.action_start,
+        )
+        yield SystemCommand(
             "Focus this session's terminal",
             "Signal it, and bring the window it is running in to the front",
             self.action_focus_session,
@@ -631,6 +787,11 @@ class FleetApp(App[None]):
         return (*BASE_COLUMNS, *optional, "WHERE")
 
     @property
+    def launch(self) -> Launch | None:
+        """The command the board was left in order to run, if it was left for one."""
+        return self._launch
+
+    @property
     def selected_session(self) -> Session | None:
         """The session under the table cursor, if the fleet is not empty."""
         table = self.query_one("#fleet", DataTable)
@@ -648,16 +809,39 @@ class FleetApp(App[None]):
     def action_refresh(self) -> None:
         """Reload the fleet now, and read the transcripts again if one is being searched.
 
-        What a pull request search found is otherwise remembered for as long as the board
-        is open, because re-reading the fleet's transcripts on every interval would be an
+        What a transcript search found is otherwise remembered for as long as the board is
+        open, because re-reading the fleet's transcripts on every interval would be an
         expensive way to learn nothing. Asking for a reload by hand is the moment to look
-        again — a session that has since started talking about the pull request is exactly
+        again — a session that has since started talking about the reference is exactly
         what someone pressing this is hoping to catch.
         """
         self._read.clear()
         self._named.clear()
         self._searching = None
         self.start_reload()
+
+    def action_go(self) -> None:
+        """Get into the selected session, by whichever route it still has.
+
+        A session with a process is somewhere on this machine already, so going to it means
+        its terminal: the same signal `f` sends. One that has ended is a transcript and
+        nothing else, and the only way back into it is to run it — so the board stands down
+        and hands the terminal over, which is why this is the one key that quits.
+
+        Textual has to have finished with the terminal before anything else is given it, so
+        the command is put down here and run by whoever called :func:`run`, after the app
+        has returned. Doing it from inside would exec out of a screen still in raw mode and
+        leave the shell wearing it.
+        """
+        session = self.selected_session
+        if session is None:
+            self.notify("nothing selected", severity="warning")
+            return
+        if not session.is_finished:
+            self.action_focus_session()
+            return
+        self._launch = resume_plan(session)
+        self.exit()
 
     def action_focus_session(self) -> None:
         """Demand attention from the selected session's terminal and raise its window.
@@ -672,6 +856,58 @@ class FleetApp(App[None]):
         result = attention.focus(session, self._terminal)
         severity: SeverityLevel = "information" if result.delivered else "warning"
         self.notify(f"{result.label}: {result.detail}", severity=severity)
+
+    def action_start(self) -> None:
+        """Start a new session for whatever the board is filtered to.
+
+        Only ever for a reference, because the reference is the whole of what the new
+        session would be told. A board showing everything has nothing to seed one with, and
+        a session started with no prompt is one you would have got faster by typing
+        ``claude``.
+
+        Resolving where to start it asks git for a remote per repository and GitHub for a
+        title, so the work happens on a thread and the sheet opens when it answers.
+        """
+        if self._target is None:
+            self.notify("paste a pull request or issue url first", severity="warning")
+            return
+        if self._starting:
+            return
+        self._starting = True
+        self.notify(f"finding a repository for {self._target}…")
+        self._resolve_start(self._target, list(self._sessions), self._named.get(self._target, set()))
+
+    @work(thread=True, group="start")
+    def _resolve_start(self, reference: Reference, sessions: list[Session], named: set[str]) -> None:
+        """Ask git where this could be started and GitHub what to call it, off the event loop."""
+        repos = checkouts.repos_for(reference, sessions, named)
+        name = issues.slug(reference.base_slug, issues.fetch_title(reference.title_query))
+        self._hand_back(self._ask_start, (reference, name, repos))
+
+    def _ask_start(self, resolved: tuple[Reference, str, list[Path]]) -> None:
+        reference, name, repos = resolved
+        self._starting = False
+        if not repos:
+            self.notify(
+                "no repository to start one in — the fleet names none",
+                title=str(reference),
+                severity="warning",
+            )
+            return
+        self.push_screen(StartScreen(reference, name, repos), partial(self._start_chosen, reference, name))
+
+    def _start_chosen(self, reference: Reference, name: str, choice: StartChoice | None) -> None:
+        """Run the start command in this terminal, or put it on the clipboard instead."""
+        if choice is None:
+            return
+        plan = start_plan(choice.repo, name=name, prompt=reference.prompt)
+        if choice.copy:
+            self.copy_to_clipboard(plan.shell_command)
+            copy_to_pasteboard(plan.shell_command)
+            self.notify(plan.shell_command, title=f"start {name}")
+            return
+        self._launch = plan
+        self.exit()
 
     def action_history(self) -> None:
         """Open the conversation of the selected session beside the fleet, and read it."""
@@ -908,6 +1144,15 @@ class FleetApp(App[None]):
         """Treat clicking a row as asking to read it, like `→`."""
         self.action_history()
 
+    def on_data_table_row_selected(self, event: DataTable.RowSelected) -> None:
+        """Treat choosing a row with the keyboard as asking to go to it.
+
+        ``FleetTable`` keeps clicks out of this message on purpose, so it means Enter and
+        nothing else — a click is for reading a session, not for being handed the terminal.
+        """
+        event.stop()
+        self.action_go()
+
     def on_input_changed(self, event: Input.Changed) -> None:
         """Re-filter the table as the needle is typed.
 
@@ -917,7 +1162,7 @@ class FleetApp(App[None]):
         if event.input.id != "filter":
             return
         self._needle = event.value
-        self._retarget(parse_pull_request(event.value))
+        self._retarget(parse_reference(event.value))
         self._draw()
 
     def on_input_submitted(self, event: Input.Submitted) -> None:
@@ -961,51 +1206,51 @@ class FleetApp(App[None]):
         self._draw()
         self.notify(detail, title="discovery failed", severity="error")
 
-    def _retarget(self, pull_request: PullRequest | None) -> None:
-        """Point the filter at a pull request, or back at the metadata it usually reads.
+    def _retarget(self, reference: Reference | None) -> None:
+        """Point the filter at a pull request or an issue, or back at the metadata it reads.
 
-        Which pull request a session was for is only ever in what it said, so answering
-        that means reading transcripts — of whichever sessions the board is showing, and
-        no others. Finished work is usually in a session that has ended, but whether those
-        are on the board is what `c` is for, and a filter is not the place to overrule it.
+        Which of either a session was for is only ever in what it said, so answering that
+        means reading transcripts — of whichever sessions the board is showing, and no
+        others. Finished work is usually in a session that has ended, but whether those are
+        on the board is what `c` is for, and a filter is not the place to overrule it.
         """
-        if pull_request == self._pull_request:
+        if reference == self._target:
             return
-        self._pull_request = pull_request
+        self._target = reference
         self._ensure_search()
 
     def _ensure_search(self) -> None:
-        """Read whatever the pull request being filtered on has not been looked for in yet.
+        """Read whatever the reference being filtered on has not been looked for in yet.
 
         Sessions already read for it are skipped, so folding the closed ones in costs only
         the transcripts that arrived with them. One search runs at a time: the first is
         slow enough that the refresh interval would otherwise start a second over the same
         transcripts before it had finished with them.
         """
-        if self._pull_request is None or self._searching is not None:
+        if self._target is None or self._searching is not None:
             return
-        read = self._read.setdefault(self._pull_request, set())
+        read = self._read.setdefault(self._target, set())
         pending = [session for session in self._sessions if session.session_id not in read]
         if not pending:
             return
-        self._searching = self._pull_request
-        self._search(self._pull_request, pending)
+        self._searching = self._target
+        self._search(self._target, pending)
 
     @work(thread=True, group="search")
-    def _search(self, pull_request: PullRequest, sessions: list[Session]) -> None:
-        """Read transcripts for a pull request off the event loop, where they cannot stutter it."""
+    def _search(self, reference: Reference, sessions: list[Session]) -> None:
+        """Read transcripts for a reference off the event loop, where they cannot stutter it."""
         try:
-            named = sessions_mentioning(pull_request, sessions)
+            named = sessions_mentioning(reference, sessions)
         except OSError:
             named = set()
         read = {session.session_id for session in sessions}
-        self._hand_back(self._search_finished, (pull_request, read, named))
+        self._hand_back(self._search_finished, (reference, read, named))
 
-    def _search_finished(self, found: tuple[PullRequest, set[str], set[str]]) -> None:
-        pull_request, read, named = found
+    def _search_finished(self, found: tuple[Reference, set[str], set[str]]) -> None:
+        reference, read, named = found
         self._searching = None
-        self._read.setdefault(pull_request, set()).update(read)
-        self._named.setdefault(pull_request, set()).update(named)
+        self._read.setdefault(reference, set()).update(read)
+        self._named.setdefault(reference, set()).update(named)
         self._draw()
         self._ensure_search()
 
@@ -1031,15 +1276,15 @@ class FleetApp(App[None]):
         self._draw_details()
 
     def _filtered(self) -> list[Session]:
-        """The fleet the filter leaves, by transcript for a pull request and by metadata otherwise.
+        """The fleet the filter leaves, by transcript for a reference and by metadata otherwise.
 
         A search still running shows nothing rather than everything: the rows that survive
         it are a small handful of the fleet, and a table that emptied out as the answer
         arrived would invite acting on a session that was never a match.
         """
-        if self._pull_request is None:
+        if self._target is None:
             return [session for session in self._sessions if matches(session, self._needle)]
-        named = self._named.get(self._pull_request, set())
+        named = self._named.get(self._target, set())
         return [session for session in self._sessions if session.session_id in named]
 
     def _draw_details(self) -> None:
@@ -1139,8 +1384,8 @@ class FleetApp(App[None]):
         total = len(self._sessions)
         scope = f"{len(self._visible)} of {total}" if self._needle else str(total)
         parts = [f"{scope} session{'' if total == 1 else 's'}"]
-        if self._pull_request is not None:
-            parts.append(f"[cyan]{self._pull_request}[/]")
+        if self._target is not None:
+            parts.append(f"[cyan]{self._target}[/]")
             if self._searching is not None:
                 parts.append("[dim]reading transcripts…[/]")
             elif not self._visible and not self._show_closed:
@@ -1176,16 +1421,25 @@ def run(
     include_closed: bool | None = None,
     settings: Settings | None = None,
     reader: Reader | None = None,
-) -> None:
-    """Launch the fleet overseer and block until the user quits.
+    target: Reference | None = None,
+) -> Launch | None:
+    """Launch the fleet overseer, block until the user quits, and say what to run next.
 
     Anything left unset falls back to the saved settings, which the overseer can edit.
+
+    A board left by `enter` hands back the command it was left for, to be run once this
+    has returned and Textual has given the terminal back. Nothing is run from inside the
+    app on purpose: the whole point of that key is to become the session, and a process
+    replaced while a screen is still up would inherit a terminal in raw mode.
     """
-    FleetApp(
+    app = FleetApp(
         loader=loader,
         interval=interval,
         terminal=terminal,
         include_closed=include_closed,
         settings=settings,
         reader=reader,
-    ).run()
+        target=target,
+    )
+    app.run()
+    return app.launch

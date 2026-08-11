@@ -1,18 +1,38 @@
-"""Rebuilding the command that brings a session back.
+"""Rebuilding the commands that get you into a session.
 
 A Claude Code session is a transcript on disk, not a process: killing the terminal loses
 nothing, and ``claude --resume <id>`` in the original directory brings the conversation
 back. All that is needed is the session id and where it was working.
+
+A session that does not exist yet is the same shape of answer — a directory, and a command
+to run in it — so starting one lives here too. Both are built as an argument vector rather
+than a string, because they are run as often as they are copied, and quoting a line only
+to take it apart again is how the two spellings drift.
 """
 
 from __future__ import annotations
 
+from dataclasses import dataclass
 from pathlib import Path
+from shlex import quote
 
 from clownhead.models import Session, split_worktree
 
 
-def resume_plan(session: Session) -> tuple[Path, list[str]]:
+@dataclass(frozen=True)
+class Launch:
+    """A directory and the command to run in it, ready to be copied or handed the terminal."""
+
+    directory: Path
+    argv: tuple[str, ...]
+
+    @property
+    def shell_command(self) -> str:
+        """Single shell line that runs it where it belongs."""
+        return f"(cd {self.directory} && {' '.join(quote(argument) for argument in self.argv)})"
+
+
+def resume_plan(session: Session) -> Launch:
     """Where to resume a session from, and the command that does it.
 
     A worktree session records the worktree itself as its directory, but ``--worktree``
@@ -25,19 +45,34 @@ def resume_plan(session: Session) -> tuple[Path, list[str]]:
     Resuming a session somewhere other than where it belongs would hand it a working
     directory full of the wrong project, which is worse than a command that stops.
     """
-    argv = ["claude", "--resume", session.session_id]
+    argv = ("claude", "--resume", session.session_id)
     repo, worktree = split_worktree(session.cwd)
     if worktree and repo.exists():
-        return repo, [*argv, "--worktree", worktree]
-    return session.cwd, argv
+        return Launch(repo, (*argv, "--worktree", worktree))
+    return Launch(session.cwd, argv)
+
+
+def start_plan(repo: Path, *, name: str, prompt: str) -> Launch:
+    """Where to start a session for a reference, and the command that does it.
+
+    Claude Code makes the worktree itself, which is the same ``--worktree`` that rebuilds
+    a pruned one on resume — so nothing here asks git for anything, and a name that has
+    been used before is attached to rather than refused.
+
+    The name is spent twice on purpose. As a worktree it is the directory the work happens
+    in; as ``--name`` it is what the session calls itself in the prompt box, the terminal
+    title and every listing, which is what makes a board a dozen sessions deep readable at
+    all. The prompt is the reference itself: the first thing the session should read is
+    what it was started to work on.
+    """
+    return Launch(repo, ("claude", "--worktree", name, "--name", name, prompt))
 
 
 def resume_argv(session: Session) -> list[str]:
     """Argument vector that resumes one session."""
-    return resume_plan(session)[1]
+    return list(resume_plan(session).argv)
 
 
 def resume_shell_command(session: Session) -> str:
     """Single shell line that resumes one session where it belongs."""
-    directory, argv = resume_plan(session)
-    return f"(cd {directory} && {' '.join(argv)})"
+    return resume_plan(session).shell_command

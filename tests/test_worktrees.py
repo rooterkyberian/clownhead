@@ -453,3 +453,39 @@ def test_a_candidate_being_kept_is_not_removable():
 
     assert Candidate(worktree=entry).removable
     assert not Candidate(worktree=entry, kept_for="uncommitted changes").removable
+
+
+@pytest.mark.parametrize(
+    ("url", "expected"),
+    [
+        ("git@github.com:acme/widgets.git", ("acme", "widgets")),
+        ("git@github.com:acme/widgets", ("acme", "widgets")),
+        ("https://github.com/acme/widgets.git", ("acme", "widgets")),
+        ("https://github.com/acme/widgets", ("acme", "widgets")),
+        ("https://github.com/acme/widgets/", ("acme", "widgets")),
+        ("ssh://git@github.com/acme/widgets.git", ("acme", "widgets")),
+        ("ssh://git@github.com:22/acme/widgets.git", ("acme", "widgets")),
+        ("https://user@dev.azure.com/acme/data-platform", ("acme", "data-platform")),
+        ("  git@github.com:acme/widgets.git  ", ("acme", "widgets")),
+        ("/srv/mirrors/acme/widgets.git", ("acme", "widgets")),
+        ("", None),
+        ("not a url", None),
+        ("git@github.com:widgets.git", None),
+    ],
+)
+def test_parse_remote_reads_the_owner_and_repository_out_of_any_spelling(url, expected):
+    assert worktrees.parse_remote(url) == expected
+
+
+def test_remote_of_reads_what_origin_points_at(repo):
+    git(repo, "remote", "add", "origin", "git@github.com:acme/widgets.git")
+
+    assert worktrees.remote_of(repo) == ("acme", "widgets")
+
+
+def test_remote_of_says_nothing_for_a_repository_without_one(repo):
+    assert worktrees.remote_of(repo) is None
+
+
+def test_remote_of_says_nothing_where_there_is_no_repository(tmp_path):
+    assert worktrees.remote_of(tmp_path / "nowhere") is None
