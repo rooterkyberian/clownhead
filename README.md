@@ -12,7 +12,14 @@ curl -LsSf https://astral.sh/uv/install.sh | sh
 uv tool install git+https://github.com/rooterkyberian/clownhead
 ```
 
-Requires Claude Code 2.1.227 or newer on `PATH`.
+### Requirements
+
+- Claude Code 2.1.227 or newer on `PATH`.
+- macOS or Linux — developed on macOS with iTerm2, CI runs the suite on both.
+- Discovery is portable, the signals are not: tab colours are iTerm2's alone,
+  kitty gets notifications, everything else — an IDE's embedded terminal included —
+  falls back to the bell and a tab renamed to `⚠ <session>: <why>`,
+  and raising a window is macOS-only.
 
 ## Keys
 
@@ -64,37 +71,6 @@ A bare `#309` does not:
 it means a different pull request in every checkout on the machine,
 so it stays an ordinary filter needle.
 
-## Worktrees
-
-Claude Code checks a job out into `.claude/worktrees/<name>`
-and never removes the directory afterwards.
-They accumulate,
-and a repository carrying a dozen finished ones
-gives every session in it a sandbox rule set past what is workable.
-
-The command palette has two:
-**Retire this session's worktree** takes the one the selected session worked in,
-**Cleanup worktrees** takes every worktree
-whose work is already in the default branch.
-Branches stay unless you ask for them —
-`b` in the cleanup modal, `--branches` on the command line —
-and are only ever offered where the work is already somewhere else.
-
-Nothing goes that a live session is in, that a running session has locked,
-that has uncommitted changes, that holds commits on no remote,
-or that has been worked in more recently than `--older-than`.
-What is kept is listed with the reason beside it:
-
-```bash
-$ clownhead worktrees-cleanup --older-than 7d --dry-run
-13 worktrees · 4 to remove
-WORKTREE                     AGE  WHY
-bugfix+address-separator     13d  uncommitted changes
-company-ai-financial-data    10h  locked by a live session
-df729-uv-lambda              42d  -
-httpx2                       20d  -
-```
-
 ## Commands
 
 Every view is also a one-shot subcommand, so the same data pipes into a script.
@@ -132,16 +108,6 @@ so naming fewer columns is how you get one whole;
 [docs/how-it-works.md](docs/how-it-works.md) — discovery, the attention signals,
 the control socket behind renaming,
 and what happens to a session when it is terminated or resumed.
-
-## Platform support
-
-Developed on macOS with iTerm2; CI runs the suite on Linux and macOS.
-Discovery is portable, the signals are not:
-tab colours are iTerm2's alone,
-kitty gets notifications,
-and everything else — an IDE's embedded terminal included —
-falls back to the bell and a tab renamed to `⚠ <session>: <why>`.
-Raising a window is macOS-only.
 
 ## Problems
 
