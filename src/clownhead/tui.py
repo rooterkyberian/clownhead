@@ -8,12 +8,13 @@ without a live fleet.
 
 from __future__ import annotations
 
-from collections.abc import Callable, Mapping
+from collections.abc import Callable, Mapping, Sequence
 from datetime import UTC, datetime, timedelta
 from functools import partial
 from typing import Any, Protocol
 
 from pydantic import ValidationError
+from rich.markup import escape
 from rich.text import Text
 from textual import events, work
 from textual.app import App, ComposeResult
@@ -28,17 +29,29 @@ from clownhead import attention
 from clownhead import settings as settings_store
 from clownhead.control import close_tab, rename, shell_of, terminate, wait_for_exit
 from clownhead.discovery import Message, Process, process_table, recent_messages, relocated_config_dir
-from clownhead.models import Session, Status
+from clownhead.models import Session, Status, split_worktree
 from clownhead.render import build_rows, conversation, describe, format_duration, shorten_path, truncate
 from clownhead.resume import resume_shell_command
 from clownhead.search import PullRequest, parse_pull_request, sessions_mentioning
 from clownhead.settings import Settings
 from clownhead.terminal import Terminal, copy_to_pasteboard
+from clownhead.worktrees import Candidate, survey
+from clownhead.worktrees import remove as remove_worktree
 
 BASE_COLUMNS = ("STATUS", "NAME", "QUIET", "AGE")
 DEFAULT_INTERVAL = 5.0
 CLOWN = "\N{CLOWN FACE}"
 CONFIG_DIR_CAP = 40
+SWEEP_AGE = timedelta(0)
+"""No age filter on the sweep: being merged is the stronger answer, and a worktree whose
+work is already upstream is finished with whether that happened this morning or last month."""
+
+
+def _candidate_age(candidate: Candidate) -> str:
+    """How long ago a worktree was last worked in, for a line that has room for little."""
+    if candidate.last_used is None:
+        return "unknown"
+    return f"{format_duration(datetime.now(tz=UTC) - candidate.last_used)} ago"
 
 
 class Loader(Protocol):
@@ -169,6 +182,78 @@ class ConfirmScreen(ModalScreen[bool]):
         self.dismiss(False)
 
 
+class SweepScreen(ModalScreen[bool]):
+    """The merged worktrees, and one question over the lot of them.
+
+    A list rather than a picker on purpose. Everything offered has already passed every
+    guard, so choosing between them is a decision without a difference, and a screen that
+    invited one would turn a sweep into thirteen keystrokes — which is the thing that made
+    the worktrees pile up in the first place. Anything being kept is named underneath with
+    its reason, because a sweep that silently skipped half of what it found would read as
+    having cleaned up more than it had.
+    """
+
+    CSS = """
+    SweepScreen {
+        align: center middle;
+    }
+    #sheet {
+        width: 78;
+        max-height: 80%;
+        height: auto;
+        padding: 1 2;
+        border: round $error;
+        background: $surface;
+    }
+    #sweep-list {
+        height: auto;
+        max-height: 20;
+    }
+    """
+
+    BINDINGS = [
+        Binding("y", "confirm", "yes"),
+        Binding("enter", "confirm", "yes"),
+        Binding("n", "cancel", "no"),
+        Binding("escape", "cancel", "no"),
+    ]
+
+    def __init__(self, going: Sequence[Candidate], kept: Sequence[Candidate]) -> None:
+        super().__init__()
+        self._going = list(going)
+        self._kept = list(kept)
+
+    def compose(self) -> ComposeResult:
+        """Ask once, over a list of what the answer applies to."""
+        count = len(self._going)
+        with Vertical(id="sheet"):
+            yield Static(f"[bold]Remove {count} merged worktree{'' if count == 1 else 's'}?[/]")
+            yield Static("[dim]their branches stay; only the checkouts go[/]")
+            with VerticalScroll(id="sweep-list"):
+                yield Static(self._listing())
+            yield Static("[dim]y to remove · esc to cancel[/]")
+
+    def action_confirm(self) -> None:
+        """Answer yes."""
+        self.dismiss(True)
+
+    def action_cancel(self) -> None:
+        """Answer no."""
+        self.dismiss(False)
+
+    def _listing(self) -> str:
+        lines = [
+            f"  {escape(candidate.worktree.name)}  [dim]{_candidate_age(candidate)}[/]" for candidate in self._going
+        ]
+        if self._kept:
+            lines.append("")
+            lines.extend(
+                f"  [dim]{escape(candidate.worktree.name)} · kept · {escape(candidate.kept_for or '')}[/]"
+                for candidate in self._kept
+            )
+        return "\n".join(lines)
+
+
 class PromptScreen(ModalScreen[str | None]):
     """A single line of text, handed back when it is submitted and ``None`` if abandoned."""
 
@@ -260,6 +345,7 @@ class SettingsScreen(ModalScreen[Settings | None]):
     TOGGLES = (
         ("show_pid", "PID column"),
         ("show_tty", "TTY column"),
+        ("show_worktree", "WORKTREE column"),
         ("show_closed", "closed sessions at startup"),
         ("foreground", "raise the window on focus"),
         ("paint_tabs", "tint session tabs, and the board's own"),
@@ -370,8 +456,10 @@ class FleetApp(App[None]):
         Binding("y", "copy_resume", "copy resume"),
         Binding("r", "rename", "rename"),
         Binding("t", "terminate", "terminate"),
+        Binding("w", "remove_worktree", "worktree"),
         Binding("comma", "settings", "settings"),
         Binding("q", "quit", "quit"),
+        Binding("ctrl+w", "sweep_worktrees", "sweep merged", show=False),
         Binding("ctrl+r", "refresh", "refresh", show=False),
         Binding("right", "history", "→ history", show=False),
         Binding("left", "close_history", "← close", show=False),
@@ -381,11 +469,16 @@ class FleetApp(App[None]):
 
     Truncation is what actually edits that line, so the order decides what a narrow board
     keeps: what a session is doing, then the ways of acting on it, and `q` last — every TUI
-    quits on `q`, so it is the one binding nobody needs told. `R` and `escape` are hidden
+    quits on `q`, so it is the one binding nobody needs told. `^r` and `escape` are hidden
     rather than dropped: the board reloads on its own interval and escape is contextual, so
     neither is worth the width, and both still answer. `c` is hidden because the top bar
     says it better — the count of closed sessions is the switch, and a switch that shows
     the number it would fold in needs no key advertised beside it.
+
+    `w` retires the worktree of the session under the cursor and sits with the other things
+    done to one session, after `t`. `^w` sweeps every merged worktree at once and is
+    hidden: it acts on the whole machine rather than on anything the cursor is pointing at,
+    which is not what a footer beside a highlighted row should be offering.
     """
 
     def __init__(
@@ -450,8 +543,12 @@ class FleetApp(App[None]):
 
     @property
     def columns(self) -> tuple[str, ...]:
-        """Table headers, with the process columns only where they were asked for."""
-        optional = ("PID",) * self._settings.show_pid + ("TTY",) * self._settings.show_tty
+        """Table headers, with the optional columns only where they were asked for."""
+        optional = (
+            ("PID",) * self._settings.show_pid
+            + ("TTY",) * self._settings.show_tty
+            + ("WORKTREE",) * self._settings.show_worktree
+        )
         return (*BASE_COLUMNS, *optional, "WHERE")
 
     @property
@@ -578,6 +675,92 @@ class FleetApp(App[None]):
 
     def _tab_left_open(self, detail: str) -> None:
         self.notify(detail, title="tab left open", severity="warning")
+
+    def action_remove_worktree(self) -> None:
+        """Retire the worktree the selected session worked in, once it has been confirmed.
+
+        What protects a worktree takes git to find out, so the question is not asked until
+        the answer is known: a confirmation offered and then refused would be a worse way
+        of saying "this one has uncommitted changes" than simply saying it.
+        """
+        session = self.selected_session
+        if session is None:
+            self.notify("nothing selected", severity="warning")
+            return
+        _, worktree = split_worktree(session.cwd)
+        if worktree is None:
+            self.notify(f"{session.label} is not in a worktree", severity="warning")
+            return
+        self._inspect_worktree(session)
+
+    @work(thread=True, group="worktree")
+    def _inspect_worktree(self, session: Session) -> None:
+        found = survey([session], older_than=SWEEP_AGE, only=session.cwd)
+        if not found:
+            self._hand_back(self._worktree_kept, f"git does not know {shorten_path(session.cwd)}")
+            return
+        candidate = found[0]
+        if candidate.kept_for is not None:
+            self._hand_back(self._worktree_kept, f"{candidate.worktree.name}: {candidate.kept_for}")
+            return
+        self._hand_back(self._ask_remove_worktree, candidate)
+
+    def _ask_remove_worktree(self, candidate: Candidate) -> None:
+        branch = candidate.worktree.branch or "a detached HEAD"
+        question = (
+            f"[bold]Remove the worktree {escape(candidate.worktree.name)}?[/]\n"
+            f"[dim]{escape(str(candidate.worktree.path))} · last worked in {_candidate_age(candidate)}[/]\n"
+            f"[dim]{escape(branch)} stays; only the checkout goes[/]"
+        )
+        self.push_screen(ConfirmScreen(question), partial(self._remove_worktree, [candidate]))
+
+    def action_sweep_worktrees(self) -> None:
+        """Retire every worktree whose work is already in its default branch.
+
+        The board is a herd of repositories, not one, so this asks about all of them at
+        once — which is the shape the problem has: worktrees pile up across every checkout
+        a fleet touches, and clearing one repository at a time is how they got here.
+        """
+        self._sweep_worktrees()
+
+    @work(thread=True, group="worktree")
+    def _sweep_worktrees(self) -> None:
+        candidates = [candidate for candidate in survey(self._sessions, older_than=SWEEP_AGE) if candidate.merged]
+        self._hand_back(self._ask_sweep, candidates)
+
+    def _ask_sweep(self, candidates: Sequence[Candidate]) -> None:
+        going = [candidate for candidate in candidates if candidate.removable]
+        kept = [candidate for candidate in candidates if not candidate.removable]
+        if not going:
+            detail = f"{len(kept)} merged, all kept" if kept else "no merged worktrees"
+            self.notify(detail, title="nothing to sweep", severity="information")
+            return
+        self.push_screen(SweepScreen(going, kept), partial(self._remove_worktree, going))
+
+    def _remove_worktree(self, going: Sequence[Candidate], confirmed: bool | None) -> None:
+        if not confirmed:
+            return
+        self._remove_all(list(going))
+
+    @work(thread=True, group="worktree")
+    def _remove_all(self, going: Sequence[Candidate]) -> None:
+        removed = 0
+        for candidate in going:
+            try:
+                remove_worktree(candidate.worktree)
+            except (LookupError, OSError) as error:
+                self._hand_back(self._worktree_kept, f"{candidate.worktree.name}: {error}")
+                continue
+            removed += 1
+        if removed:
+            self._hand_back(self._worktrees_removed, removed)
+
+    def _worktrees_removed(self, removed: int) -> None:
+        self.notify(f"removed {removed} worktree{'' if removed == 1 else 's'}", severity="warning")
+        self.start_reload()
+
+    def _worktree_kept(self, detail: str) -> None:
+        self.notify(detail, title="worktree kept", severity="warning")
 
     def action_rename(self) -> None:
         """Give the selected session a new name, in the session itself."""
@@ -746,7 +929,11 @@ class FleetApp(App[None]):
         table = self.query_one("#fleet", DataTable)
         table.clear()
         for row in build_rows(self._visible, datetime.now(tz=UTC)):
-            optional = ((row.pid,) if self._settings.show_pid else ()) + ((row.tty,) if self._settings.show_tty else ())
+            optional = (
+                ((row.pid,) if self._settings.show_pid else ())
+                + ((row.tty,) if self._settings.show_tty else ())
+                + ((row.worktree,) if self._settings.show_worktree else ())
+            )
             table.add_row(Text(row.status, style=row.style), row.name, row.quiet, row.age, *optional, row.where)
         if previous is not None:
             restored = next((i for i, s in enumerate(self._visible) if s.session_id == previous.session_id), None)
@@ -808,7 +995,8 @@ class FleetApp(App[None]):
     def _settings_changed(self, settings: Settings | None) -> None:
         if settings is None:
             return
-        rebuild = (settings.show_pid, settings.show_tty) != (self._settings.show_pid, self._settings.show_tty)
+        columns = (settings.show_pid, settings.show_tty, settings.show_worktree)
+        rebuild = columns != (self._settings.show_pid, self._settings.show_tty, self._settings.show_worktree)
         retime = settings.interval != self._settings.interval
         repaint = settings.paint_tabs != self._settings.paint_tabs
         self._settings = settings

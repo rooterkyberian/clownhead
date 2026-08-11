@@ -54,6 +54,9 @@ NOTIFICATIONS = Path("dev/notifications")
 WORKTREES = WEB_PLATFORM / ".claude/worktrees"
 SEARCH_INDEX = WORKTREES / "search-index"
 INVOICE_PARSER = WORKTREES / "invoice-parser"
+LEGACY_IMPORTS = WORKTREES / "legacy-imports"
+"""A worktree whose session ended and whose checkout did not, which is the herd's whole
+worktree problem in one row: nothing points at it any more and it is still on the disk."""
 
 PROJECTS = (
     PAYMENTS,
@@ -63,6 +66,7 @@ PROJECTS = (
     NOTIFICATIONS,
     SEARCH_INDEX,
     INVOICE_PARSER,
+    LEGACY_IMPORTS,
 )
 TTYS = ("ttys002", "ttys004", "ttys008", "ttys011", "ttys014", "ttys017")
 
@@ -74,6 +78,7 @@ INVOICE_SESSION = "c73de1a4-6b90-4d2f-8a15-2f9e0c4b7d31"
 NOTIFICATIONS_SESSION = "6e2b0c93-58d1-4f7a-a3e9-c04d81b5726f"
 WEB_PLATFORM_SESSION = "1f6a8e30-92c7-4b58-b0d4-6e5a3c81f947"
 DESIGN_SYSTEM_SESSION = "a05f2b6c-4e18-4a73-9c62-8d1b7f0e5a24"
+LEGACY_IMPORTS_SESSION = "3c8d5f19-7a24-4e61-b8f3-5d90c2a71e4b"
 
 CONVERSATIONS: dict[str, tuple[tuple[str, timedelta, str], ...]] = {
     PAYMENTS_SESSION: (
@@ -217,14 +222,24 @@ def _fleet(include_closed: bool) -> list[Session]:
         ),
     ]
     if include_closed:
-        sessions.append(
-            Session(
-                session_id=DESIGN_SYSTEM_SESSION,
-                cwd=DEMO_HOME / DESIGN_SYSTEM,
-                name="design-system-0b",
-                status=Status.CLOSED,
-                started_at=now - timedelta(days=6),
-                updated_at=now - timedelta(days=6),
-            )
+        sessions.extend(
+            [
+                Session(
+                    session_id=DESIGN_SYSTEM_SESSION,
+                    cwd=DEMO_HOME / DESIGN_SYSTEM,
+                    name="design-system-0b",
+                    status=Status.CLOSED,
+                    started_at=now - timedelta(days=6),
+                    updated_at=now - timedelta(days=6),
+                ),
+                Session(
+                    session_id=LEGACY_IMPORTS_SESSION,
+                    cwd=DEMO_HOME / LEGACY_IMPORTS,
+                    name="legacy-imports",
+                    status=Status.CLOSED,
+                    started_at=now - timedelta(days=23),
+                    updated_at=now - timedelta(days=21),
+                ),
+            ]
         )
     return sorted(sessions, key=sort_key)

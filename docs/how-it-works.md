@@ -96,3 +96,27 @@ Worktree sessions resume from the owning repository with `--worktree <name>`, wh
 attaches to the worktree that still stands and rebuilds the one that has been pruned. Any
 other missing directory keeps its failing `cd` on purpose: resuming somewhere else would
 hand the session a working directory full of the wrong project.
+
+**Worktrees.** A session records the worktree as its directory, so the `WORKTREE` column is
+a string split and a stat — which worktree, and whether it is still on the disk. Everything
+else is asked of git, in every repository the fleet is checked out in. Worktrees come from
+`git worktree list --porcelain` rather than from the sessions, because the ones worth
+finding are exactly the ones no session remembers: a transcript ages out of the config
+directory long before the checkout it was written in goes anywhere.
+
+Whether a branch is merged is two questions, since GitHub's default merge is a squash and
+the cheap one misses it. First whether the branch tip is an ancestor of the default branch,
+which covers a merge and a rebase; otherwise the branch is collapsed onto the point it left
+from and `git cherry` asked whether that patch is upstream already. Both are heuristics, so
+they decide what is offered and never what goes without being asked.
+
+Age is read from git's own `index` and `HEAD` files rather than the directory holding them.
+A directory's timestamp follows every file made or unmade inside it, and git makes
+temporary files there merely to answer a question — so reading a worktree's state would
+reset the very age the sweep asked for, and nothing would ever look old twice. For the same
+reason the dirt check is `--no-optional-locks`, which stops `git status` rewriting the index
+it refreshed.
+
+Removal is `git worktree remove` and never `--force`. Git refuses a worktree with changes
+in it, and that refusal is a last guard rather than an obstacle: everything clownhead knows
+was read a moment ago, and a moment is long enough for somebody to have started typing.

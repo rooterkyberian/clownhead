@@ -17,7 +17,9 @@ from clownhead.render import (
     describe,
     format_duration,
     parse_columns,
+    parse_duration,
     shorten_path,
+    worktree_cell,
 )
 
 NOW = datetime(2026, 8, 10, tzinfo=UTC)
@@ -55,6 +57,49 @@ def spans(text: Text) -> list[tuple[str, str]]:
 )
 def test_format_duration(delta, expected):
     assert format_duration(delta) == expected
+
+
+@pytest.mark.parametrize(
+    ("text", "expected"),
+    [
+        ("30s", timedelta(seconds=30)),
+        ("10m", timedelta(minutes=10)),
+        ("4h", timedelta(hours=4)),
+        ("7d", timedelta(days=7)),
+        ("  7D  ", timedelta(days=7)),
+        ("0s", timedelta(0)),
+    ],
+)
+def test_parse_duration(text, expected):
+    assert parse_duration(text) == expected
+
+
+@pytest.mark.parametrize("text", ["", "7", "d", "7w", "-1d", "seven days", "7 d", "1.5h"])
+def test_parse_duration_refuses_what_does_not_name_one(text):
+    with pytest.raises(ValueError, match="not a duration"):
+        parse_duration(text)
+
+
+@pytest.mark.parametrize("delta", [timedelta(seconds=30), timedelta(minutes=10), timedelta(hours=4), timedelta(days=7)])
+def test_parse_duration_reads_back_what_format_duration_writes(delta):
+    assert parse_duration(format_duration(delta)) == delta
+
+
+def test_worktree_cell_is_empty_for_a_session_outside_one(tmp_path):
+    assert worktree_cell(Session(session_id="a-b", cwd=tmp_path)) == "-"
+
+
+def test_worktree_cell_names_a_worktree_that_still_stands(tmp_path):
+    cwd = tmp_path / ".claude" / "worktrees" / "search-index"
+    cwd.mkdir(parents=True)
+
+    assert worktree_cell(Session(session_id="a-b", cwd=cwd)) == "search-index"
+
+
+def test_worktree_cell_marks_a_worktree_that_has_gone(tmp_path):
+    cwd = tmp_path / ".claude" / "worktrees" / "search-index"
+
+    assert worktree_cell(Session(session_id="a-b", cwd=cwd)) == "search-index (gone)"
 
 
 def test_shorten_path_collapses_home():
@@ -161,10 +206,11 @@ def test_default_columns_drop_the_timing_ones_when_narrow():
     assert default_columns(60) == (Column.STATUS, Column.NAME, Column.WHERE)
 
 
-def test_default_columns_add_the_process_ones_only_when_asked():
+def test_default_columns_add_the_optional_ones_only_when_asked():
     assert default_columns(200) == (Column.STATUS, Column.NAME, Column.QUIET, Column.AGE, Column.WHERE, Column.RESUME)
     assert Column.PID in default_columns(200, show_pid=True)
     assert Column.TTY in default_columns(200, show_tty=True)
+    assert Column.WORKTREE in default_columns(200, show_worktree=True)
 
 
 def test_build_table_shows_the_resume_command_when_the_column_is_asked_for():

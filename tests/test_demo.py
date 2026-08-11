@@ -8,7 +8,7 @@ from clownhead import demo as demo_module
 from clownhead import discovery as discovery_module
 from clownhead.discovery import CONFIG_DIR_VAR
 from clownhead.models import Status
-from clownhead.render import build_rows, describe
+from clownhead.render import build_rows, describe, worktree_cell
 from clownhead.resume import resume_shell_command
 
 
@@ -51,6 +51,15 @@ def test_worktree_sessions_resume_from_a_repository_that_exists(loader):
     assert worktrees
     for session in worktrees:
         assert "--worktree" in resume_shell_command(session)
+
+
+def test_a_worktree_outlives_the_session_that_made_it(loader):
+    """The row `w` is for: a session that has ended whose checkout is still on the disk."""
+    stale = next(session for session in loader(True) if session.session_id == demo_module.LEGACY_IMPORTS_SESSION)
+
+    assert stale.status is Status.CLOSED
+    assert stale.cwd.is_dir()
+    assert worktree_cell(stale) == "legacy-imports"
 
 
 def test_paths_shorten_against_the_demo_home(loader, demo_home, monkeypatch):

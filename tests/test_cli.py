@@ -1,4 +1,5 @@
 import json
+from datetime import timedelta
 from pathlib import Path
 
 import pytest
@@ -9,6 +10,7 @@ from clownhead import attention, cli, discovery
 from clownhead import terminal as terminal_module
 from clownhead.models import Session, Status
 from clownhead.terminal import ITerm2Terminal, Terminal
+from clownhead.worktrees import Candidate, Worktree
 
 runner = CliRunner()
 
@@ -393,3 +395,147 @@ def test_version_prints_the_version_without_launching_the_tui(monkeypatch):
 
 def test_attention_module_is_reachable_from_cli():
     assert cli.attention is attention
+
+
+def worktree_candidate(tmp_path, name="httpx2", **overrides):
+    entry = Worktree(
+        path=tmp_path / "repo" / ".claude" / "worktrees" / name,
+        repo=tmp_path / "repo",
+        name=name,
+        branch=f"chore/{name}",
+        head="a" * 40,
+    )
+    fields = {"worktree": entry, "last_used": None, "merged": False, "kept_for": None}
+    return Candidate(**{**fields, **overrides})
+
+
+@pytest.fixture
+def swept(monkeypatch, tmp_path):
+    """A survey of one removable worktree and one being kept, with removal recorded."""
+    removed: list[str] = []
+    candidates = [
+        worktree_candidate(tmp_path, "httpx2"),
+        worktree_candidate(tmp_path, "judge", merged=True, kept_for="uncommitted changes"),
+    ]
+    monkeypatch.setattr(discovery, "list_sessions", lambda *a, **k: fleet())
+    monkeypatch.setattr(cli.worktrees, "survey", lambda *a, **k: candidates)
+    monkeypatch.setattr(cli.worktrees, "remove", lambda entry: removed.append(entry.name))
+    return removed
+
+
+def test_worktrees_cleanup_dry_run_lists_without_removing_anything(swept):
+    result = runner.invoke(cli.app, ["worktrees-cleanup", "--dry-run"])
+
+    assert result.exit_code == 0
+    assert "2 worktrees · 1 to remove" in result.stdout
+    assert "httpx2" in result.stdout
+    assert "uncommitted changes" in result.stdout
+    assert swept == []
+
+
+def test_worktrees_cleanup_removes_nothing_when_the_question_is_declined(swept):
+    result = runner.invoke(cli.app, ["worktrees-cleanup"], input="n\n")
+
+    assert result.exit_code == 0
+    assert "nothing removed" in result.stdout
+    assert swept == []
+
+
+def test_worktrees_cleanup_removes_what_it_offered_once_confirmed(swept):
+    result = runner.invoke(cli.app, ["worktrees-cleanup"], input="y\n")
+
+    assert result.exit_code == 0
+    assert swept == ["httpx2"]
+    assert "removed 1 of 1 worktrees" in result.stdout
+
+
+def test_worktrees_cleanup_does_not_ask_when_yes_was_given(swept):
+    result = runner.invoke(cli.app, ["worktrees-cleanup", "--yes"])
+
+    assert result.exit_code == 0
+    assert swept == ["httpx2"]
+
+
+def test_worktrees_cleanup_keeps_going_when_one_removal_fails(monkeypatch, tmp_path):
+    candidates = [worktree_candidate(tmp_path, "one"), worktree_candidate(tmp_path, "two")]
+    removed: list[str] = []
+
+    def remove(entry):
+        if entry.name == "one":
+            raise LookupError("git refused")
+        removed.append(entry.name)
+
+    monkeypatch.setattr(discovery, "list_sessions", lambda *a, **k: fleet())
+    monkeypatch.setattr(cli.worktrees, "survey", lambda *a, **k: candidates)
+    monkeypatch.setattr(cli.worktrees, "remove", remove)
+
+    result = runner.invoke(cli.app, ["worktrees-cleanup", "--yes"])
+
+    assert result.exit_code == 0
+    assert removed == ["two"]
+    assert "git refused" in result.stderr
+    assert "removed 1 of 2 worktrees" in result.stdout
+
+
+def test_worktrees_cleanup_merged_narrows_to_the_merged_ones(monkeypatch, tmp_path):
+    candidates = [worktree_candidate(tmp_path, "plain"), worktree_candidate(tmp_path, "done", merged=True)]
+    monkeypatch.setattr(discovery, "list_sessions", lambda *a, **k: fleet())
+    monkeypatch.setattr(cli.worktrees, "survey", lambda *a, **k: candidates)
+    monkeypatch.setattr(cli.worktrees, "remove", lambda entry: None)
+
+    result = runner.invoke(cli.app, ["worktrees-cleanup", "--merged", "--dry-run"])
+
+    assert result.exit_code == 0
+    assert "merged only" in result.stdout
+    assert "done" in result.stdout
+    assert "plain" not in result.stdout
+
+
+def test_worktrees_cleanup_says_so_when_there_are_no_worktrees(monkeypatch, live_fleet):
+    monkeypatch.setattr(cli.worktrees, "survey", lambda *a, **k: [])
+
+    result = runner.invoke(cli.app, ["worktrees-cleanup"])
+
+    assert result.exit_code == 0
+    assert "no worktrees" in result.stdout
+
+
+def test_worktrees_cleanup_refuses_a_bad_age_before_it_reads_the_fleet(monkeypatch):
+    monkeypatch.setattr(discovery, "list_sessions", lambda *a, **k: pytest.fail("fleet must not be read"))
+
+    result = runner.invoke(cli.app, ["worktrees-cleanup", "--older-than", "soon"])
+
+    assert result.exit_code == 2
+    assert "not a duration" in result.stderr
+
+
+def test_worktrees_cleanup_passes_the_age_it_was_given(monkeypatch, live_fleet):
+    seen = {}
+    monkeypatch.setattr(cli.worktrees, "survey", lambda sessions, **kwargs: seen.update(kwargs) or [])
+
+    result = runner.invoke(cli.app, ["worktrees-cleanup", "--older-than", "12h"])
+
+    assert result.exit_code == 0
+    assert seen["older_than"] == timedelta(hours=12)
+
+
+def test_worktrees_cleanup_reads_the_closed_sessions_too(monkeypatch, live_fleet):
+    seen = {}
+    monkeypatch.setattr(discovery, "list_sessions", lambda cwd=None, **kwargs: seen.update(kwargs) or fleet())
+    monkeypatch.setattr(cli.worktrees, "survey", lambda *a, **k: [])
+
+    result = runner.invoke(cli.app, ["worktrees-cleanup"])
+
+    assert result.exit_code == 0
+    assert seen["include_closed"] is True
+
+
+def test_ls_can_show_the_worktree_column(monkeypatch):
+    session = Session(session_id="a-b", cwd=Path("/tmp/repo/.claude/worktrees/search-index"), name="one")
+    monkeypatch.setattr(discovery, "list_sessions", lambda *a, **k: [session])
+
+    result = runner.invoke(cli.app, ["ls", "--columns", "name,worktree"])
+
+    assert result.exit_code == 0
+    assert result.stdout.splitlines()[0].split() == ["NAME", "WORKTREE"]
+    assert "search-index" in result.stdout

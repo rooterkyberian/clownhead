@@ -49,10 +49,13 @@ STRONG = re.compile(r"\*\*([^*\n]+)\*\*")
 NARROW_WIDTH = 100
 DEFAULT_WIDTH = 160
 NAME_CAP = 32
+WORKTREE_CAP = 28
 WHERE_MIN = 14
 RESUME_MIN = 24
 MESSAGE_CAP = 110
 GAP = 2
+
+DURATION_UNITS = {"s": 1, "m": 60, "h": 3600, "d": 86400}
 
 
 class Column(StrEnum):
@@ -64,12 +67,14 @@ class Column(StrEnum):
     AGE = "age"
     PID = "pid"
     TTY = "tty"
+    WORKTREE = "worktree"
     WHERE = "where"
     RESUME = "resume"
 
 
 FLEXIBLE: dict[Column, tuple[int, int | None]] = {
     Column.NAME: (len("NAME"), NAME_CAP),
+    Column.WORKTREE: (len("WORKTREE"), WORKTREE_CAP),
     Column.WHERE: (WHERE_MIN, None),
     Column.RESUME: (RESUME_MIN, None),
 }
@@ -90,6 +95,18 @@ def format_duration(delta: timedelta | None) -> str:
     return f"{seconds // 86400}d"
 
 
+def parse_duration(text: str) -> timedelta:
+    """Read a duration written the way :func:`format_duration` writes one, e.g. ``7d``.
+
+    The unit is required. A bare number means an hour to one reader and a day to the next,
+    and the difference between those two answers is what a cleanup does or does not delete.
+    """
+    stripped = text.strip().lower()
+    if len(stripped) < 2 or not stripped[:-1].isdigit() or stripped[-1] not in DURATION_UNITS:
+        raise ValueError(f"'{text}' is not a duration like 30s, 10m, 4h or 7d")
+    return timedelta(seconds=int(stripped[:-1]) * DURATION_UNITS[stripped[-1]])
+
+
 def shorten_path(cwd: Path, home: Path | None = None) -> str:
     """Compress a working directory to the part that distinguishes it.
 
@@ -101,6 +118,20 @@ def shorten_path(cwd: Path, home: Path | None = None) -> str:
         text = "~" + text[len(root) :]
     repo, worktree = split_worktree(Path(text))
     return f"{repo.name} ⇢ {worktree}" if worktree else text
+
+
+def worktree_cell(session: Session) -> str:
+    """The worktree a session is in, marked when the directory has gone.
+
+    Whether the checkout is still on disk is the whole question a herd of worktrees raises,
+    and it is a stat call — cheap enough for a board that redraws every few seconds. Whether
+    it is *finished* with is not: that takes git, and it is what ``worktrees-cleanup``
+    is for.
+    """
+    _, worktree = split_worktree(session.cwd)
+    if worktree is None:
+        return "-"
+    return worktree if session.cwd.exists() else f"{worktree} (gone)"
 
 
 def truncate(text: str, limit: int) -> str:
@@ -125,6 +156,7 @@ class Row:
     age: str
     pid: str
     tty: str
+    worktree: str
     where: str
     resume: str
 
@@ -140,6 +172,7 @@ def build_rows(sessions: Iterable[Session], moment: datetime) -> list[Row]:
             age=format_duration(session.age(moment)),
             pid=str(session.pid) if session.pid else "-",
             tty=session.tty.name if session.tty else "-",
+            worktree=worktree_cell(session),
             where=shorten_path(session.cwd),
             resume=resume_shell_command(session),
         )
@@ -253,19 +286,25 @@ def parse_columns(selection: str) -> tuple[Column, ...]:
     return tuple(Column(name) for name in names)
 
 
-def default_columns(width: int, show_pid: bool = False, show_tty: bool = False) -> tuple[Column, ...]:
+def default_columns(
+    width: int,
+    show_pid: bool = False,
+    show_tty: bool = False,
+    show_worktree: bool = False,
+) -> tuple[Column, ...]:
     """The columns to show when none were asked for.
 
-    PID and TTY are off unless asked for: they matter when a session needs killing or
-    signalling, not when you are reading the board. Below :data:`NARROW_WIDTH` the timing
-    and resume columns go too; losing whole columns reads better than truncating the start
-    of every cell, and a resume command cut to fit is worse than absent — it looks
-    copyable and is not. A selection made by hand is never thinned this way, since
-    dropping a column somebody named would answer a narrow terminal by ignoring them.
+    PID, TTY and WORKTREE are off unless asked for: the first two matter when a session
+    needs killing or signalling, and the third only in a repository that uses worktrees at
+    all, where ``where`` already says ``repo ⇢ worktree``. Below :data:`NARROW_WIDTH` the
+    timing and resume columns go too; losing whole columns reads better than truncating the
+    start of every cell, and a resume command cut to fit is worse than absent — it looks
+    copyable and is not. A selection made by hand is never thinned this way, since dropping
+    a column somebody named would answer a narrow terminal by ignoring them.
     """
     if width < NARROW_WIDTH:
         return (Column.STATUS, Column.NAME, Column.WHERE)
-    optional = (Column.PID,) * show_pid + (Column.TTY,) * show_tty
+    optional = (Column.PID,) * show_pid + (Column.TTY,) * show_tty + (Column.WORKTREE,) * show_worktree
     return (Column.STATUS, Column.NAME, Column.QUIET, Column.AGE, *optional, Column.WHERE, Column.RESUME)
 
 

@@ -5,17 +5,27 @@ from __future__ import annotations
 import os
 import time
 from collections.abc import Iterable, Sequence
+from datetime import UTC, datetime, timedelta
 from pathlib import Path
 from typing import Annotated
 
 import typer
 from rich.console import Console
 from rich.table import Table
+from rich.text import Text
 
-from clownhead import __version__, attention, discovery, search, tui
+from clownhead import __version__, attention, discovery, search, tui, worktrees
 from clownhead import settings as settings_store
 from clownhead.models import Session
-from clownhead.render import Column, build_table, default_columns, parse_columns
+from clownhead.render import (
+    NARROW_WIDTH,
+    Column,
+    build_table,
+    default_columns,
+    format_duration,
+    parse_columns,
+    parse_duration,
+)
 from clownhead.search import PullRequest
 from clownhead.terminal import detect_terminal
 
@@ -47,6 +57,19 @@ ColumnsOption = Annotated[
         help=f"Columns to show, comma separated and in the order given: {', '.join(Column)}.",
     ),
 ]
+OlderThanOption = Annotated[
+    str,
+    typer.Option("--older-than", metavar="AGE", help="Only worktrees untouched for this long, e.g. 30m, 12h, 7d."),
+]
+MergedOption = Annotated[
+    bool, typer.Option("--merged", help="Only worktrees whose work is already in the default branch.")
+]
+DryRunOption = Annotated[bool, typer.Option("--dry-run", help="Show what would be removed and stop.")]
+YesOption = Annotated[bool, typer.Option("--yes", "-y", help="Remove without asking first.")]
+
+DEFAULT_AGE = "7d"
+"""Long enough that a worktree gone quiet for it is finished with rather than merely idle
+overnight, and the only guard here whose whole job is to be argued with."""
 
 
 def _show_version(requested: bool) -> None:
@@ -109,13 +132,13 @@ def _search_note(reference: PullRequest, matched: int, searched: int, include_cl
 def _columns(selection: str | None) -> tuple[Column, ...]:
     """Resolve the ``--columns`` selection, or the usual columns when there was none.
 
-    An unnamed selection answers to the saved PID and TTY settings, which is what the
-    overseer's switches write to — one place to say you always want them, whichever view
-    is being read.
+    An unnamed selection answers to the saved column settings, which is what the overseer's
+    switches write to — one place to say you always want them, whichever view is being
+    read.
     """
     if selection is None:
         settings = settings_store.load()
-        return default_columns(console.width, settings.show_pid, settings.show_tty)
+        return default_columns(console.width, settings.show_pid, settings.show_tty, settings.show_worktree)
     try:
         return parse_columns(selection)
     except ValueError as error:
@@ -203,6 +226,111 @@ def list_sessions(
         console.print("[dim]no live sessions[/]")
     if sessions:
         console.print(_fleet_table(sessions, chosen))
+
+
+@app.command("worktrees-cleanup")
+def worktrees_cleanup(
+    cwd: CwdOption = None,
+    older_than: OlderThanOption = DEFAULT_AGE,
+    merged_only: MergedOption = False,
+    dry_run: DryRunOption = False,
+    assume_yes: YesOption = False,
+) -> None:
+    """Retire the worktrees Claude Code left behind.
+
+    The worktrees are asked of git, in every repository the fleet is checked out in, so the
+    ones nothing remembers any more are reachable — those are the ones that pile up, since
+    a transcript ages out of the config directory long before the checkout it was written
+    in goes anywhere.
+
+    Nothing is removed that a live session is in, that a running session has locked, that
+    has uncommitted changes, that holds commits on no remote, or that has been used more
+    recently than ``--older-than``. What is removed loses only the checkout: the branch,
+    and every commit on it, stays exactly where it was.
+    """
+    age = _older_than(older_than)
+    sessions = _load(cwd, include_background=True, include_closed=True)
+    candidates = worktrees.survey(sessions, older_than=age)
+    if merged_only:
+        candidates = [candidate for candidate in candidates if candidate.merged]
+    if not candidates:
+        console.print("[dim]no worktrees[/]")
+        return
+
+    going = [candidate for candidate in candidates if candidate.removable]
+    console.print(f"[dim]{_cleanup_note(candidates, merged_only)}[/]")
+    console.print(_cleanup_table(candidates))
+    if not going:
+        return
+    if dry_run:
+        console.print("[dim]--dry-run · nothing removed[/]")
+        return
+    if not assume_yes and not typer.confirm(f"remove {len(going)} worktree{'' if len(going) == 1 else 's'}?"):
+        console.print("[dim]nothing removed[/]")
+        return
+    _remove_all(going)
+
+
+def _older_than(text: str) -> timedelta:
+    try:
+        return parse_duration(text)
+    except ValueError as error:
+        error_console.print(f"[bold red]{error}[/]")
+        raise typer.Exit(code=2) from error
+
+
+def _cleanup_note(candidates: Sequence[worktrees.Candidate], merged_only: bool) -> str:
+    """What the sweep looked at and what it is offering, in one line."""
+    going = sum(candidate.removable for candidate in candidates)
+    note = f"{len(candidates)} worktree{'' if len(candidates) == 1 else 's'} · {going} to remove"
+    if merged_only:
+        return f"{note} · merged only"
+    return note
+
+
+def _cleanup_table(candidates: Sequence[worktrees.Candidate]) -> Table:
+    """The sweep laid out, with the reason beside anything being kept.
+
+    AGE and WHY are sized to their contents and BRANCH is dropped on a narrow terminal,
+    because Rich shares a squeeze out proportionally and would otherwise starve the two
+    narrow columns to nothing — leaving a table whose every row said a worktree was being
+    kept without room to say why.
+    """
+    now = datetime.now(tz=UTC)
+    rows = [
+        (
+            candidate.worktree.name,
+            format_duration(now - candidate.last_used) if candidate.last_used else "-",
+            candidate.worktree.branch or "detached",
+            candidate.kept_for or ("merged" if candidate.merged else "-"),
+            "" if candidate.removable else "dim",
+        )
+        for candidate in candidates
+    ]
+    wide = console.width >= NARROW_WIDTH
+    table = Table(box=None, pad_edge=False, header_style="bold", padding=(0, 1))
+    table.add_column("WORKTREE", no_wrap=True)
+    table.add_column("AGE", no_wrap=True, justify="right", width=max(len(row[1]) for row in rows))
+    if wide:
+        table.add_column("BRANCH", no_wrap=True)
+    table.add_column("WHY", no_wrap=True, width=max(len(row[3]) for row in rows))
+    for name, age, branch, why, style in rows:
+        cells = (Text(name, style=style), age, branch, why) if wide else (Text(name, style=style), age, why)
+        table.add_row(*cells)
+    return table
+
+
+def _remove_all(going: Sequence[worktrees.Candidate]) -> None:
+    """Remove each worktree, reporting failures without abandoning the rest of the sweep."""
+    removed = 0
+    for candidate in going:
+        try:
+            worktrees.remove(candidate.worktree)
+        except (LookupError, OSError) as error:
+            error_console.print(f"[yellow]kept[/] {candidate.worktree.name}: {error}")
+            continue
+        removed += 1
+    console.print(f"removed [bold]{removed}[/] of {len(going)} worktrees")
 
 
 @app.command()

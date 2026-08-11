@@ -24,6 +24,7 @@ class Settings(BaseModel):
     interval: float = Field(default=5.0, ge=MIN_INTERVAL, le=MAX_INTERVAL)
     show_pid: bool = False
     show_tty: bool = False
+    show_worktree: bool = False
     show_closed: bool = False
     foreground: bool = True
     paint_tabs: bool = True
