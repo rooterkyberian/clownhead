@@ -321,7 +321,13 @@ def test_describe_covers_what_the_table_leaves_out():
     assert "/Users/x/dev/payments-api" in detail
     assert "pid 77730 · ttys004 · iterm2" in detail
     assert "started 2d ago · quiet 5m" in detail
-    assert "(cd /Users/x/dev/payments-api && claude --resume 4e020900-df7c-4665-a804-d973b14a1926)" in detail
+
+
+def test_describe_leaves_the_resume_command_to_y_and_the_resume_column():
+    """The longest line the board prints, and the only one here that wrapped."""
+    session = Session(session_id="a-b", cwd=Path("/tmp/repo"), name="one")
+
+    assert "claude --resume" not in describe(session, now=NOW)
 
 
 def test_conversation_names_both_speakers():
@@ -429,7 +435,6 @@ def test_describe_a_closed_session_has_no_process_left():
     detail = describe(session, now=NOW)
 
     assert "gone" in detail
-    assert "claude --resume a-b" in detail
 
 
 def test_describe_escapes_markup_in_paths():

@@ -22,12 +22,12 @@ Two details matter and are easy to miss:
 **`claude agents` (the TUI) is background-agents only.** Its help text calls itself
 "Manage background agents". Only the `--json` flag includes interactive terminal sessions,
 despite the command's own documentation being inconsistent about this. There is no
-built-in TUI for the interactive fleet — that gap is what clownhead fills.
+built-in TUI for the interactive herd — that gap is what clownhead fills.
 
 **`--json` degrades silently under a sandbox.** Peer discovery reads per-process sockets
 in `/tmp/cc-socks`. A sandboxed shell can execute the CLI but not list that directory, so
 the command returns background agents only and exits zero. clownhead checks for this and
-refuses rather than reporting an empty fleet.
+refuses rather than reporting an empty herd.
 
 ## Third-party tools
 
@@ -75,7 +75,7 @@ Every tool listed above works with a Claude subscription, because they all spawn
 token store, so any PTY wrapper inherits it. This is not a differentiator.
 
 The real hazard is precedence. **Claude Code prefers `ANTHROPIC_API_KEY` over subscription
-OAuth when both are present**, so a stray key in a shell profile silently moves a fleet
+OAuth when both are present**, so a stray key in a shell profile silently moves a herd
 onto metered billing. Both vibe-kanban (an opt-in `disable_api_key` toggle) and nimbalyst
 (stripping the variable at process bootstrap) added defences only after users were burned.
 

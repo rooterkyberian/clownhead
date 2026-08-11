@@ -198,7 +198,9 @@ async def test_tui_says_nothing_about_the_default_config_dir():
     async with app.run_test() as pilot:
         await settle(app, pilot)
 
-        assert title_of(app) == "2 sessions · [bold red]1 waiting on you[/]"
+        assert title_of(app) == (
+            r"2 sessions · [bold red]1 waiting on you[/] · [@click=app.toggle_closed]show \[c]losed[/]"
+        )
 
 
 async def test_tui_reports_an_empty_fleet():
@@ -350,7 +352,6 @@ async def test_tui_details_describe_the_session_under_the_cursor():
         assert "payments-api-7c" in details_of(app)
         assert "4e020900-df7c" in details_of(app)
         assert "/tmp/payments-api" in details_of(app)
-        assert "claude --resume 4e020900-df7c" in details_of(app)
 
 
 def history_of(app: FleetApp) -> str:
@@ -691,12 +692,42 @@ async def test_tui_toggles_closed_sessions():
         await settle(app, pilot)
 
         assert table_of(app).row_count == 3
-        assert "1 closed" in title_of(app)
+        assert r"1 \[c]losed" in title_of(app)
 
         await pilot.press("c")
         await settle(app, pilot)
 
         assert table_of(app).row_count == 2
+
+
+async def test_tui_folds_closed_sessions_in_by_clicking_the_top_bar():
+    """The switch the footer no longer advertises a key for."""
+
+    def loader(include_closed: bool) -> list[Session]:
+        return [*fleet(), closed_session()] if include_closed else fleet()
+
+    app = build_app(loader=loader)
+
+    async with app.run_test() as pilot:
+        await settle(app, pilot)
+        assert r"show \[c]losed" in title_of(app)
+
+        await app.run_action("toggle_closed")
+        await settle(app, pilot)
+
+        assert table_of(app).row_count == 3
+        assert r"1 \[c]losed" in title_of(app)
+
+
+async def test_tui_offers_the_closed_switch_on_an_empty_fleet():
+    """An empty board is exactly when the ended ones are worth folding in."""
+    app = build_app(sessions=[])
+
+    async with app.run_test() as pilot:
+        await settle(app, pilot)
+
+        assert "no live sessions" in title_of(app)
+        assert r"show \[c]losed" in title_of(app)
 
 
 async def test_tui_starts_with_closed_sessions_when_asked():

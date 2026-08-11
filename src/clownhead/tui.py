@@ -49,6 +49,14 @@ class Loader(Protocol):
         ...
 
 
+class Reader(Protocol):
+    """Fetches the tail of a session's conversation."""
+
+    def __call__(self, session_id: str, /, *, limit: int) -> list[Message]:
+        """Read the last few turns of a session, oldest first."""
+        ...
+
+
 def config_dir_notice() -> str:
     """Name the Claude Code directory the board is reading, unless it is the default one.
 
@@ -313,6 +321,10 @@ class FleetApp(App[None]):
     #title {
         width: 1fr;
         padding: 0 1;
+        link-color: $text-muted;
+        link-style: none;
+        link-color-hover: $text;
+        link-background-hover: $boost;
     }
     #tick {
         width: auto;
@@ -324,6 +336,7 @@ class FleetApp(App[None]):
     }
     #fleet {
         width: 1fr;
+        overflow-x: hidden;
     }
     #history {
         display: none;
@@ -351,19 +364,29 @@ class FleetApp(App[None]):
     """
 
     BINDINGS = [
-        Binding("q", "quit", "quit"),
         Binding("f", "focus_session", "focus"),
-        Binding("c", "toggle_closed", "closed"),
+        Binding("slash", "filter", "filter"),
+        Binding("c", "toggle_closed", "closed", show=False),
         Binding("y", "copy_resume", "copy resume"),
         Binding("r", "rename", "rename"),
         Binding("t", "terminate", "terminate"),
-        Binding("R", "refresh", "refresh"),
+        Binding("comma", "settings", "settings"),
+        Binding("q", "quit", "quit"),
+        Binding("R", "refresh", "refresh", show=False),
         Binding("right", "history", "→ history", show=False),
         Binding("left", "close_history", "← close", show=False),
-        Binding("comma", "settings", "settings"),
-        Binding("slash", "filter", "filter"),
-        Binding("escape", "dismiss_panel", "clear filter"),
+        Binding("escape", "dismiss_panel", "clear filter", show=False),
     ]
+    """Ordered by how much use each key gets, because the footer is narrower than they are.
+
+    Truncation is what actually edits that line, so the order decides what a narrow board
+    keeps: what a session is doing, then the ways of acting on it, and `q` last — every TUI
+    quits on `q`, so it is the one binding nobody needs told. `R` and `escape` are hidden
+    rather than dropped: the board reloads on its own interval and escape is contextual, so
+    neither is worth the width, and both still answer. `c` is hidden because the top bar
+    says it better — the count of closed sessions is the switch, and a switch that shows
+    the number it would fold in needs no key advertised beside it.
+    """
 
     def __init__(
         self,
@@ -372,9 +395,11 @@ class FleetApp(App[None]):
         terminal: Terminal | None = None,
         include_closed: bool | None = None,
         settings: Settings | None = None,
+        reader: Reader | None = None,
     ) -> None:
         super().__init__()
         self._loader = loader
+        self._reader: Reader = reader if reader is not None else recent_messages
         self._settings = settings if settings is not None else settings_store.load()
         self._interval = interval if interval is not None else self._settings.interval
         self._terminal = terminal
@@ -802,7 +827,7 @@ class FleetApp(App[None]):
     @work(thread=True, group="history")
     def _load_history(self, session_id: str) -> None:
         try:
-            messages = recent_messages(session_id, limit=self._settings.history_turns)
+            messages = self._reader(session_id, limit=self._settings.history_turns)
         except Exception:
             messages = []
         self._hand_back(self._history_loaded, (session_id, messages))
@@ -834,7 +859,7 @@ class FleetApp(App[None]):
         if self._failure:
             return [f"[bold red]discovery failed[/] {self._failure}"]
         if not self._sessions:
-            return ["[dim]no live sessions[/]"]
+            return ["[dim]no live sessions[/]", self._closed_switch()]
 
         total = len(self._sessions)
         scope = f"{len(self._visible)} of {total}" if self._needle else str(total)
@@ -848,10 +873,25 @@ class FleetApp(App[None]):
         waiting = sum(1 for session in self._visible if session.needs_attention)
         if waiting:
             parts.append(f"[bold red]{waiting} waiting on you[/]")
-        finished = sum(1 for session in self._visible if session.status is Status.CLOSED)
-        if finished:
-            parts.append(f"[dim]{finished} closed[/]")
+        parts.append(self._closed_switch())
         return parts
+
+    def _closed_switch(self) -> str:
+        """The count of sessions that have ended, which is also the switch that folds them in.
+
+        It stays in the bar whether they are shown or not. A count that only appeared once
+        you had already found them would be a switch you could turn off and never back on,
+        so the hidden state offers the thing to click instead of a number — the sessions
+        that have ended are not loaded while they are hidden, so there is none to give.
+
+        The bracketed ``c`` names the key that does the same thing, which is why the footer
+        no longer spends a column saying so. The brackets are escaped: Rich would otherwise
+        read them as the markup that surrounds them.
+        """
+        if not self._show_closed:
+            return r"[@click=app.toggle_closed]show \[c]losed[/]"
+        finished = sum(1 for session in self._visible if session.status is Status.CLOSED)
+        return rf"[@click=app.toggle_closed]{finished} \[c]losed[/]"
 
 
 def run(
@@ -859,9 +899,18 @@ def run(
     interval: float | None = None,
     terminal: Terminal | None = None,
     include_closed: bool | None = None,
+    settings: Settings | None = None,
+    reader: Reader | None = None,
 ) -> None:
     """Launch the fleet overseer and block until the user quits.
 
     Anything left unset falls back to the saved settings, which the overseer can edit.
     """
-    FleetApp(loader=loader, interval=interval, terminal=terminal, include_closed=include_closed).run()
+    FleetApp(
+        loader=loader,
+        interval=interval,
+        terminal=terminal,
+        include_closed=include_closed,
+        settings=settings,
+        reader=reader,
+    ).run()

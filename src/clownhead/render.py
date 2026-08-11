@@ -150,6 +150,10 @@ def build_rows(sessions: Iterable[Session], moment: datetime) -> list[Row]:
 def describe(session: Session, now: datetime | None = None, terminal: str | None = None) -> str:
     """Render the facts about one session, as Rich markup lines.
 
+    The resume command is not among them. It is the longest thing the board prints and the
+    only line here that wraps, and it is already a keystroke away — `y` copies it, and
+    ``ls --columns resume`` prints it — so a pane read at a glance is where it earns least.
+
     Values are escaped rather than trusted: a path may contain square brackets, which
     Rich would otherwise read as markup and swallow.
     """
@@ -175,7 +179,6 @@ def describe(session: Session, now: datetime | None = None, terminal: str | None
         ("where", str(session.cwd) if session.cwd.exists() else f"{session.cwd} (gone)"),
         ("process", process or "gone"),
         ("timing", timing),
-        ("resume", resume_shell_command(session)),
     )
     header = f"[bold]{escape(session.label)}[/]  [{style}]{escape(session.reason)}[/]"
     body = "\n".join(f"[dim]{label:<8}[/]{escape(value)}" for label, value in rows)

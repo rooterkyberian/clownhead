@@ -35,6 +35,7 @@ Issues = "https://github.com/rooterkyberian/clownhead/issues"
 
 [project.scripts]
 clownhead = "clownhead.cli:main"
+clownhead-demo = "clownhead.demo:main"
 
 [dependency-groups]
 dev = [

@@ -34,3 +34,7 @@ depends = ["lint", "typecheck", "test"]
 [tasks.build]
 description = "Build the sdist and wheel"
 run = "uv build"
+
+[tasks.demo]
+description = "Re-record the README demo GIF with vhs"
+run = ["uv sync", "vhs docs/demo.tape"]
