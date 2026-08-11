@@ -5,7 +5,7 @@ build-backend = "uv_build"
 [project]
 name = "clownhead"
 version = "0.3.0"
-description = "Overseer for local Claude Code sessions: status board, terminal attention signals, and reboot-survivable snapshots."
+description = "Overseer for local Claude Code sessions: status board, terminal attention signals, and a way back into whichever one is waiting on you."
 readme = "README.md"
 requires-python = ">=3.12"
 license = "MIT"
