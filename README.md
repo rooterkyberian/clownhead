@@ -127,12 +127,12 @@ loses nothing, and `claude --resume <id>` in the original directory brings the c
 back. `y` in the overseer puts that command for the selected session on the clipboard,
 `cd` included.
 
-A worktree session records the worktree itself as its directory, so while that worktree
-stands the `cd` lands inside it. Worktrees get pruned, though — a fifth of the closed
-sessions on the machine this was built on point at one that is gone — and a `cd` into a
-directory that no longer exists fails before `claude` is ever reached. Those sessions
-resume from the repository that owned the worktree, with `--worktree <name>` to put it
-back. Any other missing directory keeps its failing `cd` on purpose: resuming a session
+A worktree session records the worktree itself as its directory, but `--worktree <name>`
+from the owning repository is how Claude Code enters one: it attaches to the worktree that
+still stands and rebuilds the one that has been pruned. Worktree sessions therefore resume
+from the repository, `cd` included, which matters more than it sounds — worktrees get
+pruned, and a fifth of the closed sessions on the machine this was built on point at one
+that is gone. Any other missing directory keeps its failing `cd` on purpose: resuming a session
 somewhere else would hand it a working directory full of the wrong project, and a command
 that stops is easier to recover from than one that quietly does the wrong thing.
 

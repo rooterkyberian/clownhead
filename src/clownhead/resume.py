@@ -15,18 +15,17 @@ from clownhead.models import Session, split_worktree
 def resume_plan(session: Session) -> tuple[Path, list[str]]:
     """Where to resume a session from, and the command that does it.
 
-    A worktree is often gone by the time you come back to it — Claude Code prunes them —
-    and a ``cd`` into a directory that no longer exists fails before ``claude`` is ever
-    reached. Such a session is resumed from the repository that owned the worktree, with
-    ``--worktree`` to put the worktree back.
+    A worktree session records the worktree itself as its directory, but ``--worktree``
+    from the owning repository is how Claude Code enters one: it attaches to the worktree
+    that still stands and rebuilds the one that has been pruned. Worktree sessions
+    therefore always resume from the repository, and a worktree disappearing between
+    sessions changes nothing about the command.
 
     Any other missing directory keeps its ``cd`` and the failure that comes with it.
     Resuming a session somewhere other than where it belongs would hand it a working
     directory full of the wrong project, which is worse than a command that stops.
     """
     argv = ["claude", "--resume", session.session_id]
-    if session.cwd.exists():
-        return session.cwd, argv
     repo, worktree = split_worktree(session.cwd)
     if worktree and repo.exists():
         return repo, [*argv, "--worktree", worktree]

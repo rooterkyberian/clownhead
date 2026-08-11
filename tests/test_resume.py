@@ -23,13 +23,12 @@ def test_resume_shell_command_returns_to_the_original_directory(tmp_path):
     assert resume_shell_command(session(tmp_path)) == f"(cd {tmp_path} && claude --resume a-b)"
 
 
-def test_resume_lands_inside_a_live_worktree(tmp_path):
+def test_resume_re_enters_a_live_worktree_from_its_repository(tmp_path):
     cwd = worktree(tmp_path)
 
     command = resume_shell_command(session(cwd))
 
-    assert command == f"(cd {cwd} && claude --resume a-b)"
-    assert "--worktree" not in command
+    assert command == f"(cd {tmp_path} && claude --resume a-b --worktree dbx-spot)"
 
 
 def test_resume_rebuilds_a_worktree_that_has_been_pruned(tmp_path):
