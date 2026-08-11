@@ -37,7 +37,9 @@ whichever session the cursor is on, with the facts the columns have no room for:
 id and path, the process and terminal it belongs to, and the command that brings it back.
 
 `→` opens that session's conversation beside the fleet and `←` closes it, which is usually
-the fastest way to tell what a session is actually doing. Clicking a row does the same, so
+the fastest way to tell what a session is actually doing. It opens on the newest turn and
+takes the arrow keys while it is up, so `↑` and `↓` read back through it rather than moving
+the fleet cursor; `←` hands them back. Clicking a row does the same, so
 reaching for the mouse reads a session rather than interrupting it. `f` focuses its
 terminal: attention, then the window brought to the front. `c` folds in
 sessions that have already ended; `y` copies its resume command; `r` renames it; `t` asks
@@ -134,6 +136,11 @@ transcript, never the whole file — they run to megabytes and only the end is e
 Tool calls, their results, thinking and harness-injected turns are dropped, and a run of
 turns by one speaker collapses to its last: Claude narrates between tool calls, so an
 unfiltered tail is all its own voice and no conversation at all.
+
+Each turn is headed by who said it and how long ago, which is what tells a conversation
+that stopped mid-question from one that stopped after an answer. Turns are stacked without
+a blank line between them, since that header already parts one from the next and the panel
+is a narrow column; `code` and **bold** are rendered rather than left as punctuation.
 
 **Settings.** `,` opens them, changes apply live, and they persist to
 `settings.json` under the state directory. They cover the columns the board shows, the refresh

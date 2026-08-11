@@ -414,6 +414,22 @@ def test_recent_messages_returns_the_tail_of_the_conversation(tmp_path):
     ]
 
 
+def test_recent_messages_carry_the_time_each_turn_was_said(tmp_path):
+    conversation(
+        tmp_path,
+        "a-b",
+        [
+            said("user", "first", timestamp="2026-05-01T09:04:00.000Z"),
+            said("assistant", "second"),
+        ],
+    )
+
+    messages = discovery.recent_messages("a-b", root=tmp_path)
+
+    assert messages[0].at == datetime(2026, 5, 1, 9, 4, tzinfo=UTC)
+    assert messages[1].at is None
+
+
 def test_recent_messages_skips_tool_traffic_and_thinking(tmp_path):
     conversation(
         tmp_path,

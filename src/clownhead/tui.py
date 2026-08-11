@@ -91,6 +91,19 @@ class FleetTable(DataTable[Any]):
         self.post_message(self.RowClicked())
 
 
+class HistoryPanel(VerticalScroll):
+    """The conversation beside the fleet, which takes the keyboard while it is open.
+
+    A conversation is longer than the panel it is read in, so the arrow keys have to move
+    through it rather than through the fleet — which means focus, since that is the only
+    thing that decides where a key lands. ``ScrollableContainer`` spends left and right on
+    horizontal scrolling there is none of, so `←` is bought back for closing the panel,
+    the same trade the fleet table makes for opening it.
+    """
+
+    BINDINGS = [Binding("left", "app.close_history", "close", show=False)]
+
+
 class ConfirmScreen(ModalScreen[bool]):
     """A question that has to be answered before something irreversible happens."""
 
@@ -302,6 +315,9 @@ class FleetApp(App[None]):
         border-left: solid $panel;
         padding: 0 1;
     }
+    #history:focus {
+        border-left: solid $accent;
+    }
     #details {
         height: auto;
         padding: 0 1;
@@ -363,7 +379,7 @@ class FleetApp(App[None]):
             yield Static(f"⟳ {format_duration(timedelta(seconds=self._interval))}", id="tick")
         with Horizontal(id="board"):
             yield FleetTable(id="fleet", cursor_type="row", zebra_stripes=True)
-            with VerticalScroll(id="history"):
+            with HistoryPanel(id="history"):
                 yield Static(id="history-body")
         yield Static(id="details")
         yield Input(placeholder="filter sessions", id="filter")
@@ -417,13 +433,15 @@ class FleetApp(App[None]):
         self.notify(f"{result.label}: {result.detail}", severity=severity)
 
     def action_history(self) -> None:
-        """Open the conversation of the selected session beside the fleet."""
+        """Open the conversation of the selected session beside the fleet, and read it."""
         session = self.selected_session
         if session is None:
             self.notify("nothing selected", severity="warning")
             return
-        self.query_one("#history").display = True
+        panel = self.query_one("#history", HistoryPanel)
+        panel.display = True
         self.query_one("#history-body", Static).update("[dim]reading transcript…[/]")
+        panel.focus()
         self._load_history(session.session_id)
 
     def action_close_history(self) -> None:
@@ -643,8 +661,11 @@ class FleetApp(App[None]):
         session_id, messages = loaded
         self._previews[session_id] = messages
         session = self.selected_session
-        if session is not None and session.session_id == session_id:
-            self.query_one("#history-body", Static).update(conversation(messages))
+        if session is None or session.session_id != session_id:
+            return
+        self.query_one("#history-body", Static).update(conversation(messages))
+        panel = self.query_one("#history", HistoryPanel)
+        self.call_after_refresh(panel.scroll_end, animate=False)
 
     def _summary(self) -> str:
         if self._failure:

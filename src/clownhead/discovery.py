@@ -60,10 +60,15 @@ class Process:
 
 @dataclass(frozen=True)
 class Message:
-    """One thing said in a session, by the human or by Claude."""
+    """One thing said in a session, by the human or by Claude.
+
+    A turn the transcript did not date carries no time rather than a guessed one: the
+    file is append-only, so its age would answer for every turn in it at once.
+    """
 
     role: str
     text: str
+    at: datetime | None = None
 
 
 def claude_binary() -> str:
@@ -423,7 +428,7 @@ def _messages_in(lines: Iterable[str]) -> list[Message]:
             continue
         text = _spoken_text((entry.get("message") or {}).get("content"))
         if text and not INJECTED_MESSAGE.match(text):
-            messages.append(Message(role=role, text=text))
+            messages.append(Message(role=role, text=text, at=_parse_timestamp(entry.get("timestamp"))))
     return messages
 
 

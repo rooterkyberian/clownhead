@@ -218,6 +218,63 @@ async def test_tui_right_arrow_opens_the_conversation_beside_the_fleet(monkeypat
         assert "Enter opens it beside the fleet." in history_of(app)
 
 
+def long_history() -> list[Message]:
+    return [Message(role="user" if turn % 2 else "assistant", text=f"turn {turn}") for turn in range(40)]
+
+
+def history_panel(app: FleetApp) -> tui_module.HistoryPanel:
+    return app.query_one("#history", tui_module.HistoryPanel)
+
+
+async def test_tui_history_opens_on_the_newest_turn(monkeypatch):
+    monkeypatch.setattr(tui_module, "recent_messages", lambda session_id, limit: long_history())
+    app = build_app()
+
+    async with app.run_test() as pilot:
+        await settle(app, pilot)
+        await pilot.press("right")
+        await settle(app, pilot)
+
+        assert history_panel(app).has_focus
+        assert history_panel(app).scroll_offset.y > 0
+
+
+async def test_tui_arrows_scroll_the_open_conversation_instead_of_the_fleet(monkeypatch):
+    monkeypatch.setattr(tui_module, "recent_messages", lambda session_id, limit: long_history())
+    app = build_app()
+
+    async with app.run_test() as pilot:
+        await settle(app, pilot)
+        await pilot.press("right")
+        await settle(app, pilot)
+        bottom = history_panel(app).scroll_offset.y
+        selected = app.selected_session
+
+        await pilot.press("up")
+        await pilot.pause()
+
+        assert history_panel(app).scroll_offset.y < bottom
+        assert selected is not None
+        assert app.selected_session is not None
+        assert app.selected_session.session_id == selected.session_id
+
+
+async def test_tui_closing_the_conversation_hands_the_arrows_back(monkeypatch):
+    monkeypatch.setattr(tui_module, "recent_messages", lambda session_id, limit: long_history())
+    app = build_app()
+
+    async with app.run_test() as pilot:
+        await settle(app, pilot)
+        await pilot.press("right")
+        await settle(app, pilot)
+        await pilot.press("left")
+        await pilot.press("down")
+
+        assert table_of(app).has_focus
+        assert app.selected_session is not None
+        assert app.selected_session.name == "web-platform-1d"
+
+
 async def test_tui_clicking_a_row_reads_it_and_leaves_its_terminal_alone(monkeypatch):
     monkeypatch.setattr(tui_module, "recent_messages", lambda session_id, limit: [])
     terminal = SilentTerminal()

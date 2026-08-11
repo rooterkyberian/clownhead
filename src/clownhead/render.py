@@ -12,6 +12,7 @@ one session under the cursor.
 
 from __future__ import annotations
 
+import re
 from collections.abc import Iterable, Sequence
 from dataclasses import dataclass
 from datetime import UTC, datetime, timedelta
@@ -36,6 +37,10 @@ STATUS_STYLES: dict[Status, str] = {
 }
 
 SPEAKERS = {"user": "you", "assistant": "claude"}
+SPEAKER_STYLES = {"user": "bold", "assistant": "bold cyan"}
+
+CODE_SPAN = re.compile(r"`([^`\n]+)`")
+STRONG = re.compile(r"\*\*([^*\n]+)\*\*")
 
 NARROW_WIDTH = 100
 DEFAULT_WIDTH = 160
@@ -149,14 +154,40 @@ def describe(session: Session, now: datetime | None = None, terminal: str | None
     return f"{header}\n{body}"
 
 
-def conversation(messages: Iterable[Message]) -> str:
+def conversation(messages: Iterable[Message], now: datetime | None = None) -> str:
     """Render a session's recent turns, newest last, as Rich markup.
 
     A transcript will sooner or later contain anything at all, so every turn is escaped
     before Rich sees it.
+
+    Turns are stacked without a blank line between them. The panel is a narrow column
+    beside the fleet, and a line naming the speaker and how long ago they said it already
+    parts one turn from the next; spacing them as well costs a third of the panel to say
+    the same thing again.
     """
-    turns = [f"[bold]{SPEAKERS.get(message.role, message.role)}[/]\n{escape(message.text)}\n" for message in messages]
+    moment = now or datetime.now(tz=UTC)
+    turns = [f"{_attribution(message, moment)}\n{_spoken(message.text)}" for message in messages]
     return "\n".join(turns) if turns else "[dim]nothing said yet[/]"
+
+
+def _attribution(message: Message, moment: datetime) -> str:
+    speaker = SPEAKERS.get(message.role, message.role)
+    style = SPEAKER_STYLES.get(message.role, "bold")
+    if message.at is None:
+        return f"[{style}]{speaker}[/]"
+    said = max(moment - message.at, timedelta(0))
+    return f"[{style}]{speaker}[/] [dim]{format_duration(said)} ago[/]"
+
+
+def _spoken(text: str) -> str:
+    """Escape a turn and pick the spans back out that a reader's eye should land on.
+
+    Escaping first is what makes the substitutions safe: everything Rich would have read
+    as markup is inert by the time the only markup in the string is the markup put there
+    here.
+    """
+    marked = CODE_SPAN.sub(r"[cyan]\1[/]", escape(text))
+    return STRONG.sub(r"[bold]\1[/]", marked)
 
 
 def _column_width(header: str, values: Sequence[str], cap: int | None = None) -> int:

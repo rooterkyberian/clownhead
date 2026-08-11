@@ -233,14 +233,68 @@ def test_conversation_names_both_speakers():
         Message(role="assistant", text="Enter opens the conversation beside the fleet."),
     ]
 
-    turns = visible(conversation(messages))
+    turns = visible(conversation(messages, now=NOW))
 
     assert "you\nshow history in detail view" in turns
     assert "claude\nEnter opens the conversation beside the fleet." in turns
 
 
+def test_conversation_dates_each_turn():
+    messages = [
+        Message(role="user", text="squash them", at=NOW - timedelta(hours=3)),
+        Message(role="assistant", text="squashed", at=NOW - timedelta(minutes=4)),
+    ]
+
+    turns = visible(conversation(messages, now=NOW))
+
+    assert "you 3h ago" in turns
+    assert "claude 4m ago" in turns
+
+
+def test_conversation_leaves_an_undated_turn_undated():
+    turns = visible(conversation([Message(role="user", text="squash them")], now=NOW))
+
+    assert turns == "you\nsquash them"
+
+
+def test_conversation_reads_a_turn_from_the_future_as_just_said():
+    messages = [Message(role="assistant", text="squashed", at=NOW + timedelta(minutes=9))]
+
+    assert "claude 0s ago" in visible(conversation(messages, now=NOW))
+
+
+def test_conversation_spends_no_blank_lines_between_turns():
+    messages = [
+        Message(role="user", text="squash them"),
+        Message(role="assistant", text="squashed"),
+    ]
+
+    assert visible(conversation(messages, now=NOW)) == "you\nsquash them\nclaude\nsquashed"
+
+
+@pytest.mark.parametrize(
+    ("text", "marked"),
+    [
+        ("run `mise run check` first", "[cyan]mise run check[/]"),
+        ("that is **the** point", "[bold]the[/]"),
+    ],
+)
+def test_conversation_picks_out_the_marked_up_spans(text, marked):
+    rendered = conversation([Message(role="user", text=text)], now=NOW)
+
+    assert marked in rendered
+    assert "`" not in rendered
+    assert "**" not in rendered
+
+
 def test_conversation_escapes_markup():
-    assert r"\[bold]red\[/]" in conversation([Message(role="user", text="use [bold]red[/] here")])
+    assert r"\[bold]red\[/]" in conversation([Message(role="user", text="use [bold]red[/] here")], now=NOW)
+
+
+def test_conversation_escapes_markup_inside_a_marked_span():
+    rendered = conversation([Message(role="user", text="run `claude [bold]--resume[/]`")], now=NOW)
+
+    assert r"[cyan]claude \[bold]--resume\[/][/]" in rendered
 
 
 def test_conversation_with_nothing_said():
