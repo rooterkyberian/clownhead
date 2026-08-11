@@ -160,51 +160,6 @@ def test_reset_self_hands_the_tab_back(own_tty):
     assert terminal.calls == [(str(own_tty), "\033]6;1;bg;*;default\a")]
 
 
-def test_close_tab_asks_the_terminal_to_close_the_split():
-    class ClosingTerminal(RecordingTerminal):
-        def __init__(self):
-            super().__init__()
-            self.closed: list[Path] = []
-
-        def close_tab(self, tty: Path) -> None:
-            self.closed.append(tty)
-
-    terminal = ClosingTerminal()
-
-    result = attention.close_tab(session(Status.CLOSED), terminal)
-
-    assert result.delivered is True
-    assert terminal.closed == [TTY]
-
-
-def test_close_tab_skips_a_terminal_that_cannot_close_one():
-    terminal = PlainTerminal()
-
-    result = attention.close_tab(session(Status.CLOSED), terminal)
-
-    assert result.delivered is False
-    assert "cannot close a tab" in result.detail
-    assert terminal.written == []
-
-
-def test_close_tab_skips_a_session_without_a_tty():
-    result = attention.close_tab(session(Status.CLOSED, tty=None), RecordingTerminal())
-
-    assert result.delivered is False
-    assert result.detail == "no tty"
-
-
-def test_close_tab_reports_a_refusal_without_raising():
-    class RefusingTerminal(RecordingTerminal):
-        def close_tab(self, tty: Path) -> None:
-            raise OSError("Not authorised to send Apple events")
-
-    result = attention.close_tab(session(Status.CLOSED), RefusingTerminal())
-
-    assert result.delivered is False
-    assert "Apple events" in result.detail
-
-
 def test_reset_clears_every_tab():
     terminal = RecordingTerminal()
 

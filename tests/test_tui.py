@@ -8,8 +8,7 @@ from textual.widgets import DataTable, Input, Static, Switch
 
 from clownhead import settings as settings_store
 from clownhead import tui as tui_module
-from clownhead.attention import SignalResult
-from clownhead.discovery import Message
+from clownhead.discovery import Message, Process
 from clownhead.models import Session, Status
 from clownhead.settings import Settings
 from clownhead.terminal import ITerm2Terminal
@@ -22,6 +21,14 @@ CLEARED = "\033]6;1;bg;*;default\a"
 @pytest.fixture(autouse=True)
 def silent_pasteboard(monkeypatch):
     monkeypatch.setattr(tui_module, "copy_to_pasteboard", lambda text: True)
+
+
+@pytest.fixture(autouse=True)
+def process_snapshot(monkeypatch) -> dict[int, Process]:
+    """The process table the overseer reads before it signals anything, in place of ``ps``."""
+    snapshot = {77730: Process(pid=77730, ppid=55997, tty=Path("/dev/ttys004"), command="claude --resume")}
+    monkeypatch.setattr(tui_module, "process_table", lambda: snapshot)
+    return snapshot
 
 
 @pytest.fixture(autouse=True)
@@ -744,7 +751,7 @@ async def test_tui_copy_resume_on_an_empty_fleet_copies_nothing(monkeypatch):
 
 async def test_tui_terminate_asks_before_signalling_anything(monkeypatch):
     killed: list[str] = []
-    monkeypatch.setattr(tui_module, "terminate", lambda session: killed.append(session.label))
+    monkeypatch.setattr(tui_module, "terminate", lambda session, processes: killed.append(session.label))
     app = build_app()
 
     async with app.run_test() as pilot:
@@ -758,7 +765,7 @@ async def test_tui_terminate_asks_before_signalling_anything(monkeypatch):
 
 async def test_tui_terminate_signals_the_session_once_confirmed(monkeypatch):
     killed: list[str] = []
-    monkeypatch.setattr(tui_module, "terminate", lambda session: killed.append(session.label))
+    monkeypatch.setattr(tui_module, "terminate", lambda session, processes: killed.append(session.label))
     app = build_app()
 
     async with app.run_test() as pilot:
@@ -774,7 +781,7 @@ async def test_tui_terminate_signals_the_session_once_confirmed(monkeypatch):
 @pytest.mark.parametrize("key", ["escape", "n"])
 async def test_tui_terminate_is_dropped_when_the_question_is_declined(monkeypatch, key):
     killed: list[str] = []
-    monkeypatch.setattr(tui_module, "terminate", lambda session: killed.append(session.label))
+    monkeypatch.setattr(tui_module, "terminate", lambda session, processes: killed.append(session.label))
     app = build_app()
 
     async with app.run_test() as pilot:
@@ -788,7 +795,7 @@ async def test_tui_terminate_is_dropped_when_the_question_is_declined(monkeypatc
 
 
 async def test_tui_terminate_reports_a_refusal(monkeypatch):
-    def refuse(session):
+    def refuse(session, processes):
         raise LookupError("pid 77730 is gone")
 
     monkeypatch.setattr(tui_module, "terminate", refuse)
@@ -805,7 +812,7 @@ async def test_tui_terminate_reports_a_refusal(monkeypatch):
 
 
 async def test_tui_terminate_on_an_empty_fleet_asks_nothing(monkeypatch):
-    monkeypatch.setattr(tui_module, "terminate", lambda session: pytest.fail("must not signal"))
+    monkeypatch.setattr(tui_module, "terminate", lambda session, processes: pytest.fail("must not signal"))
     app = build_app(sessions=[])
 
     async with app.run_test() as pilot:
@@ -816,11 +823,14 @@ async def test_tui_terminate_on_an_empty_fleet_asks_nothing(monkeypatch):
         assert not isinstance(app.screen, tui_module.ConfirmScreen)
 
 
+SHELL = Process(pid=55997, ppid=55996, tty=Path("/dev/ttys004"), command="-zsh")
+
+
 async def test_tui_terminate_leaves_the_tab_alone_by_default(monkeypatch):
-    monkeypatch.setattr(tui_module, "terminate", lambda session: None)
+    monkeypatch.setattr(tui_module, "terminate", lambda session, processes: None)
     monkeypatch.setattr(tui_module, "wait_for_exit", lambda pid: pytest.fail("must not wait"))
-    closed: list[str] = []
-    monkeypatch.setattr(tui_module.attention, "close_tab", lambda session, terminal: closed.append(session.label))
+    hung_up: list[int] = []
+    monkeypatch.setattr(tui_module, "close_tab", lambda shell: hung_up.append(shell.pid))
     app = build_app()
 
     async with app.run_test() as pilot:
@@ -830,19 +840,16 @@ async def test_tui_terminate_leaves_the_tab_alone_by_default(monkeypatch):
         await pilot.press("y")
         await settle(app, pilot)
 
-        assert closed == []
+        assert hung_up == []
 
 
-async def test_tui_terminate_closes_the_tab_once_the_session_has_gone(monkeypatch):
+async def test_tui_terminate_hangs_up_the_shell_once_the_session_has_gone(monkeypatch):
     waited: list[int] = []
-    closed: list[str] = []
-    monkeypatch.setattr(tui_module, "terminate", lambda session: None)
+    hung_up: list[int] = []
+    monkeypatch.setattr(tui_module, "terminate", lambda session, processes: None)
+    monkeypatch.setattr(tui_module, "shell_of", lambda session, processes: SHELL)
     monkeypatch.setattr(tui_module, "wait_for_exit", lambda pid: waited.append(pid) or True)
-    monkeypatch.setattr(
-        tui_module.attention,
-        "close_tab",
-        lambda session, terminal: closed.append(session.label) or SignalResult(session.label, None, True, "tab closed"),
-    )
+    monkeypatch.setattr(tui_module, "close_tab", lambda shell: hung_up.append(shell.pid))
     app = build_app(settings=Settings(close_tab_on_terminate=True, paint_tabs=False))
 
     async with app.run_test() as pilot:
@@ -853,13 +860,32 @@ async def test_tui_terminate_closes_the_tab_once_the_session_has_gone(monkeypatc
         await settle(app, pilot)
 
         assert waited == [77730]
-        assert closed == ["payments-api-7c"]
+        assert hung_up == [55997]
+
+
+async def test_tui_traces_the_shell_before_the_session_is_signalled(monkeypatch, process_snapshot):
+    traced: list[dict] = []
+    monkeypatch.setattr(tui_module, "terminate", lambda session, processes: None)
+    monkeypatch.setattr(tui_module, "shell_of", lambda session, processes: traced.append(processes) or SHELL)
+    monkeypatch.setattr(tui_module, "wait_for_exit", lambda pid: True)
+    monkeypatch.setattr(tui_module, "close_tab", lambda shell: None)
+    app = build_app(settings=Settings(close_tab_on_terminate=True, paint_tabs=False))
+
+    async with app.run_test() as pilot:
+        await settle(app, pilot)
+        await pilot.press("t")
+        await pilot.pause()
+        await pilot.press("y")
+        await settle(app, pilot)
+
+        assert traced == [process_snapshot]
 
 
 async def test_tui_keeps_the_tab_of_a_session_that_outlasts_the_wait(monkeypatch):
-    monkeypatch.setattr(tui_module, "terminate", lambda session: None)
+    monkeypatch.setattr(tui_module, "terminate", lambda session, processes: None)
+    monkeypatch.setattr(tui_module, "shell_of", lambda session, processes: SHELL)
     monkeypatch.setattr(tui_module, "wait_for_exit", lambda pid: False)
-    monkeypatch.setattr(tui_module.attention, "close_tab", lambda session, terminal: pytest.fail("must not close"))
+    monkeypatch.setattr(tui_module, "close_tab", lambda shell: pytest.fail("must not close"))
     app = build_app(settings=Settings(close_tab_on_terminate=True, paint_tabs=False))
 
     async with app.run_test() as pilot:
@@ -872,8 +898,49 @@ async def test_tui_keeps_the_tab_of_a_session_that_outlasts_the_wait(monkeypatch
         assert [notification.title for notification in app._notifications][-1] == "tab left open"
 
 
+async def test_tui_keeps_the_tab_of_a_session_with_no_shell_of_its_own(monkeypatch):
+    def untraceable(session, processes):
+        raise LookupError("payments-api-7c has no tab of its own to close")
+
+    monkeypatch.setattr(tui_module, "terminate", lambda session, processes: None)
+    monkeypatch.setattr(tui_module, "shell_of", untraceable)
+    monkeypatch.setattr(tui_module, "wait_for_exit", lambda pid: pytest.fail("must not wait"))
+    monkeypatch.setattr(tui_module, "close_tab", lambda shell: pytest.fail("must not close"))
+    app = build_app(settings=Settings(close_tab_on_terminate=True, paint_tabs=False))
+
+    async with app.run_test() as pilot:
+        await settle(app, pilot)
+        await pilot.press("t")
+        await pilot.pause()
+        await pilot.press("y")
+        await settle(app, pilot)
+
+        assert [notification.title for notification in app._notifications][-1] == "tab left open"
+        assert "no tab of its own" in [notification.message for notification in app._notifications][-1]
+
+
+async def test_tui_reports_a_shell_that_would_not_hang_up(monkeypatch):
+    def refuse(shell):
+        raise LookupError("the shell on /dev/ttys004 is gone")
+
+    monkeypatch.setattr(tui_module, "terminate", lambda session, processes: None)
+    monkeypatch.setattr(tui_module, "shell_of", lambda session, processes: SHELL)
+    monkeypatch.setattr(tui_module, "wait_for_exit", lambda pid: True)
+    monkeypatch.setattr(tui_module, "close_tab", refuse)
+    app = build_app(settings=Settings(close_tab_on_terminate=True, paint_tabs=False))
+
+    async with app.run_test() as pilot:
+        await settle(app, pilot)
+        await pilot.press("t")
+        await pilot.pause()
+        await pilot.press("y")
+        await settle(app, pilot)
+
+        assert "the shell on /dev/ttys004 is gone" in [note.message for note in app._notifications][-1]
+
+
 async def test_tui_terminate_says_the_tab_will_close_before_asking(monkeypatch):
-    monkeypatch.setattr(tui_module, "terminate", lambda session: pytest.fail("must not signal"))
+    monkeypatch.setattr(tui_module, "terminate", lambda session, processes: pytest.fail("must not signal"))
     app = build_app(settings=Settings(close_tab_on_terminate=True, paint_tabs=False))
 
     async with app.run_test() as pilot:

@@ -165,13 +165,13 @@ place.
 
 Terminating a session leaves its terminal sitting at a shell prompt, which is a tab to
 close by hand for every session ended. The settings can close it instead, off by default
-since a closed tab takes its scrollback with it. It closes only once the process is
-actually gone: SIGTERM is a request, and a tab closed while Claude Code was still writing
-its transcript would take away the thing that makes the session resumable — a session that
-outlasts the wait keeps its tab and says so. iTerm2 is the only emulator that can be asked;
-no escape code closes a tab, so it goes through AppleScript, which is also why what closes
-is the split the session was running in rather than the whole tab. iTerm2 closes the tab
-itself once the last split in it is gone, and the panes beside it were never asked about.
+since a closed tab takes its scrollback with it. It waits for the session to actually
+exit — a tab closed mid-transcript would take away what makes the session resumable — and
+then hangs up the shell the tab was opened with, which is what a terminal does when its
+window is closed. Nothing is asked of the emulator, so an IDE's embedded terminal closes
+as readily as iTerm2. A session under tmux closes its pane rather than the tab around it,
+and one started from inside another session is left alone rather than closing a tab that
+is not its own.
 
 **Renaming.** Claude Code names a session after its directory with a couple of hex digits
 on the end — `web-platform-1d`, and a second one in the same tree is `web-platform-0b`.

@@ -93,6 +93,70 @@ def test_terminate_accepts_a_versioned_claude_binary(monkeypatch):
     assert signalled == [(77730, signal.SIGTERM)]
 
 
+def tab(pid: int = 77730) -> dict[int, Process]:
+    tty = Path("/dev/ttys004")
+    return {
+        pid: Process(pid=pid, ppid=55997, tty=tty, command="claude --resume"),
+        55997: Process(pid=55997, ppid=55996, tty=tty, command="-zsh"),
+        55996: Process(pid=55996, ppid=1123, tty=tty, command="login -fp maciej"),
+    }
+
+
+def test_shell_of_finds_the_shell_that_owns_the_tab():
+    assert control.shell_of(session(), tab()) == tab()[55997]
+
+
+def test_shell_of_refuses_a_session_with_no_process():
+    with pytest.raises(LookupError, match="no process"):
+        control.shell_of(session(pid=None), tab())
+
+
+def test_shell_of_refuses_a_session_with_no_tab_of_its_own():
+    with pytest.raises(LookupError, match="no tab of its own"):
+        control.shell_of(session(), table())
+
+
+def test_shell_of_reads_the_live_process_table_when_none_is_given(monkeypatch):
+    monkeypatch.setattr(control, "process_table", tab)
+
+    assert control.shell_of(session()).pid == 55997
+
+
+def test_close_tab_hangs_up_the_shell(monkeypatch):
+    signalled: list[tuple[int, int]] = []
+    monkeypatch.setattr(control.os, "kill", lambda pid, sig: signalled.append((pid, sig)))
+    processes = tab()
+
+    control.close_tab(processes[55997], processes)
+
+    assert signalled == [(55997, signal.SIGHUP)]
+
+
+def test_close_tab_refuses_a_shell_that_has_gone(monkeypatch):
+    monkeypatch.setattr(control.os, "kill", lambda pid, sig: pytest.fail("must not signal"))
+
+    with pytest.raises(LookupError, match="gone"):
+        control.close_tab(tab()[55997], {})
+
+
+def test_close_tab_refuses_a_process_id_that_has_been_reused(monkeypatch):
+    monkeypatch.setattr(control.os, "kill", lambda pid, sig: pytest.fail("must not signal"))
+    recycled = {55997: Process(pid=55997, ppid=1, tty=Path("/dev/ttys009"), command="-zsh")}
+
+    with pytest.raises(LookupError, match="gone"):
+        control.close_tab(tab()[55997], recycled)
+
+
+def test_close_tab_reads_the_live_process_table_when_none_is_given(monkeypatch):
+    monkeypatch.setattr(control, "process_table", tab)
+    signalled: list[tuple[int, int]] = []
+    monkeypatch.setattr(control.os, "kill", lambda pid, sig: signalled.append((pid, sig)))
+
+    control.close_tab(tab()[55997])
+
+    assert signalled == [(55997, signal.SIGHUP)]
+
+
 def test_rename_sends_a_control_message_naming_the_session(monkeypatch, listener):
     path, delivered = listener
     monkeypatch.setattr(control, "messaging_socket", lambda session_id, registry=None: path)

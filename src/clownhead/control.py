@@ -1,4 +1,4 @@
-"""Acting on a session itself — ending it, renaming it — as opposed to signalling its terminal."""
+"""Acting on a session's processes — ending one, closing the tab it leaves, renaming it."""
 
 from __future__ import annotations
 
@@ -11,10 +11,9 @@ from collections.abc import Mapping
 from pathlib import Path
 from typing import Any
 
-from clownhead.discovery import Process, messaging_socket, process_table
+from clownhead.discovery import Process, is_claude, messaging_socket, owning_shell, process_table
 from clownhead.models import Session
 
-CLAUDE_COMMAND = "claude"
 CONTROL_TIMEOUT = 2.0
 EXIT_TIMEOUT = 10.0
 EXIT_POLL = 0.2
@@ -42,7 +41,7 @@ def terminate(session: Session, processes: Mapping[int, Process] | None = None) 
     process = table.get(session.pid)
     if process is None:
         raise LookupError(f"pid {session.pid} is gone")
-    if CLAUDE_COMMAND not in process.command:
+    if not is_claude(process.command):
         raise LookupError(f"pid {session.pid} is no longer {session.label}")
     os.kill(session.pid, signal.SIGTERM)
 
@@ -70,6 +69,49 @@ def wait_for_exit(pid: int, timeout: float = EXIT_TIMEOUT, poll: float = EXIT_PO
         if time.monotonic() >= deadline:
             return False
         time.sleep(poll)
+
+
+def shell_of(session: Session, processes: Mapping[int, Process] | None = None) -> Process:
+    """The shell whose exit closes the tab a session is running in.
+
+    Asked for while the session is still there: once it has exited, its row is out of the
+    process table and the trail from it up to its shell has gone with it.
+
+    Raises:
+        LookupError: the session has no tab of its own to close.
+    """
+    if session.pid is None:
+        raise LookupError(f"{session.label} has no process to trace")
+    table = processes if processes is not None else process_table()
+    shell = owning_shell(session.pid, table)
+    if shell is None:
+        raise LookupError(f"{session.label} has no tab of its own to close")
+    return shell
+
+
+def close_tab(shell: Process, processes: Mapping[int, Process] | None = None) -> None:
+    """Close the tab a session was running in, by hanging up the shell that owns it.
+
+    SIGHUP rather than SIGTERM, and not because SIGHUP is the harsher of the two: an
+    interactive shell ignores SIGTERM, so that a stray ``kill`` aimed at a job cannot take
+    the prompt down with it. SIGHUP is the signal that says the terminal has gone away,
+    which is what a shell is built to answer — it is what the emulator itself sends when a
+    window is closed — and the emulator closes the tab of its own accord once nothing is
+    left holding the pty open. Whether it does is the emulator's to decide: one that keeps
+    a tab whose shell did not exit cleanly keeps this one, and there is nothing else to ask.
+
+    The shell is looked up again first, for the reason :func:`terminate` looks a session up:
+    it was resolved before the session was asked to exit, and a process id freed in the
+    meantime may since have been handed to something else.
+
+    Raises:
+        LookupError: the shell is gone, or that process id is no longer it.
+        OSError: the signal could not be delivered.
+    """
+    table = processes if processes is not None else process_table()
+    if table.get(shell.pid) != shell:
+        raise LookupError(f"the shell on {shell.tty} is gone")
+    os.kill(shell.pid, signal.SIGHUP)
 
 
 def rename(session: Session, name: str, registry: Path | None = None) -> None:

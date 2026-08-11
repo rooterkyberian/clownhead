@@ -95,6 +95,108 @@ def process_table(*rows: tuple[int, int, str | None, str]) -> dict[int, discover
     }
 
 
+def test_owning_shell_finds_the_shell_login_started():
+    processes = process_table(
+        (7, 6, "/dev/ttys004", "claude --resume"),
+        (6, 5, "/dev/ttys004", "-zsh"),
+        (5, 1123, "/dev/ttys004", "login -fp maciej"),
+        (1123, 1, None, "/Applications/iTerm.app/Contents/MacOS/iTerm2"),
+    )
+
+    assert discovery.owning_shell(7, processes) == processes[6]
+
+
+def test_owning_shell_finds_the_shell_an_ide_started_itself():
+    processes = process_table(
+        (7, 6, "/dev/ttys001", "claude --worktree judge"),
+        (6, 31987, "/dev/ttys001", "/bin/zsh --login -i"),
+        (31987, 1, None, "/Users/x/Applications/PyCharm.app/Contents/MacOS/pycharm"),
+    )
+
+    assert discovery.owning_shell(7, processes) == processes[6]
+
+
+def test_owning_shell_walks_through_whatever_launched_the_session():
+    processes = process_table(
+        (7, 6, "/dev/ttys004", "claude"),
+        (6, 5, "/dev/ttys004", "/Users/x/.local/bin/mise exec -- claude"),
+        (5, 4, "/dev/ttys004", "-zsh"),
+        (4, 1123, "/dev/ttys004", "login -fp maciej"),
+    )
+
+    assert discovery.owning_shell(7, processes) == processes[5]
+
+
+def test_owning_shell_leaves_the_tab_of_a_session_started_inside_another_alone():
+    processes = process_table(
+        (9, 8, "/dev/ttys011", "claude"),
+        (8, 7, "/dev/ttys011", "/bin/zsh -c claude"),
+        (7, 6, "/dev/ttys011", "claude --worktree historytab"),
+        (6, 5, "/dev/ttys011", "-zsh"),
+        (5, 1123, "/dev/ttys011", "login -fp maciej"),
+    )
+
+    assert discovery.owning_shell(9, processes) is None
+
+
+def test_owning_shell_gives_up_on_a_session_it_cannot_place():
+    processes = process_table((7, 6, "/dev/ttys004", "claude"))
+
+    assert discovery.owning_shell(None, processes) is None
+    assert discovery.owning_shell(4242, processes) is None
+    assert discovery.owning_shell(7, processes) is None
+
+
+def test_owning_shell_gives_up_on_a_session_with_no_terminal():
+    processes = process_table(
+        (7, 6, None, "claude"),
+        (6, 1, None, "-zsh"),
+    )
+
+    assert discovery.owning_shell(7, processes) is None
+
+
+def test_owning_shell_survives_a_process_loop():
+    processes = process_table(
+        (7, 6, "/dev/ttys004", "claude"),
+        (6, 5, "/dev/ttys004", "-zsh"),
+        (5, 6, "/dev/ttys004", "-zsh"),
+    )
+
+    assert discovery.owning_shell(7, processes) == processes[5]
+
+
+@pytest.mark.parametrize(
+    ("command", "expected"),
+    [
+        ("-zsh", True),
+        ("/bin/zsh --login -i", True),
+        ("bash", True),
+        ("/usr/local/bin/fish -l", True),
+        ("login -fp maciej", False),
+        ("claude --resume", False),
+        ("", False),
+    ],
+)
+def test_is_shell(command, expected):
+    assert discovery.is_shell(command) is expected
+
+
+@pytest.mark.parametrize(
+    ("command", "expected"),
+    [
+        ("claude --resume", True),
+        ("/Users/x/.local/share/claude/versions/2.1.226 --resume", True),
+        ("/Users/x/.local/bin/mise exec -- claude", False),
+        ("/bin/zsh -c 'source ~/.claude/shell-snapshots/snapshot.sh'", False),
+        ("/usr/bin/postgres -D /data", False),
+        ("", False),
+    ],
+)
+def test_is_claude(command, expected):
+    assert discovery.is_claude(command) is expected
+
+
 def test_enrich_attaches_tty_owning_application_and_heartbeat():
     heartbeat = datetime(2026, 5, 1, tzinfo=UTC)
     sessions = [Session(session_id="a-b", cwd=Path("/tmp"), pid=7)]

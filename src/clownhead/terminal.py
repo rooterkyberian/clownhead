@@ -39,27 +39,7 @@ ATTENTION_MARK = "\N{WARNING SIGN}"
 BUNDLE_ID_VAR = "__CFBundleIdentifier"
 OPEN_BINARY = "/usr/bin/open"
 PBCOPY_BINARY = "/usr/bin/pbcopy"
-OSASCRIPT_BINARY = "/usr/bin/osascript"
 ACTIVATION_TIMEOUT = 5.0
-
-CLOSE_SESSION_SCRIPT = """
-on run argv
-    set target to item 1 of argv
-    tell application "iTerm2"
-        repeat with theWindow in windows
-            repeat with theTab in tabs of theWindow
-                repeat with theSession in sessions of theTab
-                    if tty of theSession is target then
-                        close theSession
-                        return "closed"
-                    end if
-                end repeat
-            end repeat
-        end repeat
-    end tell
-    return "no session on that tty"
-end run
-"""
 
 
 @dataclass(frozen=True)
@@ -85,7 +65,6 @@ class Terminal:
     supports_tab_color = False
     supports_notifications = False
     supports_foreground = False
-    supports_close_tab = False
 
     def __init__(self, bundle_id: str | None = None, app: Path | None = None, name: str | None = None) -> None:
         self.bundle_id = bundle_id or type(self).bundle_id
@@ -133,13 +112,6 @@ class Terminal:
         """Raise a desktop notification; a bell where unsupported."""
         self.bell(tty)
 
-    def close_tab(self, tty: Path) -> None:
-        """Close the tab a TTY belongs to; a no-op where unsupported.
-
-        No escape code closes a tab — the emulator has to be asked, out of band, which is
-        why this is the one signal that does not go to the TTY itself.
-        """
-
 
 class ITerm2Terminal(Terminal):
     """iTerm2, which supports the full proprietary OSC 1337 and OSC 6 vocabulary."""
@@ -149,7 +121,6 @@ class ITerm2Terminal(Terminal):
     supports_attention = True
     supports_tab_color = True
     supports_notifications = True
-    supports_close_tab = True
 
     def request_attention(self, tty: Path, text: str | None = None) -> None:
         """Bounce the dock icon and flash the tab, leaving the title alone."""
@@ -171,18 +142,6 @@ class ITerm2Terminal(Terminal):
     def notify(self, tty: Path, message: str) -> None:
         """Post a notification through the emulator."""
         self.write(tty, f"{ESC}]9;{message}{BEL}")
-
-    def close_tab(self, tty: Path) -> None:
-        """Close the split this TTY is running in, and its tab along with it.
-
-        The split rather than the tab: they are the same thing until someone has divided
-        one, and taking a whole tab would close the panes beside it that were never asked
-        about. iTerm2 closes a tab of its own accord once its last split is gone.
-
-        Raises:
-            OSError: iTerm2 could not be asked, or refused.
-        """
-        run_applescript(CLOSE_SESSION_SCRIPT, str(tty))
 
 
 class KittyTerminal(Terminal):
@@ -287,32 +246,6 @@ def raise_application(target: Path | str) -> None:
         check=False,
         timeout=ACTIVATION_TIMEOUT,
     )
-
-
-def run_applescript(script: str, *arguments: str) -> str:
-    """Run an AppleScript, handing it arguments rather than interpolating them.
-
-    A TTY path comes off the process table, and a script assembled around one would be a
-    script assembled around whatever ``ps`` reported. ``osascript`` reads the script from
-    standard input and takes the rest as ``argv``, which keeps the two apart.
-
-    Raises:
-        OSError: osascript could not be run, or the script failed.
-    """
-    try:
-        completed = subprocess.run(  # noqa: S603
-            [OSASCRIPT_BINARY, "-", *arguments],
-            input=script,
-            capture_output=True,
-            text=True,
-            check=False,
-            timeout=ACTIVATION_TIMEOUT,
-        )
-    except subprocess.SubprocessError as error:
-        raise OSError(str(error)) from error
-    if completed.returncode != 0:
-        raise OSError(completed.stderr.strip() or "osascript failed")
-    return completed.stdout.strip()
 
 
 def copy_to_pasteboard(text: str) -> bool:

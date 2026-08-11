@@ -8,7 +8,7 @@ without a live fleet.
 
 from __future__ import annotations
 
-from collections.abc import Callable
+from collections.abc import Callable, Mapping
 from datetime import UTC, datetime, timedelta
 from functools import partial
 from typing import Any, Protocol
@@ -26,8 +26,8 @@ from textual.widgets import DataTable, Footer, Input, Label, Static, Switch
 
 from clownhead import attention
 from clownhead import settings as settings_store
-from clownhead.control import rename, terminate, wait_for_exit
-from clownhead.discovery import Message, recent_messages, relocated_config_dir
+from clownhead.control import close_tab, rename, shell_of, terminate, wait_for_exit
+from clownhead.discovery import Message, Process, process_table, recent_messages, relocated_config_dir
 from clownhead.models import Session, Status
 from clownhead.render import build_rows, conversation, describe, format_duration, shorten_path, truncate
 from clownhead.resume import resume_shell_command
@@ -515,30 +515,41 @@ class FleetApp(App[None]):
     def _terminate(self, session: Session, confirmed: bool | None) -> None:
         if not confirmed:
             return
+        processes = process_table()
         try:
-            terminate(session)
+            terminate(session, processes)
         except (LookupError, OSError) as error:
             self.notify(str(error), title="not terminated", severity="error")
             return
         self.notify(f"SIGTERM sent to {session.label}", severity="warning")
         if self._settings.close_tab_on_terminate and session.pid is not None:
-            self._close_tab(session, session.pid)
+            self._close_tab(session, session.pid, processes)
         self.start_reload()
 
     @work(thread=True, group="close-tab")
-    def _close_tab(self, session: Session, pid: int) -> None:
+    def _close_tab(self, session: Session, pid: int, processes: Mapping[int, Process]) -> None:
         """Close the session's tab, once the session has actually gone.
+
+        The shell that owns the tab is found in the process table as it stood before the
+        session was signalled, because the trail that leads to it runs through the session
+        itself — which, by the time there is a tab worth closing, is no longer there.
 
         Waiting is the whole point: SIGTERM is a request, and a tab closed while Claude
         Code was still writing its transcript would take away the thing that makes the
         session resumable. A session that outlasts the wait keeps its tab, and says so.
         """
+        try:
+            shell = shell_of(session, processes)
+        except LookupError as error:
+            self._hand_back(self._tab_left_open, str(error))
+            return
         if not wait_for_exit(pid):
             self._hand_back(self._tab_left_open, f"{session.label} is still running")
             return
-        result = attention.close_tab(session, self._terminal)
-        if not result.delivered:
-            self._hand_back(self._tab_left_open, f"{result.label}: {result.detail}")
+        try:
+            close_tab(shell)
+        except (LookupError, OSError) as error:
+            self._hand_back(self._tab_left_open, f"{session.label}: {error}")
 
     def _tab_left_open(self, detail: str) -> None:
         self.notify(detail, title="tab left open", severity="warning")

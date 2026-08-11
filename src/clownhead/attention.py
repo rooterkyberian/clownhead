@@ -161,25 +161,6 @@ def focus(
     return SignalResult(session.label, session.tty, True, text)
 
 
-def close_tab(session: Session, terminal: Terminal | None = None) -> SignalResult:
-    """Close the terminal split a session was running in.
-
-    Meant for a session that has already exited: the split is found by the TTY the session
-    reported, and a TTY outlives the process that held it, so the longer it has been since
-    the session was there the less certain it is that the split still belongs to it.
-    """
-    if session.tty is None:
-        return SignalResult(session.label, None, False, "no tty")
-    emitter = terminal_of(session, terminal)
-    if not emitter.supports_close_tab:
-        return SignalResult(session.label, session.tty, False, f"{emitter.name} cannot close a tab")
-    try:
-        emitter.close_tab(session.tty)
-    except (OSError, subprocess.SubprocessError) as error:
-        return SignalResult(session.label, session.tty, False, str(error))
-    return SignalResult(session.label, session.tty, True, "tab closed")
-
-
 def focus_stalled(
     sessions: Iterable[Session], terminal: Terminal | None = None, *, foreground: bool = True
 ) -> list[SignalResult]:

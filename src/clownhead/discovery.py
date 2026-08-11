@@ -45,6 +45,8 @@ INJECTED_MESSAGE = re.compile(r"^<[a-z][a-z0-9-]*>")
 NO_TTY = frozenset({"?", "??", "-", ""})
 APP_SUFFIX = ".app"
 APP_MARKER = f"{APP_SUFFIX}/Contents/MacOS/"
+CLAUDE_COMMAND = "claude"
+SHELL_COMMANDS = frozenset({"sh", "bash", "zsh", "fish", "dash", "ksh", "tcsh", "csh"})
 
 ATTENTION_RANK = 0
 BUSY_RANK = 1
@@ -212,6 +214,66 @@ def application_bundle(command: str) -> Path | None:
     path = command[: index + len(APP_SUFFIX)]
     boundary = path.rfind(" /")
     return Path(path[boundary + 1 :] if boundary != -1 else path)
+
+
+def owning_shell(pid: int | None, processes: Mapping[int, Process]) -> Process | None:
+    """The shell a session's terminal was started with, whose exit takes the tab with it.
+
+    A tab lasts as long as what the emulator spawned into its pty, and what it spawned is
+    a shell — under ``login`` in iTerm2, started directly by an IDE, named differently
+    everywhere. Walking up from the session for as long as the TTY stays the same finds it
+    without having to know which: the walk leaves the TTY at the emulator itself, and the
+    highest shell it passed on the way up is the one the tab belongs to. Whatever sits in
+    between — ``login``, a version manager, a wrapper script — is walked through rather
+    than stopped at, since none of it owns the tab either.
+
+    ``None`` when the tab is not the session's to close: a session with no terminal, one
+    whose terminal is running no shell at all, and one started from inside another Claude
+    Code session, where the trail up the TTY runs through a session still using it.
+    """
+    process = processes.get(pid) if pid is not None else None
+    if process is None or process.tty is None:
+        return None
+    shell: Process | None = None
+    seen: set[int] = set()
+    while True:
+        seen.add(process.pid)
+        parent = processes.get(process.ppid)
+        if parent is None or parent.tty != process.tty or parent.pid in seen:
+            return shell
+        if is_claude(parent.command):
+            return None
+        if is_shell(parent.command):
+            shell = parent
+        process = parent
+
+
+def is_shell(command: str) -> bool:
+    """Whether a command line runs a shell, however it was invoked.
+
+    A login shell announces itself with a leading dash — ``-zsh`` — and an IDE is as
+    likely to spell the same shell ``/bin/zsh --login -i``, so the name is taken off the
+    front of the line rather than matched against it.
+    """
+    return Path(_argv0(command).lstrip("-")).name in SHELL_COMMANDS
+
+
+def is_claude(command: str) -> bool:
+    """Whether a command line runs Claude Code itself.
+
+    What is run is asked of the front of the line only. Claude Code is as likely to be
+    started through something else — a version manager, a wrapper script — as directly,
+    and those name it in their arguments, which is not the same as being it.
+
+    The path rather than the name at the end of it: an installed version is run out of
+    ``.../claude/versions/2.1.226``, whose last component is a version number.
+    """
+    return CLAUDE_COMMAND in _argv0(command)
+
+
+def _argv0(command: str) -> str:
+    """What a command line runs, before its arguments."""
+    return command.split(maxsplit=1)[0] if command else ""
 
 
 def registry_heartbeats(registry: Path | None = None) -> dict[int, datetime]:
