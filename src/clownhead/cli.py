@@ -4,7 +4,7 @@ from __future__ import annotations
 
 import os
 import time
-from collections.abc import Iterable
+from collections.abc import Iterable, Sequence
 from pathlib import Path
 from typing import Annotated
 
@@ -12,10 +12,11 @@ import typer
 from rich.console import Console
 from rich.table import Table
 
-from clownhead import __version__, attention, discovery, tui
+from clownhead import __version__, attention, discovery, search, tui
 from clownhead import settings as settings_store
 from clownhead.models import Session
-from clownhead.render import build_table
+from clownhead.render import Column, build_table, default_columns, parse_columns
+from clownhead.search import PullRequest
 from clownhead.terminal import detect_terminal
 
 app = typer.Typer(
@@ -30,8 +31,22 @@ CwdOption = Annotated[Path | None, typer.Option("--cwd", help="Only sessions sta
 AllOption = Annotated[bool, typer.Option("--all", help="Include background agents.")]
 ClosedOption = Annotated[bool, typer.Option("--closed", help="Include sessions that have ended.")]
 IntervalOption = Annotated[float | None, typer.Option("--interval", "-n", help="Seconds between refreshes.")]
-PidOption = Annotated[bool | None, typer.Option("--pid/--no-pid", help="Show the owning process id.")]
-TtyOption = Annotated[bool | None, typer.Option("--tty/--no-tty", help="Show the controlling terminal.")]
+PrOption = Annotated[
+    str | None,
+    typer.Option(
+        "--pr",
+        metavar="URL",
+        help="Only sessions whose transcript names this pull request, by URL or owner/repo#123.",
+    ),
+]
+ColumnsOption = Annotated[
+    str | None,
+    typer.Option(
+        "--columns",
+        metavar="LIST",
+        help=f"Columns to show, comma separated and in the order given: {', '.join(Column)}.",
+    ),
+]
 
 
 def _show_version(requested: bool) -> None:
@@ -60,14 +75,56 @@ def _load(cwd: Path | None, include_background: bool, include_closed: bool = Fal
     return discovery.list_sessions(cwd, interactive_only=not include_background, include_closed=include_closed)
 
 
-def _fleet_table(sessions: list[Session], show_pid: bool | None, show_tty: bool | None) -> Table:
-    settings = settings_store.load()
-    return build_table(
-        sessions,
-        width=console.width,
-        show_pid=settings.show_pid if show_pid is None else show_pid,
-        show_tty=settings.show_tty if show_tty is None else show_tty,
-    )
+def _pull_request(reference: str | None) -> PullRequest | None:
+    """Read the ``--pr`` reference, refusing anything that does not name a pull request.
+
+    Failing here rather than falling back to a plain text search is deliberate: a filter
+    that quietly matched nothing would look exactly like a fleet that never touched the
+    pull request, which is the answer the flag exists to give truthfully.
+    """
+    if reference is None:
+        return None
+    parsed = search.parse_pull_request(reference)
+    if parsed is None:
+        error_console.print(
+            f"[bold red]{reference} does not name a pull request[/] — pass a GitHub URL or owner/repo#123."
+        )
+        raise typer.Exit(code=2)
+    return parsed
+
+
+def _search_note(reference: PullRequest, matched: int, searched: int, include_closed: bool) -> str:
+    """What a transcript search covered and found, and where else it could have looked.
+
+    A search that comes back empty is ambiguous — nothing worked on this pull request, or
+    the session that did has ended and was never read — so an empty answer says which
+    fleet it was empty of rather than leaving that to be guessed at.
+    """
+    note = f"{reference} · {matched} of {searched} sessions"
+    if matched or include_closed:
+        return note
+    return f"{note} · --closed searches the ones that have ended too"
+
+
+def _columns(selection: str | None) -> tuple[Column, ...]:
+    """Resolve the ``--columns`` selection, or the usual columns when there was none.
+
+    An unnamed selection answers to the saved PID and TTY settings, which is what the
+    overseer's switches write to — one place to say you always want them, whichever view
+    is being read.
+    """
+    if selection is None:
+        settings = settings_store.load()
+        return default_columns(console.width, settings.show_pid, settings.show_tty)
+    try:
+        return parse_columns(selection)
+    except ValueError as error:
+        error_console.print(f"[bold red]{error}[/] — choose from {', '.join(Column)}.")
+        raise typer.Exit(code=2) from error
+
+
+def _fleet_table(sessions: list[Session], columns: Sequence[Column]) -> Table:
+    return build_table(sessions, width=console.width, columns=columns)
 
 
 def _config_dir_line() -> str:
@@ -121,15 +178,31 @@ def list_sessions(
     cwd: CwdOption = None,
     include_background: AllOption = False,
     include_closed: ClosedOption = False,
-    show_pid: PidOption = None,
-    show_tty: TtyOption = None,
+    pull_request: PrOption = None,
+    columns: ColumnsOption = None,
 ) -> None:
-    """Show the fleet, attention-first."""
+    """Show the fleet, attention-first.
+
+    ``--pr`` reads the transcripts rather than the listing, and answers for whichever
+    fleet the other options chose. Work with a pull request to show for it has usually
+    finished, so it is worth saying ``--closed`` as well — but that stays something you
+    say rather than something the flag decides for you, and a search that found nothing
+    says so.
+
+    ``--columns`` says which columns to show and in what order. Both are read before the
+    fleet is, so a selection with a typo in it costs nothing but the typo.
+    """
+    reference = _pull_request(pull_request)
+    chosen = _columns(columns)
     sessions = _load(cwd, include_background, include_closed)
-    if not sessions:
+    if reference is not None:
+        matched = search.sessions_mentioning(reference, sessions)
+        console.print(f"[dim]{_search_note(reference, len(matched), len(sessions), include_closed)}[/]")
+        sessions = [session for session in sessions if session.session_id in matched]
+    elif not sessions:
         console.print("[dim]no live sessions[/]")
-        return
-    console.print(_fleet_table(sessions, show_pid, show_tty))
+    if sessions:
+        console.print(_fleet_table(sessions, chosen))
 
 
 @app.command()

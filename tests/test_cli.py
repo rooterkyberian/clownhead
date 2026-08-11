@@ -1,3 +1,4 @@
+import json
 from pathlib import Path
 
 import pytest
@@ -141,6 +142,112 @@ def test_ls_reports_an_empty_fleet(monkeypatch):
 
     assert result.exit_code == 0
     assert "no live sessions" in result.stdout
+
+
+def test_ls_columns_select_what_to_show_and_in_what_order(live_fleet):
+    result = runner.invoke(cli.app, ["ls", "--columns", "where,name"])
+
+    assert result.exit_code == 0
+    assert result.stdout.splitlines()[0].split() == ["WHERE", "NAME"]
+    assert "input needed" not in result.stdout
+
+
+def test_ls_columns_can_ask_for_the_resume_command(live_fleet):
+    result = runner.invoke(cli.app, ["ls", "--columns", "name,resume"])
+
+    assert result.exit_code == 0
+    assert "RESUME" in result.stdout
+    assert "claude --resume 4e020900-df7c" in result.stdout
+
+
+def test_ls_thins_the_default_columns_on_a_narrow_terminal(live_fleet, monkeypatch):
+    monkeypatch.setenv("COLUMNS", "60")
+
+    result = runner.invoke(cli.app, ["ls"])
+
+    assert result.stdout.splitlines()[0].split() == ["STATUS", "NAME", "WHERE"]
+
+
+def test_ls_columns_keep_what_a_narrow_terminal_would_have_dropped(live_fleet, monkeypatch):
+    monkeypatch.setenv("COLUMNS", "60")
+
+    result = runner.invoke(cli.app, ["ls", "--columns", "name,quiet,age,pid,tty"])
+
+    assert result.exit_code == 0
+    assert result.stdout.splitlines()[0].split() == ["NAME", "QUIET", "AGE", "PID", "TTY"]
+
+
+def test_ls_refuses_a_column_that_does_not_exist(live_fleet):
+    result = runner.invoke(cli.app, ["ls", "--columns", "name,nope"])
+
+    assert result.exit_code == 2
+    assert "unknown column nope" in result.stderr
+
+
+def test_ls_refuses_a_bad_column_before_it_reads_the_fleet(monkeypatch):
+    monkeypatch.setattr(discovery, "list_sessions", lambda *a, **k: pytest.fail("the fleet was read"))
+
+    assert runner.invoke(cli.app, ["ls", "--columns", "nope"]).exit_code == 2
+
+
+def transcript(tmp_path: Path, session_id: str, said: str, cwd: str = "/tmp/payments-api") -> Path:
+    project = tmp_path / "config" / "projects" / cwd.replace("/", "-")
+    project.mkdir(parents=True, exist_ok=True)
+    path = project / f"{session_id}.jsonl"
+    path.write_text(json.dumps({"sessionId": session_id, "cwd": cwd, "type": "user", "message": {"content": said}}))
+    return path
+
+
+def test_ls_by_pull_request_keeps_the_sessions_that_named_it(live_fleet, tmp_path):
+    transcript(tmp_path, "4e020900-df7c", "https://github.com/acme/widgets/pull/42 needs a rebase")
+    transcript(tmp_path, "cef6830d-aaaa", "widgets#420 is somebody else's", cwd="/tmp/web-platform")
+
+    result = runner.invoke(cli.app, ["ls", "--pr", "https://github.com/acme/widgets/pull/42"])
+
+    assert result.exit_code == 0
+    assert "acme/widgets#42 · 1 of 2 sessions" in result.stdout
+    assert "payments-api-7c" in result.stdout
+    assert "web-platform-1d" not in result.stdout
+
+
+@pytest.mark.parametrize(("flags", "expected"), [([], False), (["--closed"], True)])
+def test_ls_by_pull_request_searches_only_what_was_asked_for(monkeypatch, flags, expected):
+    seen: dict[str, object] = {}
+    monkeypatch.setattr(discovery, "list_sessions", lambda cwd=None, **kwargs: seen.update(kwargs) or fleet())
+
+    runner.invoke(cli.app, ["ls", "--pr", "acme/widgets#42", *flags])
+
+    assert seen["include_closed"] is expected
+
+
+def test_ls_by_pull_request_says_so_when_nothing_named_it(live_fleet, tmp_path):
+    result = runner.invoke(cli.app, ["ls", "--pr", "acme/widgets#42"])
+
+    assert result.exit_code == 0
+    assert "acme/widgets#42 · 0 of 2 sessions" in result.stdout
+    assert "--closed searches" in result.stdout
+    assert "payments-api-7c" not in result.stdout
+
+
+def test_ls_by_pull_request_does_not_suggest_closed_when_it_already_searched_them(live_fleet, tmp_path):
+    result = runner.invoke(cli.app, ["ls", "--pr", "acme/widgets#42", "--closed"])
+
+    assert "--closed searches" not in result.stdout
+
+
+def test_ls_by_pull_request_does_not_suggest_closed_when_it_found_something(live_fleet, tmp_path):
+    transcript(tmp_path, "4e020900-df7c", "acme/widgets#42 needs a rebase")
+
+    result = runner.invoke(cli.app, ["ls", "--pr", "acme/widgets#42"])
+
+    assert "--closed searches" not in result.stdout
+
+
+def test_ls_refuses_a_reference_that_is_not_a_pull_request(live_fleet):
+    result = runner.invoke(cli.app, ["ls", "--pr", "payments-api"])
+
+    assert result.exit_code == 2
+    assert "does not name a pull request" in result.stderr
 
 
 def test_ls_fails_loudly_when_peer_discovery_is_blocked(monkeypatch):
