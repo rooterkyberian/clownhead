@@ -121,47 +121,29 @@ would answer a narrow terminal by ignoring them.
 ## How it works
 
 **Discovery.** `claude agents --json` is the source of truth for what is live. Each entry
-is enriched with the controlling TTY (from `ps`) and the last heartbeat (from
-`sessions/<pid>.json` under the Claude Code config directory, which a crashed session
-leaves behind, so entries are only trusted when the CLI still reports the session as live).
+is enriched with the controlling TTY from `ps` and the last heartbeat from the session
+registry under the Claude Code config directory.
 
-**Pull requests.** A session says nothing about which pull request it was for, so the
-question is answered from the transcripts, matching both the `repo/pull/309` of a URL and
-the `repo#309` of a mention — anchored at both ends, because `pull/309` is otherwise a
-substring of `pull/3090` and `data-platform` one of `my-data-platform`. A subagent's
-transcript counts as its parent's: a pull request read by a subagent and reported upwards
-in the abstract was still worked on there. That is a few hundred megabytes of JSONL across
-a fleet, scanned as bytes rather than parsed, and what it finds is remembered until you ask
-for a reload — `R` in the overseer reads them again.
+**Pull requests.** Nothing on a session records which pull request it belonged to, so the
+question is answered from the transcripts, matching the `repo/pull/309` of a URL and the
+`repo#309` of a mention, subagents included. What it finds is remembered until `R` reads
+them again.
 
-**Attention.** Signals are OSC escape sequences written to a session's TTY. The emulator
-consumes them before the running application sees them, so they are safe to inject into a
-live TUI — unlike plain text, which would land in the session's input stream. iTerm2 gets
-`RequestAttention`, tab tinting, and notifications; a terminal with none of that gets the
-bell and its tab renamed to `⚠ <session>: <why>`, which is the one signal an IDE's
-embedded terminal still honours. Claude Code manages the title itself, so the mark lasts
-until the session next changes state — set `CLAUDE_CODE_DISABLE_TERMINAL_TITLE=1` in that
-session to make it stick.
+**Attention.** Signals are OSC escape sequences written to a session's TTY, which the
+emulator consumes before the running application sees them — safe to inject into a live
+TUI. iTerm2 gets `RequestAttention`, tab tinting and notifications; a terminal with none
+of that gets the bell and its tab renamed to `⚠ <session>: <why>`. Claude Code manages the
+title itself, so the mark lasts until the session next changes state — set
+`CLAUDE_CODE_DISABLE_TERMINAL_TITLE=1` in that session to make it stick.
 
-**Foreground.** A dock bounce is easy to miss, so focusing also raises the window. No
-portable escape code covers that: iTerm2 has `StealFocus`, and everything else on macOS
-is activated with `open`, which brings a running application forward without opening a
-window. Elsewhere the raise is a no-op and the bounce stands on its own.
-
-**Whose window, though.** A fleet spans several terminals at once, so the emulator is
-resolved per session rather than read out of clownhead's own environment — that only ever
-describes the terminal clownhead itself was started from. Walking up the process tree from
-the session to the first ancestor running out of an application bundle answers it properly,
-which is how a session in an IDE's embedded terminal gets its own window raised instead of
-being sent escape codes meant for a terminal it is not in. `clownhead doctor` lists which
-applications the current fleet is spread across.
+**Foreground.** A dock bounce is easy to miss, so focusing also raises the window:
+`StealFocus` in iTerm2, `open` for everything else on macOS, a no-op elsewhere. Which
+application to raise is resolved per session rather than from clownhead's own environment,
+since a fleet spans several terminals at once; `clownhead doctor` lists which ones.
 
 **Termination.** `t` sends SIGTERM, never SIGKILL, and only after a confirmation: Claude
 Code writes its transcript as it goes, so a session given the chance to shut down cleanly
-leaves a file that can still be resumed. The process id is checked against the process
-table first — a session's pid is up to a refresh old, and a process that has exited since
-may have had its id handed to something else, which would otherwise be signalled in its
-place.
+leaves a file that can still be resumed.
 
 Terminating a session leaves its terminal sitting at a shell prompt, which is a tab to
 close by hand for every session ended. The settings can close it instead, off by default
@@ -178,67 +160,44 @@ on the end — `web-platform-1d`, and a second one in the same tree is `web-plat
 That is no help at all once a fleet is a dozen deep, so `r` renames the session under the
 cursor to whatever the job actually is.
 
-The rename goes to the session rather than to the registry record clownhead reads. Every
-session listens for control messages on a per-process socket, and the rename performed
-there is the one `/rename` performs: the registry record, the transcript, the prompt box
-and the terminal title all follow, and the session is told its new name, which it takes as
-a hint about what it is working on. Editing the registry file directly would move only the
-copy the board reads and leave the session itself answering to the old name.
-
-The socket is the one Claude Code publishes in its own registry record, falling back to
-the conventional per-process path when a session binds one without naming it. The session
-id travels with the request and Claude Code drops anything addressed elsewhere, so a
-socket left behind by a recycled process id refuses the rename instead of applying it to a
-stranger — a stronger check than the process-table lookup termination needs. Sessions
-older than the control channel have no socket at all, and a session that has already ended
-has nothing listening to be told; both say so rather than being renamed somewhere only
-clownhead can see.
+The rename is asked of the session rather than written to the record clownhead reads, so
+it is the rename `/rename` performs: registry, transcript, prompt box and terminal title
+all follow, and the session is told its new name. Sessions that have ended, and ones older
+than Claude Code's control channel, have nothing listening and say so instead.
 
 **Conversation.** The turns shown by `→` are read from the tail of the session's
-transcript, never the whole file — they run to megabytes and only the end is ever shown.
-Tool calls, their results, thinking and harness-injected turns are dropped, and a run of
-turns by one speaker collapses to its last: Claude narrates between tool calls, so an
-unfiltered tail is all its own voice and no conversation at all.
+transcript, never the whole file. Tool calls, their results, thinking and harness-injected
+turns are dropped, and a run of turns by one speaker collapses to its last — Claude
+narrates between tool calls, so an unfiltered tail is all its own voice and no
+conversation at all.
 
 Each turn is headed by who said it and how long ago, which is what tells a conversation
-that stopped mid-question from one that stopped after an answer. Turns are stacked without
-a blank line between them, since that header already parts one from the next and the panel
-is a narrow column; `code` and **bold** are rendered rather than left as punctuation. Your
-own turns are laid on a background of their own, tinted to the edge of the panel: what you
-asked for is what a reader scans back through, and a speaker line alone is a thin thing to
-look for in a column of stacked turns.
+that stopped mid-question from one that stopped after an answer. `code` and **bold** are
+rendered rather than left as punctuation, and your own turns are laid on a background of
+their own: what you asked for is what a reader scans back through.
 
-**Settings.** `,` opens them, changes apply live, and they persist to
-`settings.json` under the state directory. They cover the columns the board shows, the refresh
-interval, how many turns of history to read, whether closed sessions are in from the
-start, whether focusing raises the window, whether a terminated session's tab is closed
-after it, and whether tabs are tinted at all — a tinted tab is a passive report rather
-than a signal, so a terminal that cannot colour one is
-left alone rather than belled about it. The PID and TTY columns are off by default:
-they matter when a session needs killing or signalling, not while reading the board, and
-every column they take is one the path loses. `clownhead ls --pid --tty` overrides for a
-single run without touching what is saved.
+**Settings.** `,` opens them, changes apply live, and they persist to `settings.json`
+under the state directory. They cover the columns the board shows, the refresh interval,
+how many turns of history to read, whether closed sessions are in from the start, whether
+focusing raises the window, whether a terminated session's tab is closed after it, and
+whether tabs are tinted at all. The PID and TTY columns are off by default — they matter
+when a session needs killing or signalling, not while reading the board — and
+`clownhead ls --pid --tty` overrides for a single run without touching what is saved.
 
 **Closed sessions.** `--closed` (or `c` in the overseer) folds in the sessions that have
-ended. They come from the transcripts under `~/.claude/projects`, which outlive the
-processes that wrote them and are all `claude --resume` needs, plus whatever the session
-registry still remembers — it holds the better metadata but is pruned on a clean exit, so
-in practice it only contributes the sessions that crashed. Closed rows carry no PID or
-TTY: the process is gone and its id may since have been reused by something else.
+ended, read from the transcripts under `~/.claude/projects` plus whatever the session
+registry still remembers. Closed rows carry no PID or TTY: the process is gone and its id
+may since have been reused by something else.
 
 **Resurrection.** A session is a transcript on disk, not a process — killing the terminal
 loses nothing, and `claude --resume <id>` in the original directory brings the conversation
 back. `y` in the overseer puts that command for the selected session on the clipboard,
 `cd` included.
 
-A worktree session records the worktree itself as its directory, but `--worktree <name>`
-from the owning repository is how Claude Code enters one: it attaches to the worktree that
-still stands and rebuilds the one that has been pruned. Worktree sessions therefore resume
-from the repository, `cd` included, which matters more than it sounds — worktrees get
-pruned, and a fifth of the closed sessions on the machine this was built on point at one
-that is gone. Any other missing directory keeps its failing `cd` on purpose: resuming a session
-somewhere else would hand it a working directory full of the wrong project, and a command
-that stops is easier to recover from than one that quietly does the wrong thing.
+Worktree sessions resume from the owning repository with `--worktree <name>`, which
+attaches to the worktree that still stands and rebuilds the one that has been pruned. Any
+other missing directory keeps its failing `cd` on purpose: resuming somewhere else would
+hand the session a working directory full of the wrong project.
 
 ## Two things worth knowing
 
