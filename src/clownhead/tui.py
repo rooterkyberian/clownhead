@@ -27,9 +27,9 @@ from textual.widgets import DataTable, Footer, Input, Label, Static, Switch
 from clownhead import attention
 from clownhead import settings as settings_store
 from clownhead.control import rename, terminate, wait_for_exit
-from clownhead.discovery import Message, recent_messages
+from clownhead.discovery import Message, recent_messages, relocated_config_dir
 from clownhead.models import Session, Status
-from clownhead.render import build_rows, conversation, describe, format_duration
+from clownhead.render import build_rows, conversation, describe, format_duration, shorten_path, truncate
 from clownhead.resume import resume_shell_command
 from clownhead.settings import Settings
 from clownhead.terminal import Terminal, copy_to_pasteboard
@@ -37,6 +37,7 @@ from clownhead.terminal import Terminal, copy_to_pasteboard
 BASE_COLUMNS = ("STATUS", "NAME", "QUIET", "AGE")
 DEFAULT_INTERVAL = 5.0
 CLOWN = "\N{CLOWN FACE}"
+CONFIG_DIR_CAP = 40
 
 
 class Loader(Protocol):
@@ -45,6 +46,19 @@ class Loader(Protocol):
     def __call__(self, include_closed: bool, /) -> list[Session]:
         """Discover sessions, optionally including the ones that have ended."""
         ...
+
+
+def config_dir_notice() -> str:
+    """Name the Claude Code directory the board is reading, unless it is the default one.
+
+    ``claude agents --json`` lists only the sessions belonging to the config directory it
+    was invoked under, so a board opened from a shell with ``CLAUDE_CONFIG_DIR`` set is
+    watching another fleet than one opened without it — and a board short of the sessions
+    you expected looks exactly like a quiet machine. Empty when there is nothing worth
+    saying, which is the usual case.
+    """
+    directory = relocated_config_dir()
+    return "" if directory is None else truncate(shorten_path(directory), CONFIG_DIR_CAP)
 
 
 def matches(session: Session, needle: str) -> bool:
@@ -691,10 +705,23 @@ class FleetApp(App[None]):
         self.call_after_refresh(panel.scroll_end, animate=False)
 
     def _summary(self) -> str:
+        """What the fleet amounts to, and — where it is not the usual one — where it came from.
+
+        The config directory rides at the end rather than in a corner of its own so that a
+        bar too narrow for both loses the directory and keeps the count of what is waiting
+        on you, which is the number the board exists to show.
+        """
+        parts = self._fleet_counts()
+        notice = config_dir_notice()
+        if notice:
+            parts.append(f"[dim]{notice}[/]")
+        return " · ".join(parts)
+
+    def _fleet_counts(self) -> list[str]:
         if self._failure:
-            return f"[bold red]discovery failed[/] {self._failure}"
+            return [f"[bold red]discovery failed[/] {self._failure}"]
         if not self._sessions:
-            return "[dim]no live sessions[/]"
+            return ["[dim]no live sessions[/]"]
 
         total = len(self._sessions)
         scope = f"{len(self._visible)} of {total}" if self._needle else str(total)
@@ -705,7 +732,7 @@ class FleetApp(App[None]):
         finished = sum(1 for session in self._visible if session.status is Status.CLOSED)
         if finished:
             parts.append(f"[dim]{finished} closed[/]")
-        return " · ".join(parts)
+        return parts
 
 
 def run(

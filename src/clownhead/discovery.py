@@ -94,6 +94,17 @@ def config_dir() -> Path:
     return Path(override).expanduser() if override else DEFAULT_CONFIG_DIR
 
 
+def relocated_config_dir() -> Path | None:
+    """The directory in use when it is not the one Claude Code would have picked itself.
+
+    A board watching a relocated config directory is watching a different fleet, and an
+    empty one is the same shape either way, so callers that have room to say which
+    directory they are empty of should say it. ``None`` means there is nothing to say.
+    """
+    directory = config_dir()
+    return None if directory == DEFAULT_CONFIG_DIR else directory
+
+
 def session_registry() -> Path:
     """Directory of registry records, one per session that has published a heartbeat."""
     return config_dir() / "sessions"

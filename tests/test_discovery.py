@@ -374,6 +374,22 @@ def test_config_dir_falls_back_to_the_claude_default(monkeypatch, override):
     assert discovery.config_dir() == Path.home() / ".claude"
 
 
+def test_relocated_config_dir_names_a_moved_directory(monkeypatch, tmp_path):
+    monkeypatch.setenv("CLAUDE_CONFIG_DIR", str(tmp_path / "elsewhere"))
+
+    assert discovery.relocated_config_dir() == tmp_path / "elsewhere"
+
+
+@pytest.mark.parametrize("override", [None, "", "~/.claude"])
+def test_relocated_config_dir_is_none_when_the_directory_is_the_default_one(monkeypatch, override):
+    if override is None:
+        monkeypatch.delenv("CLAUDE_CONFIG_DIR")
+    else:
+        monkeypatch.setenv("CLAUDE_CONFIG_DIR", override)
+
+    assert discovery.relocated_config_dir() is None
+
+
 def test_heartbeats_and_transcripts_are_read_from_the_configured_directory(monkeypatch, tmp_path):
     registry_file(tmp_path / "sessions", 9, "a-b")
     transcript_file(tmp_path / "projects", "c-d")

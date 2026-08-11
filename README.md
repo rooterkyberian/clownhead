@@ -197,7 +197,9 @@ whichever directory it was invoked under — a shell with it set lists that flee
 without it lists the other. clownhead reads the same variable, so the fleet is listed and
 enriched out of one directory rather than listed from one and enriched from another. Get
 that wrong and `QUIET` empties out: the heartbeats are being looked for somewhere those
-sessions never wrote one. `clownhead doctor` prints the directory it settled on.
+sessions never wrote one. A board that is watching a relocated directory says so in its
+top bar, since a fleet listed out of the wrong one looks exactly like a quiet machine;
+`clownhead doctor` prints the directory it settled on either way.
 
 ## Platform support
 

@@ -11,7 +11,7 @@ from clownhead.discovery import Message
 from clownhead.models import Session, Status
 from clownhead.settings import Settings
 from clownhead.terminal import ITerm2Terminal
-from clownhead.tui import FleetApp, matches
+from clownhead.tui import FleetApp, config_dir_notice, matches
 
 
 @pytest.fixture(autouse=True)
@@ -22,6 +22,12 @@ def silent_pasteboard(monkeypatch):
 @pytest.fixture(autouse=True)
 def isolated_state(monkeypatch, tmp_path):
     monkeypatch.setenv("CLOWNHEAD_STATE_DIR", str(tmp_path / "state"))
+
+
+@pytest.fixture(autouse=True)
+def default_config_dir(monkeypatch):
+    """Whatever config directory the suite is run from, the board sees the default one."""
+    monkeypatch.delenv("CLAUDE_CONFIG_DIR", raising=False)
 
 
 def fleet() -> list[Session]:
@@ -113,6 +119,58 @@ async def test_tui_wears_a_clown():
         await settle(app, pilot)
 
         assert str(app.query_one("#clown", Static).content) == "\N{CLOWN FACE}"
+
+
+def test_config_dir_notice_names_a_relocated_directory(monkeypatch):
+    monkeypatch.setenv("CLAUDE_CONFIG_DIR", "~/.claude-personal")
+
+    assert config_dir_notice() == "~/.claude-personal"
+
+
+@pytest.mark.parametrize("override", [None, "", "~/.claude"])
+def test_config_dir_notice_says_nothing_about_the_default_directory(monkeypatch, override):
+    if override is not None:
+        monkeypatch.setenv("CLAUDE_CONFIG_DIR", override)
+
+    assert config_dir_notice() == ""
+
+
+def test_config_dir_notice_truncates_a_long_directory(monkeypatch):
+    monkeypatch.setenv("CLAUDE_CONFIG_DIR", f"/{'nested/' * 12}claude")
+
+    assert config_dir_notice().endswith("…")
+    assert len(config_dir_notice()) == tui_module.CONFIG_DIR_CAP
+
+
+async def test_tui_names_a_relocated_config_dir_after_the_counts(monkeypatch):
+    monkeypatch.setenv("CLAUDE_CONFIG_DIR", "~/.claude-personal")
+    app = build_app()
+
+    async with app.run_test() as pilot:
+        await settle(app, pilot)
+
+        assert title_of(app).endswith("· [dim]~/.claude-personal[/]")
+        assert "1 waiting on you" in title_of(app)
+
+
+async def test_tui_names_a_relocated_config_dir_an_empty_fleet_came_out_of(monkeypatch):
+    monkeypatch.setenv("CLAUDE_CONFIG_DIR", "~/.claude-personal")
+    app = build_app(sessions=[])
+
+    async with app.run_test() as pilot:
+        await settle(app, pilot)
+
+        assert "no live sessions" in title_of(app)
+        assert "~/.claude-personal" in title_of(app)
+
+
+async def test_tui_says_nothing_about_the_default_config_dir():
+    app = build_app()
+
+    async with app.run_test() as pilot:
+        await settle(app, pilot)
+
+        assert title_of(app) == "2 sessions · [bold red]1 waiting on you[/]"
 
 
 async def test_tui_reports_an_empty_fleet():
