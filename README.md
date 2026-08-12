@@ -79,12 +79,7 @@ and says that `c` would widen it,
 instead of folding the closed ones in uninvited.
 
 `owner/repo#309` and `repo#309` name the same thing more briefly.
-A bare `#309` does not:
-it means a different pull request in every checkout on the machine,
-so it stays an ordinary filter needle.
-A bare `PLAT-4471` is refused too:
-the pattern that matches it also matches `UTF-8` and `SHA-256`,
-so Jira is named by its URL.
+Jira is named by its URL.
 
 ## Starting one
 
@@ -96,33 +91,9 @@ find the checkout, make a worktree, tell a fresh session what to work on.
 $ clownhead https://github.com/acme/data-platform/issues/2
 ```
 
-The board opens filtered to that issue with the ended sessions already folded in,
-which is where the session that worked on it last usually is.
-`enter` gets you back into whichever one you pick.
-`n` starts a new one instead:
-
-```
-┌────────────────────────────────────────────────────────────┐
-│ Start a session for acme/data-platform#2                   │
-│ in ~/dev/acme/data-platform                                │
-│ (cd ~/dev/acme/data-platform && claude                     │
-│  --worktree issue-2-rate-limit-the-scan-queue              │
-│  --name issue-2-rate-limit-the-scan-queue <url>)           │
-│ enter to start · y to copy · esc to cancel                 │
-└────────────────────────────────────────────────────────────┘
-```
-
-The worktree is named for the issue and its title, which `gh` is asked for
-and which is simply left off when it cannot answer.
-The checkout is whichever one `origin` says is the right repository;
-a Jira URL names no repository at all,
-so those fall back to the ones the herd is already checked out in, best guess first,
-and the list is there to be argued with either way.
-The new session's first prompt is the URL you passed.
-
-`enter` and `n` both end the board and hand this terminal to `claude`,
-since becoming the session is the point.
-`y` copies the command instead, for a session that belongs in another window.
+The board opens filtered to that issue, the ended sessions already folded in.
+`enter` gets you back into whichever one you pick;
+`n` starts a new one in a worktree named after the issue.
 
 ## Commands
 
