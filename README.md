@@ -9,8 +9,11 @@ which are busy, which are idle, and which one is blocked waiting on you.
 
 ```bash
 curl -LsSf https://astral.sh/uv/install.sh | sh
-uv tool install git+https://github.com/rooterkyberian/clownhead
+uv tool install clownhead
 ```
+
+`uv tool install git+https://github.com/rooterkyberian/clownhead` gets you whatever is on `main`,
+which is ahead of the last release.
 
 ### Requirements
 

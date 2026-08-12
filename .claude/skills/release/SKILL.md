@@ -5,9 +5,13 @@ description: Cut a clownhead release — bump the version in the three places th
 
 # Releasing clownhead
 
-clownhead is installed straight from git (`uv tool install git+https://github.com/rooterkyberian/clownhead`),
-so there is no package index step.
 A release is a version bump, a tag, and notes worth reading.
+Pushing the tag does the rest:
+`.github/workflows/publish.yml` builds the sdist and wheel and uploads them to PyPI as
+[clownhead](https://pypi.org/project/clownhead/),
+which is where `uv tool install clownhead` gets them.
+Nothing here uploads by hand, and there is no token to hold;
+the workflow authenticates to PyPI as a trusted publisher through its `pypi` environment.
 
 ## 1. Start from a green main
 
@@ -56,6 +60,9 @@ The version lives in three files and they must move together:
 `__version__` is the number a problem report quotes,
 and the issue form asks for it up front;
 leaving it behind the package version has the reporter naming a release that is not the one they are running.
+`tests/test_version.py` fails when the two disagree,
+and the publish workflow refuses a tag that names a third number,
+so `vX.Y.Z` and both files move together or nothing ships.
 
 While the version is open, check that nothing the release contradicts is still being claimed:
 the README's command table and settings paragraph,
@@ -85,14 +92,28 @@ git push origin vX.Y.Z
 gh release create vX.Y.Z --title "clownhead X.Y.Z" --notes "..."
 ```
 
-The tag is also what a user pins to — `uv tool install git+https://github.com/rooterkyberian/clownhead@vX.Y.Z` —
-so it is pushed before the release that names it.
+Two workflows trigger on `v*`, so the push is the release.
 
-Pushing the tag is also what publishes <https://rooterkyberian.github.io/clownhead/>,
-since `.github/workflows/pages.yml` triggers on `v*`.
-The site is built from the tagged commit and its front page is `overrides/home.html`,
+`publish.yml` re-runs the suite against the tagged commit, checks the tag against `__version__`,
+builds the sdist and wheel, and then stops.
+The `pypi` environment requires a review, so the upload waits for approval on the run page
+(`gh run view --web` on the `Publish` run).
+That pause is the last chance to abort, and the build job is already green by the time it appears,
+so approving is a decision made with the checks in hand.
+`gh run watch`, then <https://pypi.org/project/clownhead/>, says whether it landed.
+A run that fails or goes unapproved leaves PyPI untouched,
+so the tag can be deleted and pushed again once the cause is fixed;
+a successful one is permanent, since a version can be yanked but never re-uploaded.
+
+`pages.yml` publishes <https://rooterkyberian.github.io/clownhead/> from the same commit.
+Its front page is `overrides/home.html`,
 so a release that changes the tagline or the install command should change the hero in the same commit.
-`gh run watch` on the `Pages` run, or `gh api repos/rooterkyberian/clownhead/pages/builds/latest`, says whether it landed.
+`gh api repos/rooterkyberian/clownhead/pages/builds/latest` says whether that one landed.
+
+The version is what a user pins to (`uv tool install clownhead==X.Y.Z`),
+and the tag is what an install from source pins to
+(`uv tool install git+https://github.com/rooterkyberian/clownhead@vX.Y.Z`),
+so the tag goes up before the release that names it.
 
 Notes are written for someone deciding whether to upgrade, in the README's voice:
 what changed, what it is for, and what it replaced.
