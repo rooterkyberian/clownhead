@@ -15,11 +15,14 @@ uv tool install git+https://github.com/rooterkyberian/clownhead
 ### Requirements
 
 - Claude Code 2.1.227 or newer on `PATH`.
-- macOS or Linux — developed on macOS with iTerm2, CI runs the suite on both.
-- Discovery is portable, the signals are not: tab colours are iTerm2's alone,
-  kitty gets notifications, everything else — an IDE's embedded terminal included —
-  falls back to the bell and a tab renamed to `⚠ <session>: <why>`,
-  and raising a window is macOS-only.
+- macOS or Linux.
+  Developed on macOS with iTerm2;
+  CI runs the suite on both.
+- Sessions are found whatever terminal they run in.
+  Tab colours are iTerm2's alone,
+  kitty gets notifications,
+  and everything else (an IDE's embedded terminal included) falls back to the bell and a tab renamed to `⚠ <session>: <why>`.
+  Raising a window is macOS-only.
 
 ## Keys
 
@@ -27,13 +30,17 @@ uv tool install git+https://github.com/rooterkyberian/clownhead
 `AGE` is time since its process started,
 and the pane below the table carries the id, path, process and terminal the columns cannot fit.
 
-- `→` (or a click on the row) opens that session's conversation beside the board —
+- `→` (or a click on the row) opens that session's conversation beside the board,
   usually the fastest way to tell what it is actually doing.
-  `↑` and `↓` scroll it, `←` closes it.
-- `f` focuses its terminal: attention, then the window brought to the front.
-- `/` filters by name, status, path, or session id — or by pull request, below.
+  `↑` and `↓` scroll it,
+  `←` closes it.
+- `f` focuses its terminal:
+  attention, then the window brought to the front.
+- `/` filters by name, status, path, or session id —
+  or by pull request, below.
 - `c` folds in the sessions that have already ended.
-  The count of them in the top bar is the same switch, and clicking it does the same thing.
+  The count in the top bar is that same switch,
+  and clicking it works too.
 - `y` copies its resume command.
 - `r` renames it.
 - `t` asks whether to send its process SIGTERM, and can close its tab behind it.
@@ -50,10 +57,11 @@ Turn it off in the settings and the tabs it tinted are cleared on the way out.
 
 ## Pull requests
 
-Which pull request a session belongs to is in none of the columns — it is in what was said.
-Paste a pull request URL into `/`
-and clownhead reads the transcripts of whatever the board is showing.
-Finished work is usually in a session that has ended, so `c` first, then the URL:
+Nothing on a session records which pull request it belongs to,
+so no column can show one.
+Paste a pull request URL into `/` and clownhead reads the transcripts of whatever the board is showing.
+Finished work is usually in a session that has ended,
+so `c` first, then the URL:
 
 ```
  🤡  2 of 137 sessions · acme/data-platform#309                        ⟳ 5s
@@ -64,7 +72,7 @@ Finished work is usually in a session that has ended, so `c` first, then the URL
 
 A search of the live herd alone that comes back empty says so,
 and says that `c` would widen it,
-rather than folding the closed ones in uninvited.
+instead of folding the closed ones in uninvited.
 
 `owner/repo#309` and `repo#309` name the same thing more briefly.
 A bare `#309` does not:
@@ -73,7 +81,8 @@ so it stays an ordinary filter needle.
 
 ## Commands
 
-Every view is also a one-shot subcommand, so the same data pipes into a script.
+Every view is also a one-shot subcommand,
+so the same data pipes into a script.
 
 | Command | What it does |
 |---|---|
@@ -87,9 +96,9 @@ Every view is also a one-shot subcommand, so the same data pipes into a script.
 
 `--columns` names what `ls` shows and the order to show it in:
 `status`, `name`, `quiet`, `age`, `pid`, `tty`, `worktree`, `where`, `resume`.
-Everything but `pid`, `tty` and `worktree` is on by default, `resume` included —
-a listing you are reading in order to get back into something
-should hand you the command that does it:
+Everything but `pid`, `tty` and `worktree` is on by default,
+`resume` included.
+A listing you are reading in order to get back into something should hand you the command that does it:
 
 ```bash
 $ clownhead ls --pr acme/payments-api#309 --closed --columns name,resume
@@ -105,7 +114,8 @@ so naming fewer columns is how you get one whole;
 
 ## How it works
 
-[docs/how-it-works.md](docs/how-it-works.md) — discovery, the attention signals,
+[docs/how-it-works.md](docs/how-it-works.md):
+discovery, the attention signals,
 the control socket behind renaming,
 and what happens to a session when it is terminated or resumed.
 

@@ -1,8 +1,8 @@
 # Alternatives
 
-Survey of existing tools for managing multiple Claude Code sessions, and why clownhead
-exists alongside them. Star counts and push dates were collected on 2026-08-10 and will
-drift.
+Survey of existing tools for managing multiple Claude Code sessions,
+and why clownhead exists alongside them.
+Star counts were collected on 2026-08-10 and will drift.
 
 ## The built-in baseline
 
@@ -19,19 +19,22 @@ Before reaching for anything third-party, note what the CLI already does:
 
 Two details matter and are easy to miss:
 
-**`claude agents` (the TUI) is background-agents only.** Its help text calls itself
-"Manage background agents". Only the `--json` flag includes interactive terminal sessions,
-despite the command's own documentation being inconsistent about this. There is no
-built-in TUI for the interactive herd — that gap is what clownhead fills.
+**`claude agents` (the TUI) is background-agents only.**
+Its help text calls itself "Manage background agents".
+Only the `--json` flag includes interactive terminal sessions,
+despite the command's own documentation being inconsistent about this.
+No built-in TUI covers the interactive herd,
+which is the gap clownhead fills.
 
-**`--json` degrades silently under a sandbox.** Peer discovery reads per-process sockets
-in `/tmp/cc-socks`. A sandboxed shell can execute the CLI but not list that directory, so
-the command returns background agents only and exits zero. clownhead checks for this and
-refuses rather than reporting an empty herd.
+**`--json` degrades silently under a sandbox.**
+Peer discovery reads per-process sockets in `/tmp/cc-socks`,
+and a shell that can execute the CLI without listing that directory gets background agents back and a zero exit status.
+clownhead tests for the condition up front and refuses,
+so a sandbox never reads as a quiet machine.
 
 ## Third-party tools
 
-| Tool | ⭐ | What it is | Adopts running sessions? |
+| Tool | Stars | What it is | Adopts running sessions? |
 |---|---:|---|---|
 | [vibe-kanban](https://github.com/BloopAI/vibe-kanban) | 27.7k | Kanban board that spawns an agent per task | ✗ launcher-owned |
 | [claudecodeui](https://github.com/siteboon/claudecodeui) | 13.2k | Web/mobile GUI; drive sessions from a phone | ~ transcripts only |
@@ -50,40 +53,49 @@ refuses rather than reporting an empty herd.
 
 ## Where clownhead differs
 
-**It adopts sessions it did not start.** Almost every tool above is a *launcher*: it owns
-the session lifecycle and keeps a private registry, so it cannot see sessions started by
-hand in a terminal. Adopting one means restarting everything under it. clownhead reads the
-CLI's own state, so it sees whatever is already running.
+**It adopts sessions it did not start.**
+Almost every tool above is a *launcher*:
+it owns the session lifecycle and keeps a private registry,
+so it cannot see sessions started by hand in a terminal.
+Adopting one means restarting everything under it.
+clownhead reads the CLI's own state,
+so it sees whatever is already running.
 
-That dividing line is inversely correlated with popularity. The only third-party tool
-built on `claude agents --json` sits at 349 stars; the two largest projects, at 41k stars
-combined, solve a different problem entirely.
+That dividing line is inversely correlated with popularity.
+The only third-party tool built on `claude agents --json` sits at 349 stars;
+the two largest projects, at 41k stars combined, solve a different problem entirely.
 
-**It is not a launcher.** clownhead never spawns an agent, creates a worktree, or manages
-a multiplexer. If you want parallel-worktree orchestration, use ccmanager or claude-squad —
-they are good at it, and clownhead will happily watch the sessions they create.
+**It is not a launcher.**
+clownhead never spawns an agent, creates a worktree, or manages a multiplexer.
+If you want parallel-worktree orchestration, use ccmanager or claude-squad;
+they are good at it,
+and clownhead will happily watch the sessions they create.
 
-**Reboot survival is a first-class feature.** A session is a transcript on disk, not a
-process; what a reboot destroys is the mapping from session id to directory. Most tools
-either keep this in a private database or leave it to tmux, which does not survive a
-reboot either.
+**A reboot does not lose the herd.**
+A session is a transcript on disk,
+and what a reboot destroys is the mapping from session id to directory.
+Most tools either keep this in a private database or leave it to tmux,
+which does not survive a reboot either.
 
 ## Subscription vs API key
 
-Every tool listed above works with a Claude subscription, because they all spawn the real
-`claude` binary rather than calling the API directly. Auth lives in the CLI's own OAuth
-token store, so any PTY wrapper inherits it. This is not a differentiator.
+Every tool listed above works with a Claude subscription,
+because they all spawn the real `claude` binary rather than calling the API directly.
+Auth lives in the CLI's own OAuth token store,
+so any PTY wrapper inherits it.
+This is not a differentiator.
 
-The real hazard is precedence. **Claude Code prefers `ANTHROPIC_API_KEY` over subscription
-OAuth when both are present**, so a stray key in a shell profile silently moves a herd
-onto metered billing. Both vibe-kanban (an opt-in `disable_api_key` toggle) and nimbalyst
-(stripping the variable at process bootstrap) added defences only after users were burned.
+The hazard is precedence.
+**Claude Code prefers `ANTHROPIC_API_KEY` over subscription OAuth when both are present**,
+so a stray key in a shell profile silently moves a herd onto metered billing.
+Both vibe-kanban (an opt-in `disable_api_key` toggle) and nimbalyst (stripping the variable at process bootstrap) added defences only after users were burned.
 
-clownhead leaves the environment alone: a session it resumes inherits whatever the shell
-it was started from already had, exactly as one started by hand would.
+clownhead leaves the environment alone:
+a session it resumes inherits whatever the shell it was started from already had,
+exactly as one started by hand would.
 
 ## Worth stealing
 
-[claude-tmux-status](https://github.com/alexose/claude-tmux-status) puts live session
-state in the tmux status bar. It is passive, additive, and does not care who started the
-session — the same design stance as `clownhead paint`.
+[claude-tmux-status](https://github.com/alexose/claude-tmux-status) puts live session state in the tmux status bar.
+It is passive, additive, and does not care who started the session,
+which is the same design stance as `clownhead paint`.
