@@ -53,9 +53,15 @@ nothing in the text can separate them.
 
 ## Starting a session
 
-A session for a reference is `claude --worktree <name> --name <name> <url>` run in the repository.
+A session for a reference is
+`claude --permission-mode plan --worktree <name> --name <name> <url>` run in the repository.
 That is the same `--worktree` that rebuilds a pruned worktree on resume,
 so Claude Code makes the checkout and clownhead asks git for nothing.
+
+Plan mode is where it starts, because the prompt is a URL and nothing else.
+The session has to go and read the ticket before there is anything to agree to,
+and what comes back is a plan for work nobody has scoped yet.
+Resuming imposes no mode, since a session that has been running already has one.
 
 The name is the reference plus as much of its title as fits,
 cut on a word boundary and reduced to what a directory and a branch will both take,

@@ -58,6 +58,8 @@ def test_start_plan_makes_the_worktree_and_names_the_session_after_it(tmp_path):
     assert plan.directory == tmp_path
     assert plan.argv == (
         "claude",
+        "--permission-mode",
+        "plan",
         "--worktree",
         "issue-2-open-a-session",
         "--name",
@@ -70,8 +72,20 @@ def test_start_shell_command_runs_from_the_repository(tmp_path):
     plan = start_plan(tmp_path, name="plat-4471", prompt="https://craft.atlassian.net/browse/PLAT-4471")
 
     assert plan.shell_command == (
-        f"(cd {tmp_path} && claude --worktree plat-4471 --name plat-4471 https://craft.atlassian.net/browse/PLAT-4471)"
+        f"(cd {tmp_path} && claude --permission-mode plan --worktree plat-4471 "
+        "--name plat-4471 https://craft.atlassian.net/browse/PLAT-4471)"
     )
+
+
+def test_start_plan_starts_in_plan_mode(tmp_path):
+    plan = start_plan(tmp_path, name="issue-2", prompt="https://github.com/acme/widgets/issues/2")
+
+    assert "--permission-mode" in plan.argv
+    assert plan.argv[plan.argv.index("--permission-mode") + 1] == "plan"
+
+
+def test_resume_does_not_impose_a_permission_mode(tmp_path):
+    assert "--permission-mode" not in resume_argv(session(tmp_path))
 
 
 def test_a_launch_quotes_what_a_shell_would_otherwise_read_as_its_own(tmp_path):

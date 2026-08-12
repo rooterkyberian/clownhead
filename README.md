@@ -93,7 +93,7 @@ $ clownhead https://github.com/acme/data-platform/issues/2
 
 The board opens filtered to that issue, the ended sessions already folded in.
 `enter` gets you back into whichever one you pick;
-`n` starts a new one in a worktree named after the issue.
+`n` starts a new one in plan mode, in a worktree named after the issue.
 
 ## Commands
 

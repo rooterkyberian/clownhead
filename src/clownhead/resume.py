@@ -64,8 +64,14 @@ def start_plan(repo: Path, *, name: str, prompt: str) -> Launch:
     title and every listing, which is what makes a board a dozen sessions deep readable at
     all. The prompt is the reference itself: the first thing the session should read is
     what it was started to work on.
+
+    It starts in plan mode, because the prompt is a URL and nothing else. A session handed
+    a ticket has to go and read it before there is anything to agree to, and the first
+    thing it learns is what somebody wrote down about work nobody has scoped yet. Planning
+    it back is the answer worth having; a session that started editing on the strength of
+    an issue title is the one you would have to unpick.
     """
-    return Launch(repo, ("claude", "--worktree", name, "--name", name, prompt))
+    return Launch(repo, ("claude", "--permission-mode", "plan", "--worktree", name, "--name", name, prompt))
 
 
 def resume_argv(session: Session) -> list[str]:

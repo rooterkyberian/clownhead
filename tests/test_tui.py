@@ -429,6 +429,8 @@ async def test_tui_start_leaves_the_board_with_the_command_to_run(monkeypatch):
     assert app.launch.directory == Path("/tmp/widgets")
     assert app.launch.argv == (
         "claude",
+        "--permission-mode",
+        "plan",
         "--worktree",
         "issue-2-open-a-session",
         "--name",
@@ -452,7 +454,7 @@ async def test_tui_start_copies_the_command_rather_than_running_it(monkeypatch):
 
         assert app.launch is None
         assert copied == [
-            "(cd /tmp/widgets && claude --worktree issue-2-open-a-session "
+            "(cd /tmp/widgets && claude --permission-mode plan --worktree issue-2-open-a-session "
             "--name issue-2-open-a-session https://github.com/acme/widgets/issues/2)"
         ]
 
