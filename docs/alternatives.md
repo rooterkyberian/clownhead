@@ -2,7 +2,7 @@
 
 Survey of existing tools for managing multiple Claude Code sessions,
 and why clownhead exists alongside them.
-Star counts were collected on 2026-08-10 and will drift.
+Star counts were collected on 2026-08-12 and will drift.
 
 ## The built-in baseline
 
@@ -43,11 +43,12 @@ so a sandbox never reads as a quiet machine.
 | [omnara](https://github.com/omnara-ai/omnara) | 2.7k | Self-hosted durable/remote agent infrastructure | ✗ different problem |
 | [dmux](https://github.com/standardagents/dmux) | 1.7k | tmux + worktree multiplexer, lifecycle hooks | ✗ launcher-owned |
 | [agentapi](https://github.com/coder/agentapi) | 1.5k | HTTP API so other software can drive the CLI | ✗ wraps what it starts |
-| [nimbalyst](https://github.com/nimbalyst/nimbalyst) | 1.4k | Crystal's successor; desktop + mobile workspace | ✗ launcher-owned |
+| [nimbalyst](https://github.com/nimbalyst/nimbalyst) | 1.5k | Crystal's successor; desktop + mobile workspace | ✗ launcher-owned |
 | [ccmanager](https://github.com/kbwo/ccmanager) | 1.2k | TUI, no tmux; busy/waiting/idle, worktree ops | ✗ launcher-owned |
-| [tmux-claude-session-manager](https://github.com/craftzdog/tmux-claude-session-manager) | 349 | tmux popup; **reads `claude agents --json`** | ✓ if sessions live in tmux |
-| [claude-tmux](https://github.com/nielsgroen/claude-tmux) | 201 | tmux popup, live output preview, worktree + PR | ~ tmux-scoped |
-| [claude-tmux-status](https://github.com/alexose/claude-tmux-status) | 46 | Live session state in the tmux status bar | ✓ passive |
+| [tmux-claude-session-manager](https://github.com/craftzdog/tmux-claude-session-manager) | 355 | tmux popup; **reads `claude agents --json`** | ✓ if sessions live in tmux |
+| [claude-tmux](https://github.com/nielsgroen/claude-tmux) | 202 | tmux popup, live output preview, worktree + PR | ~ tmux-scoped |
+| [cctop](https://github.com/st0012/cctop) | 136 | macOS menubar app; one view over Claude Code, Codex, opencode and pi | ~ needs its hooks installed |
+| [claude-tmux-status](https://github.com/alexose/claude-tmux-status) | 45 | Live session state in the tmux status bar | ✓ passive |
 | [Moshi](https://getmoshi.app/) | closed | iOS/Android SSH/Mosh terminal and agent cockpit | ~ requires tmux |
 | [Conductor](https://conductor.build/) | closed | macOS-native parallel worktree app | ✗ launcher-owned |
 
@@ -62,8 +63,19 @@ clownhead reads the CLI's own state,
 so it sees whatever is already running.
 
 That dividing line is inversely correlated with popularity.
-The only third-party tool built on `claude agents --json` sits at 349 stars;
+The only third-party tool built on `claude agents --json` sits at 355 stars;
 the two largest projects, at 41k stars combined, solve a different problem entirely.
+
+cctop sits closest to the same stance.
+It never launches a session either,
+and it covers Codex, opencode and pi alongside Claude Code.
+What it reads is a stream of hook events:
+install its Claude Code plugin and every `SessionStart`, `PermissionRequest` and `Stop` lands in a local record the menubar app picks up.
+That buys detail no polling reaches, subagents and permission prompts included,
+and it costs a hook in every session's settings,
+so one already running when the plugin arrived stays invisible until it restarts.
+clownhead asks the CLI what is live and installs nothing into Claude Code,
+which is the same trade taken the other way.
 
 **It is not a launcher.**
 clownhead never spawns an agent, creates a worktree, or manages a multiplexer.

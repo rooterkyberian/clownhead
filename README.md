@@ -3,7 +3,7 @@
 A status board for the Claude Code sessions already running on your machine:
 which are busy, which are idle, and which one is blocked waiting on you.
 
-![A herd of Claude Code sessions, one waiting on you](docs/demo.gif)
+![A herd of Claude Code sessions, one waiting on you](https://github.com/rooterkyberian/clownhead/raw/main/docs/demo.gif)
 
 ## Install
 
@@ -131,10 +131,12 @@ so naming fewer columns is how you get one whole;
 
 ## How it works
 
-[docs/how-it-works.md](docs/how-it-works.md):
+[How it works](https://rooterkyberian.github.io/clownhead/how-it-works/):
 discovery, the attention signals,
 the control socket behind renaming,
 and what happens to a session when it is terminated or resumed.
+[Alternatives](https://rooterkyberian.github.io/clownhead/alternatives/)
+surveys the other tools for managing a herd, and where this one differs.
 
 ## Problems
 

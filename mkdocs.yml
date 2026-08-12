@@ -1,0 +1,82 @@
+site_name: clownhead
+site_url: https://rooterkyberian.github.io/clownhead/
+site_description: A status board for the Claude Code sessions already running on your machine.
+site_author: Maciej Urbański
+copyright: MIT licensed
+
+repo_url: https://github.com/rooterkyberian/clownhead
+repo_name: rooterkyberian/clownhead
+
+docs_dir: docs
+exclude_docs: |
+  demo.tape
+
+watch:
+  - README.md
+
+theme:
+  name: material
+  custom_dir: overrides
+  favicon: assets/favicon.svg
+  icon:
+    logo: material/drama-masks
+    repo: fontawesome/brands/github
+  font:
+    text: Inter
+    code: JetBrains Mono
+  palette:
+    - media: "(prefers-color-scheme: dark)"
+      scheme: slate
+      primary: custom
+      accent: custom
+      toggle:
+        icon: material/weather-sunny
+        name: Switch to light mode
+    - media: "(prefers-color-scheme: light)"
+      scheme: default
+      primary: custom
+      accent: custom
+      toggle:
+        icon: material/weather-night
+        name: Switch to dark mode
+  features:
+    - content.code.copy
+    - navigation.tabs
+    - navigation.top
+    - navigation.footer
+    - search.highlight
+    - search.suggest
+    - toc.follow
+
+extra_css:
+  - stylesheets/extra.css
+
+nav:
+  - Home: index.md
+  - Guide: guide.md
+  - How it works: how-it-works.md
+  - Alternatives: alternatives.md
+
+plugins:
+  - search
+
+markdown_extensions:
+  - admonition
+  - attr_list
+  - md_in_html
+  - tables
+  - toc:
+      permalink: true
+  - pymdownx.details
+  - pymdownx.highlight:
+      use_pygments: true
+  - pymdownx.superfences
+  - pymdownx.snippets:
+      base_path: ['.']
+      check_paths: true
+
+extra:
+  social:
+    - icon: fontawesome/brands/github
+      link: https://github.com/rooterkyberian/clownhead
+      name: clownhead on GitHub

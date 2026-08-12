@@ -35,6 +35,14 @@ depends = ["lint", "typecheck", "test"]
 description = "Build the sdist and wheel"
 run = "uv build"
 
+[tasks.docs]
+description = "Serve the documentation site at http://127.0.0.1:8000"
+run = "uv run --group docs mkdocs serve"
+
+[tasks.docs-build]
+description = "Build the documentation site, failing on a broken link"
+run = "uv run --group docs mkdocs build --strict"
+
 [tasks.demo]
 description = "Re-record the README demo GIF with vhs"
 run = ["uv sync", "vhs docs/demo.tape"]

@@ -38,6 +38,15 @@ jobs:
       - run: uv sync --all-groups
       - run: uv run pytest
 
+  docs:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v7
+      - uses: astral-sh/setup-uv@v9.0.0
+        with:
+          enable-cache: true
+      - run: uv run --group docs mkdocs build --strict
+
   build:
     runs-on: ubuntu-latest
     steps:

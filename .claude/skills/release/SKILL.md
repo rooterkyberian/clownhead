@@ -88,6 +88,12 @@ gh release create vX.Y.Z --title "clownhead X.Y.Z" --notes "..."
 The tag is also what a user pins to — `uv tool install git+https://github.com/rooterkyberian/clownhead@vX.Y.Z` —
 so it is pushed before the release that names it.
 
+Pushing the tag is also what publishes <https://rooterkyberian.github.io/clownhead/>,
+since `.github/workflows/pages.yml` triggers on `v*`.
+The site is built from the tagged commit and its front page is `overrides/home.html`,
+so a release that changes the tagline or the install command should change the hero in the same commit.
+`gh run watch` on the `Pages` run, or `gh api repos/rooterkyberian/clownhead/pages/builds/latest`, says whether it landed.
+
 Notes are written for someone deciding whether to upgrade, in the README's voice:
 what changed, what it is for, and what it replaced.
 Anything breaking says so plainly and says what to use instead,

@@ -1,0 +1,89 @@
+{% extends "main.html" %}
+
+{% block extrahead %}
+  {{ super() }}
+  <style>
+    .md-main__inner { margin: 0 }
+    .md-content { display: none }
+  </style>
+{% endblock %}
+
+{% block tabs %}
+  {{ super() }}
+
+  <section class="ch-hero">
+    <div class="ch-hero__inner">
+      <h1 class="ch-hero__title">
+        <span class="ch-hero__mark">🤡</span> Every Claude Code session on one board
+      </h1>
+      <p class="ch-hero__tagline">
+        Which are busy, which are idle,
+        and which one is blocked waiting on you.
+      </p>
+
+      <div class="ch-install">
+        <code id="ch-install-command">uv tool install git+https://github.com/rooterkyberian/clownhead</code>
+        <button type="button" class="ch-install__copy" data-copy-target="ch-install-command" aria-label="Copy the install command">
+          <span class="ch-install__idle">copy</span>
+          <span class="ch-install__done">copied</span>
+        </button>
+      </div>
+
+      <div class="ch-cta md-typeset">
+        <a class="md-button md-button--primary" href="{{ 'guide/' | url }}">Read the guide</a>
+        <a class="md-button" href="{{ 'how-it-works/' | url }}">How it works</a>
+      </div>
+
+      <img class="ch-hero__shot" src="{{ 'demo.gif' | url }}"
+           alt="A herd of Claude Code sessions, one waiting on you">
+    </div>
+  </section>
+
+  <section class="ch-cards">
+    <div class="ch-cards__inner">
+      <article class="ch-card">
+        <h2>It adopts what it did not start</h2>
+        <p>
+          Almost every other tool is a launcher, and cannot see a session you opened by hand.
+          clownhead reads Claude Code's own state,
+          so the herd it shows is whatever is already running.
+        </p>
+      </article>
+      <article class="ch-card">
+        <h2>Readable from the tab bar</h2>
+        <p>
+          Every reload tints each session's iTerm2 tab to match its state,
+          so a board you are nowhere near still tells you who is waiting.
+          <code>clownhead paint</code> does it without the board at all.
+        </p>
+      </article>
+      <article class="ch-card">
+        <h2>Finds the work behind a pull request</h2>
+        <p>
+          Nothing on a session records which pull request it belongs to.
+          Paste the URL into the filter and clownhead reads the transcripts
+          until it finds the sessions that worked on it.
+        </p>
+      </article>
+    </div>
+  </section>
+{% endblock %}
+
+{% block content %}{% endblock %}
+
+{% block scripts %}
+  {{ super() }}
+  <script>
+    document.querySelectorAll(".ch-install__copy").forEach(function (button) {
+      button.addEventListener("click", function () {
+        var source = document.getElementById(button.dataset.copyTarget);
+        navigator.clipboard.writeText(source.textContent.trim()).then(function () {
+          button.classList.add("ch-install__copy--done");
+          setTimeout(function () {
+            button.classList.remove("ch-install__copy--done");
+          }, 2000);
+        });
+      });
+    });
+  </script>
+{% endblock %}
