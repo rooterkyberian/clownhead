@@ -76,6 +76,7 @@ and it costs a hook in every session's settings,
 so one already running when the plugin arrived stays invisible until it restarts.
 clownhead asks the CLI what is live and installs nothing into Claude Code,
 which is the same trade taken the other way.
+[cctop](cctop.md) reads the two feature-by-feature.
 
 **It is not a launcher.**
 clownhead never spawns an agent, creates a worktree, or manages a multiplexer.
