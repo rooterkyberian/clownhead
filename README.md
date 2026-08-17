@@ -26,6 +26,10 @@ which is ahead of the last release.
   kitty gets notifications,
   and everything else (an IDE's embedded terminal included) falls back to the bell and a tab renamed to `⚠ <session>: <why>`.
   Raising a window is macOS-only.
+- Sessions in a JetBrains IDE get their terminal tab selected as well,
+  which takes an Accessibility grant for whichever application clownhead is running in:
+  System Settings, Privacy & Security, Accessibility.
+  Without it the window still comes up and the board says why the tab did not.
 
 ## Keys
 
@@ -41,7 +45,8 @@ and the pane below the table carries the id, path, process and terminal the colu
   a live one has its terminal focused,
   and one that has ended is resumed here, which ends the board.
 - `f` focuses its terminal:
-  attention, then the window brought to the front.
+  attention, then the window brought to the front,
+  and in a JetBrains IDE the session's own tab selected once it is.
 - `/` filters by name, status, path, or session id —
   or by pull request or issue, below.
 - `n` starts a new session for the pull request or issue being filtered on.

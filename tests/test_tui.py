@@ -822,6 +822,18 @@ async def test_tui_focus_signals_the_selected_session():
         assert "\033]1337;StealFocus\a" in terminal.written
 
 
+async def test_tui_focus_honours_the_foreground_setting():
+    terminal = SilentTerminal()
+    app = build_app(terminal=terminal, settings=Settings(foreground=False, paint_tabs=False))
+
+    async with app.run_test() as pilot:
+        await settle(app, pilot)
+        await pilot.press("f")
+
+        assert "\033]1337;RequestAttention=yes\a" in terminal.written
+        assert "\033]1337;StealFocus\a" not in terminal.written
+
+
 async def test_tui_tints_every_tab_as_it_reloads():
     terminal = SilentTerminal()
     app = build_app(terminal=terminal)

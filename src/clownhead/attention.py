@@ -12,6 +12,7 @@ from collections.abc import Iterable
 from dataclasses import dataclass
 from pathlib import Path
 
+from clownhead.jetbrains import Selection
 from clownhead.models import Session, Status
 from clownhead.terminal import Rgb, Terminal, detect_terminal, own_tty, terminal_for
 
@@ -38,6 +39,16 @@ class SignalResult:
     tty: Path | None
     delivered: bool
     detail: str
+    tab: Selection | None = None
+
+    @property
+    def tab_note(self) -> str:
+        """Why the session was left behind its own tab, and nothing at all when it was not.
+
+        A signal that reached the terminal but not the tab is half a focus, so it is worth
+        a caller reading this before it calls the whole thing a success.
+        """
+        return "" if self.tab is None or self.tab.selected else f" · {self.tab.reason}"
 
 
 def color_for(status: Status) -> Rgb | None:
@@ -138,6 +149,7 @@ def focus(
     message: str | None = None,
     *,
     foreground: bool = True,
+    select_tab: bool = True,
 ) -> SignalResult:
     """Demand attention from a single session's terminal and bring it to the front.
 
@@ -145,24 +157,46 @@ def focus(
     or renamed tab survives the switch and still marks the session once the window is up.
     A terminal without notifications is not asked for one: it would degrade to a second
     bell, and the message it would have carried is already in the marked tab title.
+
+    An application that draws its own tabs is then told which of them was meant, unless
+    ``select_tab`` says a session ahead of this one has already claimed that window.
     """
     if session.tty is None:
         return SignalResult(session.label, None, False, "no tty")
     text = message or f"{session.label}: {session.reason}"
     emitter = terminal_of(session, terminal)
+    tab: Selection | None = None
     try:
         emitter.request_attention(session.tty, text)
         if foreground:
             emitter.foreground(session.tty)
+            if select_tab and emitter.supports_tab_focus:
+                tab = emitter.select_tab(session.tty, text)
         if emitter.supports_notifications:
             emitter.notify(session.tty, text)
     except (OSError, subprocess.SubprocessError) as error:
         return SignalResult(session.label, session.tty, False, str(error))
-    return SignalResult(session.label, session.tty, True, text)
+    return SignalResult(session.label, session.tty, True, text, tab)
 
 
 def focus_stalled(
     sessions: Iterable[Session], terminal: Terminal | None = None, *, foreground: bool = True
 ) -> list[SignalResult]:
-    """Demand attention from every session that is waiting on a human."""
-    return [focus(session, terminal, foreground=foreground) for session in sessions if session.needs_attention]
+    """Demand attention from every session that is waiting on a human.
+
+    One window can only show one tab, so the first stalled session in an application takes
+    it and the rest are signalled without asking for theirs. Asking anyway would have each
+    selection undo the one before it, at the cost of a round trip through the accessibility
+    API per session, to end on whichever happened to be last.
+    """
+    results: list[SignalResult] = []
+    claimed: set[str] = set()
+    for session in sessions:
+        if not session.needs_attention:
+            continue
+        emitter = terminal_of(session, terminal)
+        owner = emitter.bundle_id if emitter.supports_tab_focus else None
+        results.append(focus(session, emitter, foreground=foreground, select_tab=owner not in claimed))
+        if owner is not None:
+            claimed.add(owner)
+    return results

@@ -853,9 +853,10 @@ class FleetApp(App[None]):
         if session is None:
             self.notify("nothing selected", severity="warning")
             return
-        result = attention.focus(session, self._terminal)
-        severity: SeverityLevel = "information" if result.delivered else "warning"
-        self.notify(f"{result.label}: {result.detail}", severity=severity)
+        result = attention.focus(session, self._terminal, foreground=self._settings.foreground)
+        reached = result.delivered and not result.tab_note
+        severity: SeverityLevel = "information" if reached else "warning"
+        self.notify(f"{result.label}: {result.detail}{result.tab_note}", severity=severity)
 
     def action_start(self) -> None:
         """Start a new session for whatever the board is filtered to.

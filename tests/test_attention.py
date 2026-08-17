@@ -4,6 +4,7 @@ from pathlib import Path
 import pytest
 
 from clownhead import attention
+from clownhead.jetbrains import Selection
 from clownhead.models import Session, Status
 from clownhead.terminal import ITerm2Terminal, Rgb, Terminal
 
@@ -224,6 +225,79 @@ def test_focus_uses_custom_message():
     attention.focus(session(Status.WAITING), terminal, "wake up")
 
     assert terminal.calls[-1][1] == "\033]9;wake up\a"
+
+
+class TabbedTerminal(PlainTerminal):
+    """An IDE, which has a tab to select once its window is up."""
+
+    def __init__(self, outcome: Selection, bundle_id: str = "com.jetbrains.pycharm"):
+        super().__init__()
+        self.bundle_id = bundle_id
+        self.outcome = outcome
+        self.asked: list[str] = []
+        self.supports_tab_focus = True
+
+    def select_tab(self, tty: Path, text: str) -> Selection:
+        self.asked.append(text)
+        return self.outcome
+
+
+def test_focus_hands_the_terminal_the_text_it_marked_the_tab_with():
+    terminal = TabbedTerminal(Selection(True))
+
+    result = attention.focus(session(Status.WAITING), terminal)
+
+    assert terminal.asked == ["one: waiting"]
+    assert result.detail == "one: waiting"
+    assert result.tab_note == ""
+
+
+def test_focus_says_why_a_tab_was_left_behind():
+    terminal = TabbedTerminal(Selection(False, "needs accessibility access"))
+
+    result = attention.focus(session(Status.WAITING), terminal)
+
+    assert result.delivered
+    assert result.detail == "one: waiting"
+    assert result.tab_note == " · needs accessibility access"
+
+
+def test_a_terminal_with_no_tab_to_select_has_nothing_to_report():
+    assert attention.focus(session(Status.WAITING), PlainTerminal()).tab_note == ""
+
+
+def test_focus_leaves_the_tabs_alone_without_the_foreground_switch():
+    terminal = TabbedTerminal(Selection(True))
+
+    attention.focus(session(Status.WAITING), terminal, foreground=False)
+
+    assert terminal.asked == []
+
+
+def test_focus_stalled_lets_one_session_per_window_claim_the_tab(monkeypatch):
+    terminal = TabbedTerminal(Selection(True))
+    monkeypatch.setattr(attention, "terminal_for", lambda app: terminal)
+
+    results = attention.focus_stalled([session(Status.WAITING), session(Status.BLOCKED, name="two")])
+
+    assert [result.delivered for result in results] == [True, True]
+    assert terminal.asked == ["one: waiting"]
+
+
+def test_focus_stalled_asks_every_application_holding_a_stalled_session(monkeypatch):
+    ides = {
+        Path("/PyCharm.app"): TabbedTerminal(Selection(True), "com.jetbrains.pycharm"),
+        Path("/GoLand.app"): TabbedTerminal(Selection(True), "com.jetbrains.goland"),
+    }
+    monkeypatch.setattr(attention, "terminal_for", ides.__getitem__)
+    stalled = [
+        session(Status.WAITING).model_copy(update={"app": Path("/PyCharm.app")}),
+        session(Status.WAITING, name="two").model_copy(update={"app": Path("/GoLand.app")}),
+    ]
+
+    attention.focus_stalled(stalled)
+
+    assert [terminal.asked for terminal in ides.values()] == [["one: waiting"], ["two: waiting"]]
 
 
 def test_focus_reports_a_failed_foreground_switch():
