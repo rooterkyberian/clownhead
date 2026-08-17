@@ -1,5 +1,7 @@
 # 🤡 clownhead
 
+[![PyPI](https://img.shields.io/pypi/v/clownhead)](https://pypi.org/project/clownhead/)
+
 A status board for the Claude Code sessions already running on your machine:
 which are busy, which are idle, and which one is blocked waiting on you.
 
