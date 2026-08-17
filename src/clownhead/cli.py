@@ -536,8 +536,9 @@ def focus(
             raise typer.Exit(code=1)
         results = [attention.focus(match, message=message, foreground=raise_window) for match in matches]
     for result in results:
-        marker = "[green]focused[/]" if result.delivered else "[yellow]skipped[/]"
-        console.print(f"{marker} {result.label}: {result.detail}")
+        colour = "green" if result.delivered and not result.tab_note else "yellow"
+        marker = "focused" if result.delivered else "skipped"
+        console.print(f"[{colour}]{marker}[/] {result.label}: {result.detail}{result.tab_note}")
 
 
 @app.command()
@@ -558,7 +559,8 @@ def doctor() -> None:
         f"attention={terminal.supports_attention} "
         f"tab_color={terminal.supports_tab_color} "
         f"notifications={terminal.supports_notifications} "
-        f"foreground={terminal.supports_foreground}"
+        f"foreground={terminal.supports_foreground} "
+        f"tab_focus={terminal.supports_tab_focus}"
     )
 
 

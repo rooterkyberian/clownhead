@@ -102,6 +102,33 @@ Which application to raise is resolved per session,
 since a herd spans several terminals at once;
 `clownhead doctor` lists which ones.
 
+## IDE tabs
+
+A JetBrains IDE keeps every terminal in one window,
+so raising the application leaves a session sitting behind whichever tab was last looked at.
+Selecting the right one goes through the macOS accessibility API,
+where each tab is a static-text element named with the title clownhead marked it with,
+carrying the rectangle it is drawn in.
+That title is written again just before the lookup,
+since a session repaints its own as it works.
+
+The rectangle is what the click needs, and a click is what the strip requires.
+Tabs there carry no press action;
+`AXSelected` and `AXFocused` are reported settable and then ignored;
+and System Events' own `click at` resolves a point to an element and presses it,
+which for an element with nothing to press does nothing.
+So the click is posted where a hardware click enters, through CoreGraphics,
+and the pointer is warped back where it was found.
+
+Reading the tree and posting the click both need the Accessibility grant
+held by whichever application clownhead is running in,
+and a focus that could not reach a tab says why on the board.
+A tool window nobody can see leaves no tabs in the tree at all,
+so a miss is worth one press of the stripe button that shows it,
+and the press is undone when the tab still is not there.
+Focusing everything that is waiting at once selects one tab per IDE,
+since a window can only show one.
+
 ## Termination
 
 `t` sends SIGTERM, never SIGKILL, and only after a confirmation:

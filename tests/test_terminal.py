@@ -4,11 +4,14 @@ from pathlib import Path
 import pytest
 
 from clownhead import terminal as terminal_module
+from clownhead.jetbrains import Selection
 from clownhead.terminal import (
     ITerm2Terminal,
+    JetBrainsTerminal,
     KittyTerminal,
     Rgb,
     Terminal,
+    attention_title,
     bundle_id_of,
     copy_to_pasteboard,
     detect_terminal,
@@ -29,6 +32,15 @@ class RecordingTerminal(Terminal):
 class RecordingITerm2(ITerm2Terminal):
     def __init__(self):
         super().__init__()
+        self.written: list[str] = []
+
+    def write(self, tty: Path, sequence: str) -> None:
+        self.written.append(sequence)
+
+
+class RecordingJetBrains(JetBrainsTerminal):
+    def __init__(self, bundle_id: str):
+        super().__init__(bundle_id)
         self.written: list[str] = []
 
     def write(self, tty: Path, sequence: str) -> None:
@@ -255,15 +267,80 @@ def test_terminal_for_recognises_the_owning_emulator(tmp_path):
 
 
 def test_terminal_for_raises_an_application_it_has_no_escape_codes_for(tmp_path, raised):
-    app = bundle(tmp_path, "PyCharm", "com.jetbrains.pycharm")
+    app = bundle(tmp_path, "Ghostty", "com.mitchellh.ghostty")
 
     terminal = terminal_for(app)
     terminal.foreground(TTY)
 
-    assert terminal.name == "pycharm"
+    assert terminal.name == "ghostty"
     assert not terminal.supports_attention
     assert terminal.supports_foreground
+    assert not terminal.supports_tab_focus
     assert raised == [app]
+
+
+@pytest.mark.parametrize(
+    ("name", "identifier"),
+    [
+        ("PyCharm", "com.jetbrains.pycharm"),
+        ("GoLand", "com.jetbrains.goland"),
+        ("Android Studio", "com.google.android.studio"),
+    ],
+)
+def test_terminal_for_selects_tabs_in_an_ide_that_draws_its_own(tmp_path, raised, name, identifier):
+    terminal = terminal_for(bundle(tmp_path, name, identifier))
+
+    assert isinstance(terminal, JetBrainsTerminal)
+    assert terminal.name == name.lower()
+    assert terminal.supports_tab_focus
+    assert not terminal.supports_attention
+
+
+def test_an_ide_is_not_asked_for_tabs_off_macos(monkeypatch, tmp_path):
+    monkeypatch.setattr(terminal_module, "on_macos", lambda: False)
+
+    terminal = terminal_for(bundle(tmp_path, "PyCharm", "com.jetbrains.pycharm"))
+
+    assert not terminal.supports_tab_focus
+
+
+def test_an_ide_marks_the_tab_then_looks_for_that_mark(monkeypatch):
+    asked: list[tuple[str, str]] = []
+    monkeypatch.setattr(terminal_module, "on_macos", lambda: True)
+    monkeypatch.setattr(
+        terminal_module.jetbrains,
+        "select",
+        lambda bundle_id, title: asked.append((bundle_id, title)) or Selection(True),
+    )
+
+    terminal = RecordingJetBrains("com.jetbrains.pycharm")
+    outcome = terminal.select_tab(TTY, "etl-94: input needed")
+
+    assert outcome == Selection(True)
+    assert terminal.written == ["\033]0;⚠ etl-94: input needed\a"]
+    assert asked == [("com.jetbrains.pycharm", "⚠ etl-94: input needed")]
+
+
+def test_a_terminal_that_gives_every_tab_a_device_declines_to_select_one():
+    assert ITerm2Terminal().select_tab(TTY, "etl-94: input needed") == Selection(False)
+
+
+def test_attention_title_marks_the_text_it_is_given():
+    assert attention_title("etl-94: input needed") == "⚠ etl-94: input needed"
+
+
+@pytest.mark.parametrize(
+    ("identifier", "expected"),
+    [
+        ("com.jetbrains.pycharm", True),
+        ("com.jetbrains.intellij.ce", True),
+        ("com.google.android.studio", True),
+        ("com.googlecode.iterm2", False),
+        (None, False),
+    ],
+)
+def test_which_applications_draw_their_own_tabs(identifier, expected):
+    assert terminal_module.draws_its_own_tabs(identifier) is expected
 
 
 def test_terminal_for_falls_back_to_the_local_environment(monkeypatch):

@@ -13,6 +13,12 @@ Raising the emulator above other applications is the one signal no portable esca
 covers. iTerm2 has ``StealFocus``; everything else on macOS is asked through ``open``,
 which activates a running application without opening a window.
 
+An IDE needs one more step than that. Its terminal tabs share a window, so raising the
+application leaves the session still buried behind whichever tab was last looked at, and
+no escape code reaches the strip they are drawn in. That tab is selected through the
+accessibility API instead, by :mod:`clownhead.jetbrains`, and found by the title this module
+had already marked it with.
+
 Which implementation to use is a per-session question, not a per-machine one: a fleet
 spans several terminals at once, so the application owning a session is resolved from
 its process tree by :func:`terminal_for`. Reading it out of clownhead's own environment,
@@ -30,6 +36,9 @@ from dataclasses import dataclass
 from functools import lru_cache
 from pathlib import Path
 
+from clownhead import jetbrains
+from clownhead.jetbrains import Selection
+
 ESC = "\033"
 BEL = "\a"
 
@@ -40,6 +49,8 @@ BUNDLE_ID_VAR = "__CFBundleIdentifier"
 OPEN_BINARY = "/usr/bin/open"
 PBCOPY_BINARY = "/usr/bin/pbcopy"
 ACTIVATION_TIMEOUT = 5.0
+
+JETBRAINS_PREFIXES = ("com.jetbrains.", "com.google.android.studio")
 
 
 @dataclass(frozen=True)
@@ -65,6 +76,7 @@ class Terminal:
     supports_tab_color = False
     supports_notifications = False
     supports_foreground = False
+    supports_tab_focus = False
 
     def __init__(self, bundle_id: str | None = None, app: Path | None = None, name: str | None = None) -> None:
         self.bundle_id = bundle_id or type(self).bundle_id
@@ -94,13 +106,23 @@ class Terminal:
         """
         self.bell(tty)
         if text is not None:
-            self.set_title(tty, f"{ATTENTION_MARK} {text}")
+            self.set_title(tty, attention_title(text))
 
     def foreground(self, tty: Path) -> None:
         """Raise the emulator above other applications; a no-op where unsupported."""
         target = self.app or self.bundle_id
         if target is not None and on_macos():
             raise_application(target)
+
+    def select_tab(self, tty: Path, text: str) -> Selection:
+        """Bring the tab of the session marked with ``text`` to the front; declined by default.
+
+        An emulator that gives each tab a TTY has nothing to do here: the session was
+        signalled on its own device, so whichever tab that device belongs to is the one
+        that flashed. Only an application drawing its tabs inside a single window has to be
+        told which of them was meant, which is what ``supports_tab_focus`` says of it.
+        """
+        return Selection(False)
 
     def set_tab_color(self, tty: Path, color: Rgb) -> None:
         """Tint the tab; a no-op where tab colours are unsupported."""
@@ -161,6 +183,32 @@ class KittyTerminal(Terminal):
         self.bell(tty)
 
 
+class JetBrainsTerminal(Terminal):
+    """A JetBrains IDE, whose terminal tabs share one window and one process.
+
+    Everything the portable subset offers still applies — the bell rings and the tab is
+    renamed — and the rename is what makes the rest possible: the marked title is the name
+    the tab is then found under in the accessibility tree.
+    """
+
+    def __init__(self, bundle_id: str | None = None, app: Path | None = None, name: str | None = None) -> None:
+        super().__init__(bundle_id, app=app, name=name)
+        self.supports_tab_focus = on_macos() and self.bundle_id is not None
+
+    def select_tab(self, tty: Path, text: str) -> Selection:
+        """Select the terminal tab of the session marked with ``text``.
+
+        The mark is written again first. A session repaints its own title as it works, and
+        the one this is looking for was written a moment ago by ``request_attention`` — long
+        enough for a busy session to have replaced it, and cheap enough to simply reassert.
+        """
+        if self.bundle_id is None:
+            return Selection(False)
+        title = attention_title(text)
+        self.set_title(tty, title)
+        return jetbrains.select(self.bundle_id, title)
+
+
 TERMINALS: dict[str, type[Terminal]] = {
     "iTerm.app": ITerm2Terminal,
     "kitty": KittyTerminal,
@@ -175,9 +223,10 @@ TERMINALS_BY_BUNDLE: dict[str, type[Terminal]] = {
 def terminal_for(app: Path | None, env: Mapping[str, str] | None = None) -> Terminal:
     """The terminal implementation for the application that owns a session.
 
-    An application clownhead has no escape codes for — an IDE with an embedded terminal,
-    say — still gets the portable subset plus a foreground switch, which is the part that
-    matters and the part no escape code would have delivered anyway.
+    An application clownhead has no escape codes for still gets the portable subset plus a
+    foreground switch, which is the part that matters and the part no escape code would
+    have delivered anyway. A JetBrains IDE gets the tab selected on top of that, since
+    raising its window is only half of getting to a session running inside it.
     """
     if app is None:
         return detect_terminal(env)
@@ -185,7 +234,23 @@ def terminal_for(app: Path | None, env: Mapping[str, str] | None = None) -> Term
     implementation = TERMINALS_BY_BUNDLE.get(bundle_id or "")
     if implementation is not None:
         return implementation(bundle_id, app=app)
+    if draws_its_own_tabs(bundle_id):
+        return JetBrainsTerminal(bundle_id, app=app, name=app.stem.lower())
     return Terminal(bundle_id, app=app, name=app.stem.lower())
+
+
+def draws_its_own_tabs(bundle_id: str | None) -> bool:
+    """Whether an application keeps its terminals in tabs of its own drawing.
+
+    Matched on the bundle id's prefix rather than a list of every IDE JetBrains ships, so
+    the one nobody thought to enumerate — and the next one released — behaves like the rest.
+    """
+    return bundle_id is not None and bundle_id.startswith(JETBRAINS_PREFIXES)
+
+
+def attention_title(text: str) -> str:
+    """The tab title a session is marked with while it is waiting to be noticed."""
+    return f"{ATTENTION_MARK} {text}"
 
 
 @lru_cache(maxsize=64)
