@@ -1,15 +1,17 @@
 import os
 from datetime import UTC, datetime
+from pathlib import Path
 
 import pytest
 
+import clownhead
 from clownhead import attention
-from clownhead import demo as demo_module
 from clownhead import discovery as discovery_module
 from clownhead.discovery import CONFIG_DIR_VAR
 from clownhead.models import Status
 from clownhead.render import build_rows, describe, worktree_cell
 from clownhead.resume import resume_shell_command
+from tools import demo as demo_module
 
 
 @pytest.fixture
@@ -163,3 +165,11 @@ def test_the_script_needs_nothing_of_the_machine_it_runs_on(demo_home, monkeypat
     monkeypatch.setattr(demo_module.tui, "run", lambda **kwargs: kwargs["loader"](True))
 
     demo_module.board()
+
+
+def test_the_demo_is_no_part_of_the_package_that_ships():
+    """A fleet that is not there is a checkout's business, so it is not the package's."""
+    package = Path(clownhead.__file__).parent
+
+    assert package not in Path(demo_module.__file__).parents
+    assert not (package / "demo.py").exists()

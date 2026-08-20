@@ -11,7 +11,7 @@ Set Theme "Builtin Dark"
 
 Hide
 Type "export PATH=$PWD/.venv/bin:$PATH" Enter
-Type "clownhead() { clownhead-demo; }" Enter
+Type "clownhead() { python tools/demo.py; }" Enter
 Type "clear" Enter
 Sleep 1s
 Show
