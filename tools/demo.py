@@ -1,8 +1,10 @@
 """A fleet that is not there, so the board can be shown without one of your own.
 
-``clownhead-demo`` opens the overseer on it. It is a script of its own rather than a flag
-on ``clownhead`` because it answers with sessions that do not exist, which is a thing to
-have asked for by name and not something the fleet command should be one typo away from.
+``python tools/demo.py`` opens the overseer on it, from a checkout and nowhere else. The
+demo sits outside the package rather than inside it because it answers with sessions that do
+not exist, which is no use to somebody who installed clownhead to watch a fleet of their own
+— and what is not in the package cannot be shipped with it, imported from it, or reached by
+a typo of the fleet command.
 
 Everything the board prints about a session is checked against the disk before it is
 printed: a working directory that has gone is marked as gone, a worktree resumes from its
@@ -119,11 +121,6 @@ CONVERSATIONS: dict[str, tuple[tuple[str, timedelta, str], ...]] = {
         ),
     ),
 }
-
-
-def main() -> None:
-    """Entry point for the ``clownhead-demo`` script."""
-    typer.run(board)
 
 
 def board(screenshot: ScreenshotOption = None) -> None:
@@ -274,3 +271,7 @@ def _fleet(include_closed: bool) -> list[Session]:
             ]
         )
     return sorted(sessions, key=sort_key)
+
+
+if __name__ == "__main__":
+    typer.run(board)

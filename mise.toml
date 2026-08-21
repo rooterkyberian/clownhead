@@ -50,6 +50,6 @@ run = ["uv sync", "vhs docs/demo.tape"]
 [tasks.social-preview]
 description = "Screenshot the demo board for the GitHub social preview, which needs resvg"
 run = [
-    "uv run clownhead-demo --screenshot docs/social-preview.svg",
+    "uv run python tools/demo.py --screenshot docs/social-preview.svg",
     "resvg docs/social-preview.svg docs/social-preview.png --width 1280",
 ]

@@ -36,7 +36,6 @@ Issues = "https://github.com/rooterkyberian/clownhead/issues"
 
 [project.scripts]
 clownhead = "clownhead.cli:main"
-clownhead-demo = "clownhead.demo:main"
 
 [dependency-groups]
 dev = [
@@ -50,7 +49,8 @@ docs = ["mkdocs-material>=9.7"]
 
 [tool.pytest.ini_options]
 testpaths = ["tests"]
-addopts = "--cov=clownhead --cov-report=term-missing"
+pythonpath = ["."]
+addopts = "--cov=clownhead --cov=tools --cov-report=term-missing"
 asyncio_mode = "auto"
 asyncio_default_fixture_loop_scope = "function"
 
@@ -72,7 +72,7 @@ convention = "google"
 "tests/*" = ["D", "S101", "S108"]
 
 [tool.mypy]
-files = ["src"]
+files = ["src", "tools"]
 python_version = "3.12"
 strict = true
 plugins = ["pydantic.mypy"]
