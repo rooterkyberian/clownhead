@@ -11,9 +11,10 @@ from clownhead import tui as tui_module
 from clownhead.discovery import Message, Process
 from clownhead.issues import Issue, Tracker
 from clownhead.models import Session, Status
+from clownhead.pulls import Status as PullStatus
 from clownhead.settings import Settings
 from clownhead.terminal import ITerm2Terminal
-from clownhead.tui import FleetApp, config_dir_notice, matches
+from clownhead.tui import FleetApp, PullChoiceScreen, config_dir_notice, matches
 from clownhead.worktrees import Candidate, Worktree
 
 OWN_TTY = Path("/dev/ttys009")
@@ -1790,3 +1791,380 @@ async def test_tui_quits_on_q():
         await pilot.pause()
 
     assert not app.is_running
+
+
+@pytest.fixture
+def browser(monkeypatch):
+    """Whatever the board asked to be opened, instead of a browser opening it."""
+    opened: list[str] = []
+    monkeypatch.setattr(tui_module, "open_url", lambda url: bool(opened.append(url)) or True)
+    return opened
+
+
+def pulls_table(app: FleetApp) -> DataTable:
+    """The pull request table, asked of the screen on top rather than the board beneath it."""
+    return app.screen.query_one("#pulls", DataTable)
+
+
+def pulls_bar(app: FleetApp) -> str:
+    return str(app.screen.query_one("#pulls-bar", Static).content)
+
+
+def pull_details(app: FleetApp) -> str:
+    return render_markup(str(app.screen.query_one("#pull-details", Static).content)).plain
+
+
+async def test_tui_p_opens_the_pull_requests_github_says_are_open(monkeypatch, tmp_path, github):
+    monkeypatch.setenv("CLAUDE_CONFIG_DIR", str(tmp_path))
+    app = build_app()
+
+    async with app.run_test() as pilot:
+        await settle(app, pilot)
+        await pilot.press("p")
+        await settle(app, pilot)
+
+        assert pulls_table(app).row_count == 1
+        assert "acme/widgets#42" in str(pulls_table(app).get_row_at(0))
+        assert "1 open" in pulls_bar(app)
+
+
+async def test_tui_pull_requests_count_the_sessions_that_worked_on_each(monkeypatch, tmp_path, github):
+    monkeypatch.setenv("CLAUDE_CONFIG_DIR", str(tmp_path))
+    transcript(tmp_path, "4e020900-df7c", "https://github.com/acme/widgets/pull/42 is ready")
+    app = build_app()
+
+    async with app.run_test() as pilot:
+        await settle(app, pilot)
+        await pilot.press("p")
+        await settle(app, pilot)
+
+        assert "1" in str(pulls_table(app).get_row_at(0))
+        assert "1 with sessions here" in pulls_bar(app)
+        assert "payments-api-7c" in pull_details(app)
+
+
+async def test_tui_pull_requests_read_the_ended_sessions_whatever_the_board_shows(monkeypatch, tmp_path, github):
+    monkeypatch.setenv("CLAUDE_CONFIG_DIR", str(tmp_path))
+    asked: list[bool] = []
+    app = build_app(loader=lambda include_closed: asked.append(include_closed) or fleet())
+
+    async with app.run_test() as pilot:
+        await settle(app, pilot)
+        await pilot.press("p")
+        await settle(app, pilot)
+
+        assert True in asked
+
+
+async def test_tui_enter_on_a_pull_request_points_the_board_at_its_sessions(monkeypatch, tmp_path, github):
+    monkeypatch.setenv("CLAUDE_CONFIG_DIR", str(tmp_path))
+    transcript(tmp_path, "4e020900-df7c", "https://github.com/acme/widgets/pull/42 is ready")
+    transcript(tmp_path, "cef6830d-aaaa", "nothing to do with it", cwd="/tmp/web-platform")
+    app = build_app()
+
+    async with app.run_test() as pilot:
+        await settle(app, pilot)
+        await pilot.press("p")
+        await settle(app, pilot)
+        await pilot.press("enter")
+        await settle(app, pilot)
+        await settle(app, pilot)
+
+        assert app.query_one("#filter", Input).value == "https://github.com/acme/widgets/pull/42"
+        assert table_of(app).row_count == 1
+        assert "payments-api-7c" in str(table_of(app).get_row_at(0))
+
+
+async def test_tui_arriving_from_the_pull_requests_folds_the_ended_sessions_in(monkeypatch, tmp_path, github):
+    monkeypatch.setenv("CLAUDE_CONFIG_DIR", str(tmp_path))
+    app = build_app()
+
+    async with app.run_test() as pilot:
+        await settle(app, pilot)
+        await pilot.press("p")
+        await settle(app, pilot)
+        await pilot.press("enter")
+        await settle(app, pilot)
+
+        assert app._show_closed
+
+
+async def test_tui_escape_leaves_the_pull_requests_without_filtering_anything(monkeypatch, tmp_path, github):
+    monkeypatch.setenv("CLAUDE_CONFIG_DIR", str(tmp_path))
+    app = build_app()
+
+    async with app.run_test() as pilot:
+        await settle(app, pilot)
+        await pilot.press("p")
+        await settle(app, pilot)
+        await pilot.press("escape")
+        await settle(app, pilot)
+
+        assert app.query_one("#filter", Input).value == ""
+        assert table_of(app).row_count == 2
+
+
+async def test_tui_pull_requests_say_github_could_not_be_asked(monkeypatch, tmp_path):
+    monkeypatch.setenv("CLAUDE_CONFIG_DIR", str(tmp_path))
+
+    def refuse(author, limit):
+        raise tui_module.Unavailable("gh: not logged in")
+
+    monkeypatch.setattr(tui_module.pulls, "mine", refuse)
+    app = build_app()
+
+    async with app.run_test() as pilot:
+        await settle(app, pilot)
+        await pilot.press("p")
+        await settle(app, pilot)
+
+        assert "github could not be asked" in pulls_bar(app)
+        assert "not logged in" in pulls_bar(app)
+
+
+async def test_tui_pull_requests_tell_an_empty_list_from_a_failure(monkeypatch, tmp_path):
+    monkeypatch.setenv("CLAUDE_CONFIG_DIR", str(tmp_path))
+    monkeypatch.setattr(tui_module.pulls, "mine", lambda author, limit: [])
+    app = build_app()
+
+    async with app.run_test() as pilot:
+        await settle(app, pilot)
+        await pilot.press("p")
+        await settle(app, pilot)
+
+        assert "no open pull requests" in pulls_bar(app)
+
+
+async def test_tui_o_on_a_pull_request_opens_it_in_a_browser(monkeypatch, tmp_path, github, browser):
+    monkeypatch.setenv("CLAUDE_CONFIG_DIR", str(tmp_path))
+    app = build_app()
+
+    async with app.run_test() as pilot:
+        await settle(app, pilot)
+        await pilot.press("p")
+        await settle(app, pilot)
+        await pilot.press("o")
+
+        assert browser == ["https://github.com/acme/widgets/pull/42"]
+
+
+async def test_tui_details_name_the_pull_requests_the_session_worked_on(monkeypatch, tmp_path):
+    monkeypatch.setenv("CLAUDE_CONFIG_DIR", str(tmp_path))
+    transcript(tmp_path, "4e020900-df7c", "https://github.com/acme/widgets/pull/42 is ready")
+    app = build_app()
+
+    async with app.run_test() as pilot:
+        await settle(app, pilot)
+        await settle(app, pilot)
+
+        assert "acme/widgets#42" in details_of(app)
+
+
+async def test_tui_details_say_nothing_about_pull_requests_for_a_session_that_named_none(monkeypatch, tmp_path):
+    monkeypatch.setenv("CLAUDE_CONFIG_DIR", str(tmp_path))
+    transcript(tmp_path, "4e020900-df7c", "just talking")
+    app = build_app()
+
+    async with app.run_test() as pilot:
+        await settle(app, pilot)
+        await settle(app, pilot)
+
+        assert "prs" not in details_of(app)
+
+
+async def test_tui_o_opens_what_the_selected_session_was_working_on(monkeypatch, tmp_path, browser):
+    monkeypatch.setenv("CLAUDE_CONFIG_DIR", str(tmp_path))
+    transcript(tmp_path, "4e020900-df7c", "https://github.com/acme/widgets/pull/42 is ready")
+    app = build_app()
+
+    async with app.run_test() as pilot:
+        await settle(app, pilot)
+        await settle(app, pilot)
+        await pilot.press("o")
+        await settle(app, pilot)
+
+        assert browser == ["https://github.com/acme/widgets/pull/42"]
+
+
+async def test_tui_o_offers_the_choice_when_a_session_named_several(monkeypatch, tmp_path, browser):
+    monkeypatch.setenv("CLAUDE_CONFIG_DIR", str(tmp_path))
+    transcript(
+        tmp_path,
+        "4e020900-df7c",
+        "https://github.com/acme/widgets/pull/42 then https://github.com/acme/gadgets/pull/9",
+    )
+    app = build_app()
+
+    async with app.run_test() as pilot:
+        await settle(app, pilot)
+        await settle(app, pilot)
+        await pilot.press("o")
+        await settle(app, pilot)
+
+        assert isinstance(app.screen, PullChoiceScreen)
+
+        await pilot.press("enter")
+        await settle(app, pilot)
+
+        assert browser == ["https://github.com/acme/gadgets/pull/9"]
+
+
+async def test_tui_o_says_so_when_the_transcript_names_no_pull_request(monkeypatch, tmp_path, browser):
+    monkeypatch.setenv("CLAUDE_CONFIG_DIR", str(tmp_path))
+    transcript(tmp_path, "4e020900-df7c", "just talking")
+    app = build_app()
+
+    async with app.run_test() as pilot:
+        await settle(app, pilot)
+        await settle(app, pilot)
+        await pilot.press("o")
+        await settle(app, pilot)
+
+        assert browser == []
+        assert "names no pull request" in notified(app)
+
+
+async def test_tui_o_reports_a_browser_that_would_not_open(monkeypatch, tmp_path):
+    monkeypatch.setenv("CLAUDE_CONFIG_DIR", str(tmp_path))
+    monkeypatch.setattr(tui_module, "open_url", lambda url: False)
+    transcript(tmp_path, "4e020900-df7c", "https://github.com/acme/widgets/pull/42 is ready")
+    app = build_app()
+
+    async with app.run_test() as pilot:
+        await settle(app, pilot)
+        await settle(app, pilot)
+        await pilot.press("o")
+        await settle(app, pilot)
+
+        assert any("could not open a browser" in str(note.title) for note in app._notifications)
+
+
+async def test_tui_refresh_reads_the_transcripts_for_pull_requests_again(monkeypatch, tmp_path):
+    monkeypatch.setenv("CLAUDE_CONFIG_DIR", str(tmp_path))
+    transcript(tmp_path, "4e020900-df7c", "just talking")
+    app = build_app()
+
+    async with app.run_test() as pilot:
+        await settle(app, pilot)
+        await settle(app, pilot)
+        assert "prs" not in details_of(app)
+
+        transcript(tmp_path, "4e020900-df7c", "https://github.com/acme/widgets/pull/42 is ready")
+        await pilot.press("ctrl+r")
+        await settle(app, pilot)
+        await settle(app, pilot)
+
+        assert "acme/widgets#42" in details_of(app)
+
+
+async def test_tui_pull_requests_keep_the_top_of_the_board_under_the_cursor(monkeypatch, tmp_path, a_pull):
+    """The order changes as the checks come back, and the cursor has not been moved yet."""
+    monkeypatch.setenv("CLAUDE_CONFIG_DIR", str(tmp_path))
+    stale, fresh = a_pull(1), a_pull(2)
+    monkeypatch.setattr(tui_module.pulls, "mine", lambda author, limit: [fresh, stale])
+    monkeypatch.setattr(
+        tui_module.pulls,
+        "stream_statuses",
+        lambda listed: [(stale, PullStatus(failing=("test",)))],
+    )
+    app = build_app()
+
+    async with app.run_test() as pilot:
+        await settle(app, pilot)
+        await pilot.press("p")
+        await settle(app, pilot)
+
+        assert "acme/widgets#1" in str(pulls_table(app).get_row_at(0))
+        assert "acme/widgets#1" in pull_details(app)
+
+
+async def test_tui_pull_requests_follow_the_row_its_reader_moved_to(monkeypatch, tmp_path, a_pull):
+    monkeypatch.setenv("CLAUDE_CONFIG_DIR", str(tmp_path))
+    listing = [a_pull(1), a_pull(2), a_pull(3)]
+    monkeypatch.setattr(tui_module.pulls, "mine", lambda author, limit: listing)
+    monkeypatch.setattr(tui_module.pulls, "stream_statuses", lambda listed: [])
+    app = build_app()
+
+    async with app.run_test() as pilot:
+        await settle(app, pilot)
+        await pilot.press("p")
+        await settle(app, pilot)
+        await pilot.press("down", "down")
+        await settle(app, pilot)
+        chosen = app.screen.selected
+
+        app.screen._draw()
+        await pilot.pause()
+
+        assert app.screen.selected == chosen
+
+
+async def test_tui_shows_the_prs_column_when_it_is_switched_on(monkeypatch, tmp_path):
+    monkeypatch.setenv("CLAUDE_CONFIG_DIR", str(tmp_path))
+    transcript(tmp_path, "4e020900-df7c", "https://github.com/acme/widgets/pull/42 is ready")
+    app = build_app(settings=Settings(show_prs=True))
+
+    async with app.run_test() as pilot:
+        await settle(app, pilot)
+        await settle(app, pilot)
+
+        assert headers_of(app) == ["STATUS", "NAME", "QUIET", "AGE", "PRS", "WHERE"]
+        assert "widgets#42" in str(table_of(app).get_row_at(0))
+
+
+async def test_tui_prs_column_reads_every_visible_row_not_just_the_selected_one(monkeypatch, tmp_path):
+    """The detail pane wants one session; a column wants them all, in one pass."""
+    monkeypatch.setenv("CLAUDE_CONFIG_DIR", str(tmp_path))
+    transcript(tmp_path, "4e020900-df7c", "https://github.com/acme/widgets/pull/42")
+    transcript(tmp_path, "cef6830d-aaaa", "https://github.com/acme/gadgets/pull/9", cwd="/tmp/web-platform")
+    app = build_app(settings=Settings(show_prs=True))
+
+    async with app.run_test() as pilot:
+        await settle(app, pilot)
+        await settle(app, pilot)
+
+        assert "widgets#42" in str(table_of(app).get_row_at(0))
+        assert "gadgets#9" in str(table_of(app).get_row_at(1))
+
+
+async def test_tui_prs_column_says_a_session_named_nothing(monkeypatch, tmp_path):
+    monkeypatch.setenv("CLAUDE_CONFIG_DIR", str(tmp_path))
+    transcript(tmp_path, "4e020900-df7c", "just talking")
+    app = build_app(settings=Settings(show_prs=True))
+
+    async with app.run_test() as pilot:
+        await settle(app, pilot)
+        await settle(app, pilot)
+
+        assert "-" in str(table_of(app).get_row_at(0))
+
+
+async def test_tui_leaves_the_transcripts_alone_when_the_column_is_off(monkeypatch, tmp_path):
+    """Only the row under the cursor is read, which is what keeps the column optional."""
+    monkeypatch.setenv("CLAUDE_CONFIG_DIR", str(tmp_path))
+    transcript(tmp_path, "4e020900-df7c", "https://github.com/acme/widgets/pull/42")
+    transcript(tmp_path, "cef6830d-aaaa", "https://github.com/acme/gadgets/pull/9", cwd="/tmp/web-platform")
+    app = build_app(settings=Settings(show_prs=False))
+
+    async with app.run_test() as pilot:
+        await settle(app, pilot)
+        await settle(app, pilot)
+
+        assert set(app._session_pulls) == {"4e020900-df7c"}
+
+
+async def test_tui_switching_the_prs_column_on_rebuilds_the_table(monkeypatch, tmp_path):
+    monkeypatch.setenv("CLAUDE_CONFIG_DIR", str(tmp_path))
+    transcript(tmp_path, "4e020900-df7c", "https://github.com/acme/widgets/pull/42")
+    app = build_app()
+
+    async with app.run_test() as pilot:
+        await settle(app, pilot)
+        assert "PRS" not in headers_of(app)
+
+        app._settings_changed(Settings(show_prs=True))
+        await settle(app, pilot)
+        await settle(app, pilot)
+
+        assert "PRS" in headers_of(app)
+        assert "widgets#42" in str(table_of(app).get_row_at(0))

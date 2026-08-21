@@ -375,3 +375,31 @@ def test_write_reaches_the_device(tmp_path):
     Terminal().bell(target)
 
     assert target.read_text() == "\a"
+
+
+def test_open_url_hands_a_link_to_the_macos_opener(monkeypatch):
+    calls: list[list[str]] = []
+    monkeypatch.setattr(terminal_module, "on_macos", lambda: True)
+    monkeypatch.setattr(terminal_module.subprocess, "run", lambda argv, **kwargs: calls.append(argv))
+
+    assert terminal_module.open_url("https://github.com/acme/widgets/pull/7")
+    assert calls == [["/usr/bin/open", "https://github.com/acme/widgets/pull/7"]]
+
+
+def test_open_url_asks_xdg_open_everywhere_else(monkeypatch):
+    calls: list[list[str]] = []
+    monkeypatch.setattr(terminal_module, "on_macos", lambda: False)
+    monkeypatch.setattr(terminal_module.subprocess, "run", lambda argv, **kwargs: calls.append(argv))
+
+    assert terminal_module.open_url("https://example.com")
+    assert calls == [["xdg-open", "https://example.com"]]
+
+
+def test_open_url_reports_a_desktop_with_nothing_to_open_it(monkeypatch):
+    def refuse(argv, **kwargs):
+        raise FileNotFoundError(argv[0])
+
+    monkeypatch.setattr(terminal_module, "on_macos", lambda: False)
+    monkeypatch.setattr(terminal_module.subprocess, "run", refuse)
+
+    assert terminal_module.open_url("https://example.com") is False

@@ -167,3 +167,156 @@ def test_pull_request_names_itself_for_a_session_started_from_it(reference, prom
     assert reference.prompt == prompt
     assert reference.base_slug == base
     assert reference.title_query == query
+
+
+def test_pulls_mentioned_reads_every_pull_request_a_transcript_names(tmp_path):
+    transcript(
+        tmp_path,
+        "one",
+        "based on https://github.com/acme/widgets/pull/7, follows https://github.com/acme/gadgets/pull/9",
+    )
+
+    assert set(search.pulls_mentioned("one", tmp_path)) == {
+        PullRequest("widgets", 7, "acme"),
+        PullRequest("gadgets", 9, "acme"),
+    }
+
+
+def test_pulls_mentioned_leads_with_the_one_named_last(tmp_path):
+    transcript(
+        tmp_path, "one", "opened https://github.com/acme/widgets/pull/7 then https://github.com/acme/gadgets/pull/9"
+    )
+
+    assert search.pulls_mentioned("one", tmp_path)[0] == PullRequest("gadgets", 9, "acme")
+
+
+def test_pulls_mentioned_names_each_pull_request_once_however_often_it_came_up(tmp_path):
+    url = "https://github.com/acme/widgets/pull/7"
+    transcript(tmp_path, "one", " ".join([url] * 40))
+
+    assert search.pulls_mentioned("one", tmp_path) == [PullRequest("widgets", 7, "acme")]
+
+
+def test_pulls_mentioned_reads_one_spelled_two_ways_as_one_pull_request(tmp_path):
+    transcript(tmp_path, "one", "https://github.com/Acme/Widgets/pull/7 is https://github.com/acme/widgets/pull/7")
+
+    assert len(search.pulls_mentioned("one", tmp_path)) == 1
+
+
+def test_pulls_mentioned_refuses_the_shorthand_it_cannot_anchor(tmp_path):
+    transcript(tmp_path, "one", "widgets#7 and PLAT-4471#3 and a diff hunk @@ -7,3 +7,3 @@")
+
+    assert search.pulls_mentioned("one", tmp_path) == []
+
+
+def test_pulls_mentioned_does_not_read_an_issue_as_a_pull_request(tmp_path):
+    transcript(tmp_path, "one", "https://github.com/acme/widgets/issues/7")
+
+    assert search.pulls_mentioned("one", tmp_path) == []
+
+
+def test_pulls_mentioned_takes_the_whole_number(tmp_path):
+    transcript(tmp_path, "one", "https://github.com/acme/widgets/pull/3090/files")
+
+    assert search.pulls_mentioned("one", tmp_path) == [PullRequest("widgets", 3090, "acme")]
+
+
+def test_pulls_mentioned_reads_a_subagent_transcript_too(tmp_path):
+    transcript(tmp_path, "one", "nothing here")
+    subagent_transcript(tmp_path, "one", "https://github.com/acme/widgets/pull/7")
+
+    assert search.pulls_mentioned("one", tmp_path) == [PullRequest("widgets", 7, "acme")]
+
+
+def test_pulls_mentioned_finds_one_split_across_a_chunk_boundary(tmp_path, monkeypatch):
+    monkeypatch.setattr(search, "CHUNK_BYTES", 64)
+    padding = "x" * 60
+    transcript(tmp_path, "one", f"{padding} https://github.com/acme/widgets/pull/7 tail")
+
+    assert search.pulls_mentioned("one", tmp_path) == [PullRequest("widgets", 7, "acme")]
+
+
+def test_pulls_mentioned_orders_the_same_however_the_chunks_fell(tmp_path, monkeypatch):
+    said = "https://github.com/acme/widgets/pull/7 " + "y" * 400 + " https://github.com/acme/gadgets/pull/9"
+    transcript(tmp_path, "one", said)
+    whole = search.pulls_mentioned("one", tmp_path)
+
+    monkeypatch.setattr(search, "CHUNK_BYTES", 64)
+
+    assert search.pulls_mentioned("one", tmp_path) == whole
+
+
+def test_pulls_mentioned_survives_a_transcript_it_cannot_read(tmp_path):
+    path = transcript(tmp_path, "one", "https://github.com/acme/widgets/pull/7")
+    path.chmod(0o000)
+
+    try:
+        assert search.pulls_mentioned("one", tmp_path) == []
+    finally:
+        path.chmod(0o644)
+
+
+def test_pulls_mentioned_says_nothing_about_a_session_with_no_transcript(tmp_path):
+    assert search.pulls_mentioned("nowhere", tmp_path) == []
+
+
+def test_sessions_by_pull_leaves_out_the_sessions_that_named_nothing(tmp_path):
+    transcript(tmp_path, "one", "https://github.com/acme/widgets/pull/7")
+    transcript(tmp_path, "two", "just talking", cwd="/tmp/two")
+
+    found = search.sessions_by_pull([session("one"), session("two", "/tmp/two")], tmp_path)
+
+    assert found == {PullRequest("widgets", 7, "acme"): ["one"]}
+
+
+def test_sessions_by_pull_reads_the_same_pass_the_other_way_round(tmp_path):
+    transcript(tmp_path, "one", "https://github.com/acme/widgets/pull/7")
+    transcript(tmp_path, "two", "also https://github.com/acme/widgets/pull/7", cwd="/tmp/two")
+
+    found = search.sessions_by_pull([session("one"), session("two", "/tmp/two")], tmp_path)
+
+    assert found == {PullRequest("widgets", 7, "acme"): ["one", "two"]}
+
+
+def test_sessions_by_pull_gathers_the_spellings_case_alone_separates(tmp_path):
+    transcript(tmp_path, "one", "https://github.com/Acme/Widgets/pull/7")
+    transcript(tmp_path, "two", "https://github.com/acme/widgets/pull/7", cwd="/tmp/two")
+
+    found = search.sessions_by_pull([session("one"), session("two", "/tmp/two")], tmp_path)
+
+    assert found == {PullRequest("widgets", 7, "acme"): ["one", "two"]}
+
+
+def test_a_pull_request_is_the_one_github_would_resolve_it_to():
+    assert PullRequest("Widgets", 7, "Acme") == PullRequest("widgets", 7, "acme")
+    assert len({PullRequest("Widgets", 7, "Acme"), PullRequest("widgets", 7, "acme")}) == 1
+
+
+@pytest.mark.parametrize(
+    "other",
+    [PullRequest("gadgets", 7, "acme"), PullRequest("widgets", 8, "acme"), PullRequest("widgets", 7), "widgets#7"],
+)
+def test_a_pull_request_is_not_one_that_differs_by_more_than_case(other):
+    assert PullRequest("widgets", 7, "acme") != other
+
+
+def test_pull_request_url_is_where_a_browser_would_be_sent():
+    assert PullRequest("widgets", 7, "acme").url == "https://github.com/acme/widgets/pull/7"
+
+
+def test_pull_request_without_an_owner_has_no_url_to_send_anyone_to():
+    """``prompt`` still answers, with the shorthand — which is not something to open."""
+    reference = PullRequest("widgets", 7)
+
+    assert reference.url == ""
+    assert reference.prompt == "widgets#7"
+
+
+def test_pulls_by_session_keeps_a_session_that_named_nothing(tmp_path):
+    """Read-and-found-nothing is not the same as never-read, and only this map knows."""
+    transcript(tmp_path, "one", "https://github.com/acme/widgets/pull/7")
+    transcript(tmp_path, "two", "just talking", cwd="/tmp/two")
+
+    found = search.pulls_by_session([session("one"), session("two", "/tmp/two")], tmp_path)
+
+    assert found == {"one": [PullRequest("widgets", 7, "acme")], "two": []}

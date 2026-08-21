@@ -13,7 +13,7 @@ one session under the cursor.
 from __future__ import annotations
 
 import re
-from collections.abc import Iterable, Sequence
+from collections.abc import Iterable, Mapping, Sequence
 from dataclasses import dataclass
 from datetime import UTC, datetime, timedelta
 from enum import StrEnum
@@ -26,7 +26,11 @@ from rich.text import Text
 
 from clownhead.discovery import Message
 from clownhead.models import Session, Status, split_worktree
+from clownhead.pulls import APPROVED, CHANGES_REQUESTED, Checks, Pull
+from clownhead.pulls import NONE as NO_REVIEW
+from clownhead.pulls import Status as PullStatus
 from clownhead.resume import resume_shell_command
+from clownhead.search import PullRequest
 
 STATUS_STYLES: dict[Status, str] = {
     Status.WAITING: "bold red",
@@ -50,10 +54,20 @@ NARROW_WIDTH = 100
 DEFAULT_WIDTH = 160
 NAME_CAP = 32
 WORKTREE_CAP = 28
+PRS_CAP = 24
 WHERE_MIN = 14
 RESUME_MIN = 24
 MESSAGE_CAP = 110
+NAMES_SHOWN = 3
+"""How many of something a detail line names before it resorts to counting the rest."""
+DETAIL_LABEL = 9
+TITLE_CAP = 52
 GAP = 2
+UNKNOWN = "?"
+"""What a cell says before its answer has arrived, which is not what it says when the
+answer arrived and was nothing. The distinction is the point of both views that show pull
+requests: a row printing ``0`` or ``-`` while the transcripts are still being read would be
+asserting something nobody had looked up."""
 
 DURATION_UNITS = {"s": 1, "m": 60, "h": 3600, "d": 86400}
 
@@ -68,6 +82,7 @@ class Column(StrEnum):
     PID = "pid"
     TTY = "tty"
     WORKTREE = "worktree"
+    PRS = "prs"
     WHERE = "where"
     RESUME = "resume"
 
@@ -75,6 +90,7 @@ class Column(StrEnum):
 FLEXIBLE: dict[Column, tuple[int, int | None]] = {
     Column.NAME: (len("NAME"), NAME_CAP),
     Column.WORKTREE: (len("WORKTREE"), WORKTREE_CAP),
+    Column.PRS: (len("PRS"), PRS_CAP),
     Column.WHERE: (WHERE_MIN, None),
     Column.RESUME: (RESUME_MIN, None),
 }
@@ -157,12 +173,23 @@ class Row:
     pid: str
     tty: str
     worktree: str
+    prs: str
     where: str
     resume: str
 
 
-def build_rows(sessions: Iterable[Session], moment: datetime) -> list[Row]:
-    """Turn sessions into fully rendered cell strings."""
+def build_rows(
+    sessions: Iterable[Session],
+    moment: datetime,
+    pulls: Mapping[str, Sequence[PullRequest]] | None = None,
+) -> list[Row]:
+    """Turn sessions into fully rendered cell strings.
+
+    ``pulls`` is what the transcripts said each session was working on, and is looked up
+    rather than required: reading them is the one thing here that touches the disk, so a
+    caller that did not ask for the column never pays for it, and one that did can draw
+    before the answer lands.
+    """
     return [
         Row(
             status=session.reason,
@@ -173,6 +200,7 @@ def build_rows(sessions: Iterable[Session], moment: datetime) -> list[Row]:
             pid=str(session.pid) if session.pid else "-",
             tty=session.tty.name if session.tty else "-",
             worktree=worktree_cell(session),
+            prs=pulls_cell(session, pulls),
             where=shorten_path(session.cwd),
             resume=resume_shell_command(session),
         )
@@ -180,15 +208,71 @@ def build_rows(sessions: Iterable[Session], moment: datetime) -> list[Row]:
     ]
 
 
-def describe(session: Session, now: datetime | None = None, terminal: str | None = None) -> str:
+def pulls_cell(session: Session, pulls: Mapping[str, Sequence[PullRequest]] | None) -> str:
+    """What a session was working on, in the width of a column.
+
+    The freshest one by name and the rest by count, because the column is narrow and the
+    most recently named is the one the session belongs to — the detail pane below has the
+    room to list the others. Written without the owner: a column of ``acme/data-platform#362``
+    truncates to ``acme/data-platfo…`` and loses the number, which is the only part anybody
+    reads a pull request by.
+
+    ``?`` where the transcripts have not been read, ``-`` where they were and named
+    nothing. A board that printed ``-`` for both would be answering a question it had not
+    asked yet, and the answer takes long enough to arrive to be worth being honest about.
+    """
+    if pulls is None:
+        return UNKNOWN
+    named = pulls.get(session.session_id)
+    if named is None:
+        return UNKNOWN
+    if not named:
+        return "-"
+    first = f"{named[0].repo}#{named[0].number}"
+    rest = len(named) - 1
+    return shorten_reference(f"{first} +{rest}" if rest else first, PRS_CAP)
+
+
+def shorten_reference(text: str, limit: int) -> str:
+    """Fit a pull request reference into a column without losing the number.
+
+    Plain truncation takes the tail, and the tail is the number: ``ai-development-toolkit#464``
+    becomes ``ai-development-toolkit#…``, which names no pull request at all. A repository
+    cut short is still recognisable next to the one number that identifies the thing, so
+    the repository is what gives way.
+
+    Falls back to ordinary truncation where even the number will not fit, which is a column
+    too narrow to say anything useful either way.
+    """
+    if len(text) <= limit:
+        return text
+    repo, marker, tail = text.partition("#")
+    if marker and len(tail) + 2 <= limit:
+        return f"{truncate(repo, limit - len(tail) - 1)}#{tail}"
+    return truncate(text, limit)
+
+
+def describe(
+    session: Session,
+    now: datetime | None = None,
+    terminal: str | None = None,
+    pulls: Sequence[PullRequest] | None = None,
+) -> str:
     """Render the facts about one session, as Rich markup lines.
 
     The resume command is not among them. It is the longest thing the board prints and the
     only line here that wraps, and it is already a keystroke away — `y` copies it, and
     ``ls --columns resume`` prints it — so a pane read at a glance is where it earns least.
 
-    Values are escaped rather than trusted: a path may contain square brackets, which
-    Rich would otherwise read as markup and swallow.
+    Pull requests are, because nothing else on the board can say which work a session
+    belongs to and this is the only place with the width to name one. They are shown as
+    soon as they are known and left out entirely until then, rather than held open with a
+    placeholder: the answer costs a transcript read, and a row that reserved a line for it
+    would shuffle every line below as each session came into focus. The most recently
+    named comes first — see :func:`clownhead.search.pulls_mentioned` — and the rest are
+    counted, since a long-lived session names more of them than a line can hold.
+
+    Escaping is :func:`_detail_pane`'s, which both panes share.
     """
     moment = now or datetime.now(tz=UTC)
     style = STATUS_STYLES.get(session.status, "")
@@ -207,15 +291,16 @@ def describe(session: Session, now: datetime | None = None, terminal: str | None
             f"quiet {format_duration(session.quiet_for(moment))}",
         )
     )
-    rows = (
-        ("session", session.session_id),
-        ("where", str(session.cwd) if session.cwd.exists() else f"{session.cwd} (gone)"),
-        ("process", process or "gone"),
-        ("timing", timing),
+    return _detail_pane(
+        f"[bold]{escape(session.label)}[/]  [{style}]{escape(session.reason)}[/]",
+        (
+            ("session", session.session_id),
+            ("where", str(session.cwd) if session.cwd.exists() else f"{session.cwd} (gone)"),
+            *((("prs", _pull_line(pulls)),) if pulls else ()),
+            ("process", process or "gone"),
+            ("timing", timing),
+        ),
     )
-    header = f"[bold]{escape(session.label)}[/]  [{style}]{escape(session.reason)}[/]"
-    body = "\n".join(f"[dim]{label:<8}[/]{escape(value)}" for label, value in rows)
-    return f"{header}\n{body}"
 
 
 def conversation(messages: Iterable[Message], now: datetime | None = None) -> RenderableType:
@@ -291,12 +376,15 @@ def default_columns(
     show_pid: bool = False,
     show_tty: bool = False,
     show_worktree: bool = False,
+    show_prs: bool = False,
 ) -> tuple[Column, ...]:
     """The columns to show when none were asked for.
 
-    PID, TTY and WORKTREE are off unless asked for: the first two matter when a session
-    needs killing or signalling, and the third only in a repository that uses worktrees at
-    all, where ``where`` already says ``repo ⇢ worktree``. Below :data:`NARROW_WIDTH` the
+    PID, TTY, WORKTREE and PRS are off unless asked for: the first two matter when a
+    session needs killing or signalling, the third only in a repository that uses worktrees
+    at all, where ``where`` already says ``repo ⇢ worktree``, and the last costs a read of
+    every transcript the board is showing — cheap enough to offer, not cheap enough to
+    charge everybody for. Below :data:`NARROW_WIDTH` the
     timing and resume columns go too; losing whole columns reads better than truncating the
     start of every cell, and a resume command cut to fit is worse than absent — it looks
     copyable and is not. A selection made by hand is never thinned this way, since dropping
@@ -304,7 +392,12 @@ def default_columns(
     """
     if width < NARROW_WIDTH:
         return (Column.STATUS, Column.NAME, Column.WHERE)
-    optional = (Column.PID,) * show_pid + (Column.TTY,) * show_tty + (Column.WORKTREE,) * show_worktree
+    optional = (
+        (Column.PID,) * show_pid
+        + (Column.TTY,) * show_tty
+        + (Column.WORKTREE,) * show_worktree
+        + (Column.PRS,) * show_prs
+    )
     return (Column.STATUS, Column.NAME, Column.QUIET, Column.AGE, *optional, Column.WHERE, Column.RESUME)
 
 
@@ -313,12 +406,13 @@ def build_table(
     now: datetime | None = None,
     width: int | None = None,
     columns: Sequence[Column] | None = None,
+    pulls: Mapping[str, Sequence[PullRequest]] | None = None,
 ) -> Table:
     """Build the fleet status table, fitted to ``width``."""
     moment = now or datetime.now(tz=UTC)
     total = width or DEFAULT_WIDTH
     chosen = tuple(columns) if columns is not None else default_columns(total)
-    rows = build_rows(sessions, moment)
+    rows = build_rows(sessions, moment, pulls)
     widths = _fit(chosen, rows, total)
 
     table = Table(box=None, pad_edge=False, header_style="bold", padding=(0, 1))
@@ -333,6 +427,8 @@ def build_table(
 def _cell(row: Row, column: Column, width: int) -> str:
     if column is Column.STATUS:
         return f"[{row.style}]{row.status}[/]"
+    if column is Column.PRS:
+        return shorten_reference(row.prs, width)
     return truncate(str(getattr(row, column.value)), width)
 
 
@@ -371,3 +467,212 @@ def _column_width(header: str, values: Sequence[str], cap: int | None = None) ->
     widest = max((len(value) for value in values), default=0)
     width = max(len(header), widest)
     return min(width, cap) if cap else width
+
+
+PULL_COLUMNS: tuple[tuple[str, JustifyMethod], ...] = (
+    ("PR", "left"),
+    ("TITLE", "left"),
+    ("CHECKS", "left"),
+    ("REVIEW", "left"),
+    ("SESSIONS", "right"),
+    ("UPDATED", "right"),
+)
+"""The pull request columns and how each sits in its cell, for both tables that draw them."""
+
+CHECK_STYLES = {Checks.FAILING: "bold red", Checks.RUNNING: "cyan", Checks.PASSING: "green", Checks.NONE: "dim"}
+REVIEW_WORDS = {APPROVED: "approved", CHANGES_REQUESTED: "changes", "REVIEW_REQUIRED": "required", NO_REVIEW: "—"}
+DRAFT_STYLE = "dim"
+
+
+@dataclass(frozen=True)
+class PullRow:
+    """One rendered pull request row, with a cell per :data:`PULL_COLUMNS`."""
+
+    reference: str
+    title: str
+    checks: str
+    style: str
+    review: str
+    sessions: str
+    updated: str
+
+    @property
+    def cells(self) -> tuple[RenderableType, ...]:
+        """The row as :data:`PULL_COLUMNS` orders it, styled where the state deserves colour.
+
+        One spelling for both tables. Rich's ``Table`` and Textual's ``DataTable`` take the
+        same ``add_row(*cells)``, so a column added, reordered or restyled here reaches the
+        board and the listing together — where two copies would drift and the TUI would
+        quietly keep the old order.
+        """
+        return (
+            Text(self.reference, style=self.style),
+            self.title,
+            Text(self.checks, style=self.style),
+            self.review,
+            self.sessions,
+            self.updated,
+        )
+
+
+def summarise(status: PullStatus | None) -> str:
+    """The checks column: how they went, and how many are not fine, in the width of a word."""
+    if status is None:
+        return UNKNOWN
+    if status.checks is Checks.FAILING:
+        return f"✗ {len(status.failing)}"
+    if status.checks is Checks.RUNNING:
+        return f"⟳ {len(status.running)}"
+    return "✓" if status.checks is Checks.PASSING else "—"
+
+
+def review_of(status: PullStatus | None) -> str:
+    """The review column, with GitHub's shouting reduced to something a table can hold."""
+    if status is None:
+        return UNKNOWN
+    return REVIEW_WORDS.get(status.review, status.review.lower())
+
+
+def build_pull_rows(
+    pulls: Iterable[Pull],
+    found: Mapping[PullRequest, PullStatus],
+    holders: Mapping[PullRequest, Sequence[str]] | None,
+    now: datetime | None = None,
+) -> list[PullRow]:
+    """Turn pull requests, their statuses and their sessions into rendered cell strings.
+
+    The three arrive separately and at different times — the list in one request, the
+    statuses one apiece, the sessions from a pass over the transcripts — so each is looked
+    up rather than required. A row renders with whatever has landed, which is what lets the
+    board draw its first frame a second in rather than ten.
+
+    ``holders`` of ``None`` means the transcripts have not been read, and the sessions cell
+    says so rather than counting the nothing it has: every row would otherwise claim ``0``
+    for the first second of a board, and for the whole of a listing that was told not to
+    look. A status not yet read is ``?`` for the same reason, so the row is consistent
+    about which of its cells are answers.
+
+    A draft is dimmed whole rather than labelled, because the label would cost a column
+    that every other row would leave blank.
+    """
+    moment = now or datetime.now(tz=UTC)
+    return [
+        PullRow(
+            reference=str(pull.reference),
+            title=truncate(pull.title, TITLE_CAP),
+            checks=summarise(found.get(pull.reference)),
+            style=_pull_style(pull, found.get(pull.reference)),
+            review=review_of(found.get(pull.reference)),
+            sessions=UNKNOWN if holders is None else str(len(holders.get(pull.reference, ()))),
+            updated=format_duration(moment - pull.updated_at) if pull.updated_at else "-",
+        )
+        for pull in pulls
+    ]
+
+
+def build_pull_table(
+    pulls: Iterable[Pull],
+    found: Mapping[PullRequest, PullStatus],
+    holders: Mapping[PullRequest, Sequence[str]] | None,
+    now: datetime | None = None,
+) -> Table:
+    """Build the pull request table for a terminal that wanted the list rather than the board.
+
+    The title is the one cell that will outgrow any terminal, so it is the one given the
+    slack — everything else is a word, a count or a duration, and sized to its widest cell.
+    """
+    table = Table(box=None, pad_edge=False, header_style="bold", padding=(0, 1), expand=True)
+    for header, justify in PULL_COLUMNS:
+        table.add_column(
+            header,
+            justify=justify,
+            no_wrap=True,
+            overflow="ellipsis" if header == "TITLE" else "fold",
+            ratio=1 if header == "TITLE" else None,
+        )
+    for row in build_pull_rows(pulls, found, holders, now):
+        table.add_row(*row.cells)
+    return table
+
+
+def describe_pull(pull: Pull, status: PullStatus | None, sessions: Sequence[Session] | None = None) -> str:
+    """Render the facts about one pull request, as Rich markup lines.
+
+    What the table had no room for: the URL, the names of the checks that went red, and
+    which sessions on this machine worked on it — the answer the board exists to give,
+    since it is the one thing GitHub cannot be asked.
+    """
+    state = " · ".join(
+        part
+        for part in (
+            "draft" if pull.is_draft else None,
+            f"review {review_of(status)}",
+            status.merge_state.lower() if status and status.merge_state != "UNKNOWN" else None,
+        )
+        if part
+    )
+    return _detail_pane(
+        f"[bold]{escape(str(pull.reference))}[/]  {escape(pull.title)}",
+        (
+            ("url", pull.url),
+            ("state", state),
+            ("checks", _check_line(status)),
+            ("sessions", _session_line(sessions)),
+        ),
+    )
+
+
+def _detail_pane(header: str, rows: Sequence[tuple[str, str]]) -> str:
+    """A header and a labelled block beneath it, which is what every detail pane here is.
+
+    Values are escaped rather than trusted: a path, a title or a check name may contain
+    square brackets, which Rich would otherwise read as the markup surrounding them and
+    swallow. Shared so that the escaping is a property of the pane rather than a rule each
+    caller has to remember, and so the label column stays one width across all of them.
+    """
+    body = "\n".join(f"[dim]{label:<{DETAIL_LABEL}}[/]{escape(value)}" for label, value in rows)
+    return f"{header}\n{body}"
+
+
+def _pull_style(pull: Pull, status: PullStatus | None) -> str:
+    if pull.is_draft:
+        return DRAFT_STYLE
+    return CHECK_STYLES[status.checks] if status else ""
+
+
+def _pull_line(pulls: Sequence[PullRequest]) -> str:
+    """The pull requests a session named, the freshest few by name and the rest by count."""
+    return _named_few([str(reference) for reference in pulls], " · ")
+
+
+def _check_line(status: PullStatus | None) -> str:
+    """Which checks are red or still going, named as far as a pane can carry them.
+
+    A matrix build goes red eleven jobs at a time, and eleven names wrap into a paragraph
+    that pushes the line below it off the bottom of the board — so the first few are named
+    and the rest counted, the same bargain the pull requests on a session's line strike.
+    Naming a few is what tells a flaky shard from a broken build; naming all of them tells
+    you the same thing and costs the rest of the pane.
+    """
+    if status is None:
+        return "not read"
+    if status.failing:
+        return f"✗ {_named_few(status.failing)}"
+    if status.running:
+        return f"⟳ {_named_few(status.running)}"
+    return "✓ all passing" if status.checks is Checks.PASSING else "none"
+
+
+def _named_few(names: Sequence[str], separator: str = ", ") -> str:
+    """The first few of something, and how many more there were."""
+    shown = separator.join(names[:NAMES_SHOWN])
+    rest = len(names) - NAMES_SHOWN
+    return f"{shown} (+{rest} more)" if rest > 0 else shown
+
+
+def _session_line(sessions: Sequence[Session] | None) -> str:
+    if sessions is None:
+        return "reading transcripts…"
+    if not sessions:
+        return "none on this machine"
+    return " · ".join(session.label for session in sessions)

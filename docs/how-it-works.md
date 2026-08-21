@@ -36,6 +36,55 @@ matching the `repo/pull/309` of a URL and the `repo#309` of a mention,
 subagents included.
 What it finds is remembered until `^r` reads them again.
 
+The same transcripts answer the question backwards.
+Which pull requests did *this* session name?
+That reads URLs alone, where a search for a named pull request also takes the `repo#309` shorthand:
+anchored on a repository somebody named, the shorthand cannot mean anything else,
+but asked of a whole transcript it reads `PLAT-4471#3` and half the diffs that ever scrolled past.
+The most recently named comes first,
+so a session that opened on one pull request and spent the afternoon on its follow-up belongs to the follow-up.
+
+Asked of the session under the cursor it is one transcript and a few milliseconds,
+which is what the detail pane spends and why it is kept until `^r`.
+Asked of the fleet it is one pass that answers for every pull request at once —
+around a fifth of a second over a few hundred megabytes —
+where searching per pull request would read the whole corpus again for each.
+That pass is what the pull request board's session counts are,
+and what the optional `PRS` column is.
+
+Both cost is why the column is off until asked for,
+and both share one cache:
+whichever rows the cursor has visited are already read when the column is switched on.
+A cell says `?` until the read lands and `-` once it has and the session named nothing,
+the same distinction the pull request board draws between a count it has and one it has not looked up.
+
+The scan is anchored on a literal `github.com`,
+and is the one pattern here that is case-sensitive.
+Both are the same decision:
+a pattern that may begin with `https://` has no first byte to look for,
+so the engine tries at every offset instead of jumping between occurrences.
+Measured over 138 MB that is 34 MB/s against 1580 MB/s,
+for a flag that matches nothing extra —
+transcripts hold URLs a browser or `gh` printed, in lower case.
+
+## Your pull requests
+
+The one thing clownhead cannot answer from this machine.
+`gh search prs` lists what you have open in one request, whatever repository it lives in;
+`gh pr list` cannot, since it only ever knows the checkout it was run in.
+Then one `gh pr view` per pull request for the review decision, the merge state and the check rollup.
+
+Failing to ask is kept apart from having nothing open.
+No `gh`, no auth, no network and a `gh` that never answered all say which,
+because a board that showed the same empty table for each would be lying most of the time.
+A pull request whose *status* would not load is softer: the row stays with its status blank,
+which is honest, rather than taking the board down with it.
+
+The three answers arrive on their own schedules and the table is redrawn as each does.
+Nothing waits for anything else,
+because the list is one request, the statuses are a request apiece over several seconds,
+and the transcripts are local and usually beat GitHub.
+
 ## Issues
 
 The same search, over the `repo/issues/2` of a URL and the Jira key of a browse URL.

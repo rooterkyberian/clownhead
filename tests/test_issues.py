@@ -149,20 +149,13 @@ def test_slug_keeps_the_base_when_the_first_word_alone_would_not_fit():
     assert slug("issue-2", "supercalifragilisticexpialidociousandthensome") == "issue-2"
 
 
-def fake_gh(tmp_path, script: str):
-    path = tmp_path / "gh"
-    path.write_text(f"#!/bin/sh\n{script}\n")
-    path.chmod(0o755)
-    return path
-
-
-def test_fetch_title_returns_what_gh_printed(monkeypatch, tmp_path):
+def test_fetch_title_returns_what_gh_printed(monkeypatch, tmp_path, fake_gh):
     monkeypatch.setenv("CLOWNHEAD_GH_BIN", str(fake_gh(tmp_path, 'echo "Add a thing"')))
 
     assert fetch_title(github("2").title_query) == "Add a thing"
 
 
-def test_fetch_title_passes_the_reference_to_gh(monkeypatch, tmp_path):
+def test_fetch_title_passes_the_reference_to_gh(monkeypatch, tmp_path, fake_gh):
     seen = tmp_path / "argv"
     monkeypatch.setenv("CLOWNHEAD_GH_BIN", str(fake_gh(tmp_path, f'echo "$@" > {seen}')))
 
@@ -182,13 +175,13 @@ def test_fetch_title_passes_the_reference_to_gh(monkeypatch, tmp_path):
 
 
 @pytest.mark.parametrize("script", ["exit 1", "echo"])
-def test_fetch_title_gives_up_quietly_when_gh_says_nothing(monkeypatch, tmp_path, script):
+def test_fetch_title_gives_up_quietly_when_gh_says_nothing(monkeypatch, tmp_path, fake_gh, script):
     monkeypatch.setenv("CLOWNHEAD_GH_BIN", str(fake_gh(tmp_path, script)))
 
     assert fetch_title(github("2").title_query) is None
 
 
-def test_fetch_title_gives_up_quietly_without_a_gh_to_run(monkeypatch, tmp_path):
+def test_fetch_title_gives_up_quietly_without_a_gh_to_run(monkeypatch, tmp_path, fake_gh):
     monkeypatch.setenv("CLOWNHEAD_GH_BIN", str(tmp_path / "nowhere"))
 
     assert fetch_title(github("2").title_query) is None

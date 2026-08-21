@@ -8,19 +8,27 @@ from rich.text import Text
 
 from clownhead.discovery import Message
 from clownhead.models import Session, Status
+from clownhead.pulls import Status as PullStatus
 from clownhead.render import (
+    PRS_CAP,
     YOUR_TURN_BACKGROUND,
     Column,
+    build_pull_rows,
+    build_pull_table,
+    build_rows,
     build_table,
     conversation,
     default_columns,
     describe,
+    describe_pull,
     format_duration,
     parse_columns,
     parse_duration,
     shorten_path,
+    shorten_reference,
     worktree_cell,
 )
+from clownhead.search import PullRequest
 
 NOW = datetime(2026, 8, 10, tzinfo=UTC)
 
@@ -496,3 +504,198 @@ def test_build_table_handles_missing_tty_and_timestamps():
     console.print(build_table([Session(session_id="a-b", cwd=Path("/tmp/x"))], now=NOW))
 
     assert "-" in console.export_text()
+
+
+def test_describe_names_the_pull_requests_a_session_worked_on():
+    session = Session(session_id="a-b", cwd=Path("/tmp/repo"), name="one")
+
+    detail = describe(session, now=NOW, pulls=[PullRequest("widgets", 7, "acme")])
+
+    assert "prs" in detail
+    assert "acme/widgets#7" in detail
+
+
+def test_describe_counts_the_pull_requests_a_line_has_no_room_for():
+    session = Session(session_id="a-b", cwd=Path("/tmp/repo"), name="one")
+    many = [PullRequest("widgets", number, "acme") for number in range(1, 7)]
+
+    detail = describe(session, now=NOW, pulls=many)
+
+    assert "acme/widgets#1 · acme/widgets#2 · acme/widgets#3 (+3 more)" in detail
+
+
+def test_describe_leaves_the_line_out_until_the_transcript_has_been_read():
+    session = Session(session_id="a-b", cwd=Path("/tmp/repo"), name="one")
+
+    assert "prs" not in describe(session, now=NOW, pulls=None)
+    assert "prs" not in describe(session, now=NOW, pulls=[])
+
+
+def test_build_pull_rows_renders_what_has_landed_and_leaves_the_rest_blank(a_pull):
+    pull = a_pull(updated="2026-08-09T21:00:00Z")
+
+    row = build_pull_rows([pull], {}, {}, now=NOW)[0]
+
+    assert row.reference == "acme/widgets#7"
+    assert row.checks == "?"
+    assert row.review == "?"
+    assert row.sessions == "0"
+    assert row.updated == "3h"
+
+
+def test_build_pull_rows_folds_in_the_status_and_the_sessions_as_they_arrive(a_pull):
+    pull = a_pull()
+    found = {pull.reference: PullStatus(failing=("test",), review="CHANGES_REQUESTED")}
+
+    row = build_pull_rows([pull], found, {pull.reference: ["a", "b"]}, now=NOW)[0]
+
+    assert row.checks == "✗ 1"
+    assert row.review == "changes"
+    assert row.sessions == "2"
+    assert row.style == "bold red"
+
+
+def test_build_pull_rows_dims_a_draft_whole_rather_than_labelling_it(a_pull):
+    row = build_pull_rows([a_pull(is_draft=True)], {}, {}, now=NOW)[0]
+
+    assert row.style == "dim"
+
+
+def test_build_pull_table_prints_the_headers_and_a_row(a_pull):
+    console = Console(width=200, record=True)
+    pull = a_pull()
+    found = {pull.reference: PullStatus(ran=True, review="APPROVED")}
+
+    console.print(build_pull_table([pull], found, {pull.reference: ["a"]}, now=NOW))
+    printed = console.export_text()
+
+    assert "PR" in printed and "SESSIONS" in printed
+    assert "acme/widgets#7" in printed
+    assert "approved" in printed
+
+
+def test_describe_pull_names_the_checks_that_went_red(a_pull):
+    pull = a_pull()
+    status = PullStatus(failing=("lint", "test"), review="NONE", merge_state="DIRTY")
+
+    detail = describe_pull(pull, status, [])
+
+    assert "https://github.com/acme/widgets/pull/7" in detail
+    assert "✗ lint, test" in detail
+    assert "dirty" in detail
+    assert "none on this machine" in detail
+
+
+def test_describe_pull_names_the_sessions_that_worked_on_it(a_pull):
+    session = Session(session_id="a-b", cwd=Path("/tmp/repo"), name="payments-api-7c")
+
+    detail = describe_pull(a_pull(), PullStatus(ran=True), [session])
+
+    assert "payments-api-7c" in detail
+    assert "✓ all passing" in detail
+
+
+def test_describe_pull_says_it_is_still_reading_rather_than_that_there_are_none(a_pull):
+    detail = describe_pull(a_pull(), None, None)
+
+    assert "reading transcripts…" in detail
+    assert "not read" in detail
+
+
+def test_describe_pull_marks_a_draft(a_pull):
+    assert "draft" in describe_pull(a_pull(is_draft=True), None, [])
+
+
+def test_describe_pull_counts_the_checks_a_pane_has_no_room_to_name(a_pull):
+    failing = tuple(f"test ({shard}/6)" for shard in range(1, 12))
+    status = PullStatus(failing=failing)
+
+    detail = describe_pull(a_pull(), status, [])
+
+    assert "✗ test (1/6), test (2/6), test (3/6) (+8 more)" in detail
+
+
+def test_describe_pull_names_a_short_list_of_checks_whole(a_pull):
+    status = PullStatus(running=("lint", "test"))
+
+    assert "⟳ lint, test" in describe_pull(a_pull(), status, [])
+
+
+def test_build_pull_rows_says_it_has_not_looked_rather_than_counting_no_sessions(a_pull):
+    """`0` is a claim about the machine; `?` is the truth before the transcripts are read."""
+    row = build_pull_rows([a_pull()], {}, None, now=NOW)[0]
+
+    assert row.sessions == "?"
+
+
+def test_build_pull_rows_counts_none_once_it_has_looked(a_pull):
+    row = build_pull_rows([a_pull()], {}, {}, now=NOW)[0]
+
+    assert row.sessions == "0"
+
+
+def a_session(session_id: str = "a-b", name: str = "one") -> Session:
+    return Session(session_id=session_id, cwd=Path("/tmp/repo"), name=name)
+
+
+def test_prs_column_names_the_freshest_and_counts_the_rest():
+    named = {"a-b": [PullRequest("widgets", 7, "acme"), PullRequest("gadgets", 9, "acme")]}
+
+    row = build_rows([a_session()], NOW, named)[0]
+
+    assert row.prs == "widgets#7 +1"
+
+
+def test_prs_column_drops_the_owner_the_number_cannot_afford():
+    """A column is narrow, and every row in it is usually the same organisation."""
+    named = {"a-b": [PullRequest("widgets", 7, "acme")]}
+
+    assert build_rows([a_session()], NOW, named)[0].prs == "widgets#7"
+
+
+def test_prs_column_says_it_has_not_read_the_transcripts_yet():
+    assert build_rows([a_session()], NOW, None)[0].prs == "?"
+    assert build_rows([a_session()], NOW, {})[0].prs == "?"
+
+
+def test_prs_column_says_a_session_named_nothing_once_it_has_looked():
+    assert build_rows([a_session()], NOW, {"a-b": []})[0].prs == "-"
+
+
+@pytest.mark.parametrize(
+    ("text", "width", "expected"),
+    [
+        ("widgets#7", 24, "widgets#7"),
+        ("ai-development-toolkit#464", 24, "ai-development-tool…#464"),
+        ("ai-development-toolkit#150 +47", 24, "ai-development-…#150 +47"),
+        ("widgets#7", 5, "wi…#7"),
+        ("widgets#7", 2, "w…"),
+    ],
+)
+def test_shorten_reference_gives_up_the_repository_before_the_number(text, width, expected):
+    shortened = shorten_reference(text, width)
+
+    assert shortened == expected
+    assert len(shortened) <= width
+
+
+def test_prs_cell_never_outgrows_its_cap():
+    named = {"a-b": [PullRequest("a" * 80, 12345, "acme")] * 40}
+
+    assert len(build_rows([a_session()], NOW, named)[0].prs) <= PRS_CAP
+
+
+def test_prs_is_off_unless_asked_for():
+    assert Column.PRS not in default_columns(200)
+    assert Column.PRS in default_columns(200, show_prs=True)
+
+
+def test_build_table_draws_the_prs_column_when_it_is_named():
+    console = Console(width=120, record=True)
+    named = {"a-b": [PullRequest("widgets", 7, "acme")]}
+
+    console.print(build_table([a_session()], now=NOW, columns=(Column.NAME, Column.PRS), pulls=named))
+    printed = console.export_text()
+
+    assert "PRS" in printed
+    assert "widgets#7" in printed

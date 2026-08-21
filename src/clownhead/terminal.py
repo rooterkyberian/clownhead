@@ -47,6 +47,7 @@ STDIN, STDOUT, STDERR = 0, 1, 2
 ATTENTION_MARK = "\N{WARNING SIGN}"
 BUNDLE_ID_VAR = "__CFBundleIdentifier"
 OPEN_BINARY = "/usr/bin/open"
+XDG_OPEN_BINARY = "xdg-open"
 PBCOPY_BINARY = "/usr/bin/pbcopy"
 ACTIVATION_TIMEOUT = 5.0
 
@@ -311,6 +312,27 @@ def raise_application(target: Path | str) -> None:
         check=False,
         timeout=ACTIVATION_TIMEOUT,
     )
+
+
+def open_url(url: str) -> bool:
+    """Hand a URL to whatever the desktop opens links with, saying whether it was taken.
+
+    Shelled out to rather than handed to :mod:`webbrowser`, which honours ``$BROWSER`` and
+    will cheerfully launch a text browser into the terminal a full-screen board is already
+    drawing in. The desktop's own opener has no such opinion, and is the same ``open`` that
+    raises an application here already.
+    """
+    opener = OPEN_BINARY if on_macos() else XDG_OPEN_BINARY
+    try:
+        subprocess.run(  # noqa: S603
+            [opener, url],
+            capture_output=True,
+            check=True,
+            timeout=ACTIVATION_TIMEOUT,
+        )
+    except (OSError, subprocess.SubprocessError):
+        return False
+    return True
 
 
 def copy_to_pasteboard(text: str) -> bool:
