@@ -359,3 +359,13 @@ def test_focus_stalled_only_targets_attention_states():
     results = attention.focus_stalled(sessions, terminal)
 
     assert [result.label for result in results] == ["one", "three"]
+
+
+def test_focusing_an_ide_does_not_reach_the_desktop_of_whoever_runs_the_suite(unreachable_desktop):
+    """The suite raises no windows. It asserts on what was asked, not on what rose."""
+    terminal = TabbedTerminal(Selection(True))
+
+    attention.focus(session(Status.WAITING), terminal)
+
+    assert terminal.asked == ["one: waiting"]
+    assert unreachable_desktop == [["/usr/bin/open", "-b", "com.jetbrains.pycharm"]]
