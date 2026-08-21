@@ -4,7 +4,8 @@ from __future__ import annotations
 
 import os
 import time
-from collections.abc import Iterable, Sequence
+from collections.abc import Iterable, Mapping, Sequence
+from concurrent.futures import ThreadPoolExecutor
 from datetime import UTC, datetime, timedelta
 from pathlib import Path
 from typing import Annotated, Any
@@ -15,12 +16,14 @@ from rich.table import Table
 from rich.text import Text
 from typer.core import TyperGroup
 
-from clownhead import __version__, attention, checkouts, discovery, issues, search, tui, worktrees
+from clownhead import __version__, attention, checkouts, discovery, issues, pulls, search, tui, worktrees
 from clownhead import settings as settings_store
+from clownhead.issues import Unavailable
 from clownhead.models import Session
 from clownhead.render import (
     NARROW_WIDTH,
     Column,
+    build_pull_table,
     build_table,
     default_columns,
     format_duration,
@@ -69,6 +72,12 @@ error_console = Console(stderr=True)
 CwdOption = Annotated[Path | None, typer.Option("--cwd", help="Only sessions started under this path.")]
 AllOption = Annotated[bool, typer.Option("--all", help="Include background agents.")]
 ClosedOption = Annotated[bool, typer.Option("--closed", help="Include sessions that have ended.")]
+AuthorOption = Annotated[str, typer.Option("--author", help="GitHub login whose pull requests to list, or @me.")]
+LimitOption = Annotated[int, typer.Option("--limit", help="Most pull requests to ask GitHub for.")]
+SessionsOption = Annotated[
+    bool,
+    typer.Option("--sessions/--no-sessions", help="Read the transcripts for which sessions worked on each."),
+]
 IntervalOption = Annotated[float | None, typer.Option("--interval", "-n", help="Seconds between refreshes.")]
 PrOption = Annotated[
     str | None,
@@ -199,7 +208,13 @@ def _columns(selection: str | None) -> tuple[Column, ...]:
     """
     if selection is None:
         settings = settings_store.load()
-        return default_columns(console.width, settings.show_pid, settings.show_tty, settings.show_worktree)
+        return default_columns(
+            console.width,
+            settings.show_pid,
+            settings.show_tty,
+            settings.show_worktree,
+            settings.show_prs,
+        )
     try:
         return parse_columns(selection)
     except ValueError as error:
@@ -207,8 +222,12 @@ def _columns(selection: str | None) -> tuple[Column, ...]:
         raise typer.Exit(code=2) from error
 
 
-def _fleet_table(sessions: list[Session], columns: Sequence[Column]) -> Table:
-    return build_table(sessions, width=console.width, columns=columns)
+def _fleet_table(
+    sessions: list[Session],
+    columns: Sequence[Column],
+    pulls: Mapping[str, Sequence[PullRequest]] | None = None,
+) -> Table:
+    return build_table(sessions, width=console.width, columns=columns, pulls=pulls)
 
 
 def _config_dir_line() -> str:
@@ -277,6 +296,11 @@ def list_sessions(
 
     ``--columns`` says which columns to show and in what order. Both are read before the
     fleet is, so a selection with a typo in it costs nothing but the typo.
+
+    ``prs`` among them reads the transcripts of whatever the other options left, since
+    nothing a session publishes about itself says which pull request it belongs to. That
+    is the one column that costs a pass over the disk, which is why it is never on unless
+    it was asked for.
     """
     reference = _pull_request(pull_request)
     chosen = _columns(columns)
@@ -288,7 +312,8 @@ def list_sessions(
     elif not sessions:
         console.print("[dim]no live sessions[/]")
     if sessions:
-        console.print(_fleet_table(sessions, chosen))
+        named = search.pulls_by_session(sessions) if Column.PRS in chosen else None
+        console.print(_fleet_table(sessions, chosen, named))
 
 
 @app.command("open")
@@ -368,6 +393,55 @@ def _run_launch(launch: Launch | None) -> None:
         return
     os.chdir(launch.directory)
     os.execvp(discovery.claude_binary(), [*launch.argv])  # noqa: S606
+
+
+@app.command("prs")
+def list_pulls(
+    author: AuthorOption = pulls.MINE,
+    limit: LimitOption = pulls.DEFAULT_LIMIT,
+    cwd: CwdOption = None,
+    include_background: AllOption = False,
+    sessions: SessionsOption = True,
+) -> None:
+    """What you have open on GitHub, and which sessions here worked on each.
+
+    The one view that asks somebody else. Everything else clownhead prints comes off this
+    machine and prints whether or not GitHub is reachable; this needs `gh`, and says so
+    rather than printing an empty table that reads as having nothing open.
+
+    The session counts come from the transcripts, ended sessions included — work on a pull
+    request has usually finished, so the session that did it has usually ended. `--no-sessions`
+    skips that pass for a listing that only wants GitHub's half.
+
+    The transcripts are read while GitHub is being asked, because neither answer is an
+    input to the other and reading a corpus takes about as long as the round trips do. The
+    overseer already overlaps these two; this is the same trick where a script can see it.
+    """
+    with ThreadPoolExecutor(max_workers=1) as pool:
+        reading = pool.submit(_holders, cwd, include_background) if sessions else None
+        try:
+            listed = pulls.mine(author, limit)
+            found = pulls.statuses(listed) if listed else {}
+        except Unavailable as error:
+            error_console.print(f"[bold red]github could not be asked[/] — {error}")
+            raise typer.Exit(code=1) from error
+        finally:
+            holders = reading.result() if reading is not None else None
+    if not listed:
+        console.print(f"[dim]no open pull requests for {author}[/]")
+        return
+    console.print(f"[dim]{len(listed)} open · {author}[/]")
+    console.print(build_pull_table(pulls.ranked(listed, found), found, holders))
+
+
+def _holders(cwd: Path | None, include_background: bool) -> dict[PullRequest, list[str]]:
+    """Which sessions named each pull request, over the whole fleet in one pass.
+
+    The sessions that have ended are included whatever a listing would otherwise show, for
+    the reason the command's own docstring gives: the session that finished a pull request
+    has usually finished too.
+    """
+    return search.sessions_by_pull(_load(cwd, include_background, include_closed=True))
 
 
 @app.command("worktrees-cleanup")

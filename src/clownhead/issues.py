@@ -37,6 +37,14 @@ JIRA_URL = re.compile(
 )
 
 
+class Unavailable(RuntimeError):
+    """GitHub could not be asked, carrying whatever ``gh`` said about why.
+
+    Raised rather than answered with an empty result, because *nobody could ask* and *there
+    is nothing there* are the two things anything reading GitHub most needs to keep apart.
+    """
+
+
 class Tracker(StrEnum):
     """Which issue tracker a reference was written for."""
 
@@ -160,23 +168,54 @@ def fetch_title(query: Sequence[str] | None) -> str | None:
     if query is None:
         return None
     try:
+        printed = run_gh([*query, "--json", "title", "--jq", ".title"])
+    except Unavailable:
+        return None
+    return printed.strip() or None
+
+
+def run_gh(arguments: Sequence[str], timeout: float = GH_TIMEOUT) -> str:
+    """Ask ``gh`` something, turning every way of not getting an answer into one failure.
+
+    Raising rather than returning ``None`` because the callers disagree about what a
+    failure means and only one of them can be served by a default. A title is a courtesy
+    and its absence is nothing to report; a board of pull requests that could not reach
+    GitHub has to say so, or it renders an empty table that reads as having nothing open.
+    Swallowing here would make the second impossible, where catching is one line.
+
+    Raises:
+        Unavailable: with what ``gh`` printed, which is usually the actionable half — an
+            expired token and an unreachable host read very differently to whoever is
+            looking at the board.
+    """
+    try:
         completed = subprocess.run(  # noqa: S603
-            [gh_binary(), *query, "--json", "title", "--jq", ".title"],
+            [gh_binary(), *arguments],
             capture_output=True,
             text=True,
             check=False,
-            timeout=GH_TIMEOUT,
+            timeout=timeout,
         )
-    except (OSError, subprocess.SubprocessError):
-        return None
+    except FileNotFoundError as error:
+        raise Unavailable("gh is not installed, so GitHub cannot be asked") from error
+    except subprocess.TimeoutExpired as error:
+        raise Unavailable(f"gh did not answer within {timeout:.0f}s") from error
+    except OSError as error:
+        raise Unavailable(f"gh could not be run: {error}") from error
     if completed.returncode != 0:
-        return None
-    return completed.stdout.strip() or None
+        raise Unavailable(_complaint(completed.stderr) or f"gh exited {completed.returncode}")
+    return completed.stdout
 
 
 def gh_binary() -> str:
     """Path to the GitHub CLI, overridable for tests via ``CLOWNHEAD_GH_BIN``."""
     return os.environ.get(GH_BINARY_VAR, "gh")
+
+
+def _complaint(stderr: str) -> str:
+    """The one line of ``gh``'s error worth putting in a status bar."""
+    lines = [line.strip() for line in stderr.splitlines() if line.strip()]
+    return lines[0] if lines else ""
 
 
 def _slugify(text: str) -> str:

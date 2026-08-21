@@ -23,20 +23,41 @@ from textual.app import App, ComposeResult, SystemCommand
 from textual.binding import Binding
 from textual.containers import Horizontal, Vertical, VerticalScroll
 from textual.message import Message as TextualMessage
+from textual.message_pump import MessagePump
 from textual.notifications import SeverityLevel
 from textual.screen import ModalScreen, Screen
 from textual.widgets import DataTable, Footer, Input, Label, OptionList, Static, Switch
 
-from clownhead import attention, checkouts, issues
+from clownhead import attention, checkouts, issues, pulls
 from clownhead import settings as settings_store
 from clownhead.control import close_tab, rename, shell_of, terminate, wait_for_exit
 from clownhead.discovery import Message, Process, process_table, recent_messages, relocated_config_dir
+from clownhead.issues import Unavailable
 from clownhead.models import Session, Status, split_worktree
-from clownhead.render import build_rows, conversation, describe, format_duration, shorten_path, truncate
+from clownhead.pulls import Pull
+from clownhead.pulls import Status as PullStatus
+from clownhead.render import (
+    PULL_COLUMNS,
+    build_pull_rows,
+    build_rows,
+    conversation,
+    describe,
+    describe_pull,
+    format_duration,
+    shorten_path,
+    truncate,
+)
 from clownhead.resume import Launch, resume_plan, resume_shell_command, start_plan
-from clownhead.search import Reference, parse_reference, sessions_mentioning
+from clownhead.search import (
+    PullRequest,
+    Reference,
+    parse_reference,
+    pulls_mentioned,
+    sessions_by_pull,
+    sessions_mentioning,
+)
 from clownhead.settings import Settings
-from clownhead.terminal import Terminal, copy_to_pasteboard
+from clownhead.terminal import Terminal, copy_to_pasteboard, open_url
 from clownhead.worktrees import Candidate, survey
 from clownhead.worktrees import remove as remove_worktree
 
@@ -94,6 +115,21 @@ def seeded_needle(target: Reference | None) -> str:
     the pull request of the same number and search for that instead.
     """
     return target.prompt if target is not None else ""
+
+
+def hand_back[T](pump: MessagePump, callback: Callable[[T], None], value: T) -> None:
+    """Carry a worker thread's answer to the event loop, unless the board has gone.
+
+    The one rule every thread here obeys: a node torn down while its worker was still
+    running must not be called into. Written once because a third screen would otherwise
+    copy whichever of two spellings it found first — and because the guard is the kind of
+    thing that is only ever wrong once.
+
+    Routed through ``pump.app`` so a Screen and the App itself are the same call; an App's
+    ``app`` is itself.
+    """
+    if pump.is_running:
+        pump.app.call_from_thread(callback, value)
 
 
 def matches(session: Session, needle: str) -> bool:
@@ -501,6 +537,7 @@ class SettingsScreen(ModalScreen[Settings | None]):
         ("show_pid", "PID column"),
         ("show_tty", "TTY column"),
         ("show_worktree", "WORKTREE column"),
+        ("show_prs", "PRS column, read from the transcripts"),
         ("show_closed", "closed sessions at startup"),
         ("foreground", "raise the window on focus"),
         ("paint_tabs", "tint session tabs, and the board's own"),
@@ -543,6 +580,350 @@ class SettingsScreen(ModalScreen[Settings | None]):
     def action_close(self) -> None:
         """Hand the edited settings back to the overseer."""
         self.dismiss(self._settings)
+
+
+@dataclass(frozen=True)
+class Worked:
+    """A pull request the board is being pointed at, and what is already known about it.
+
+    ``sessions`` is ``None`` where the transcripts were never read, which is the difference
+    between handing the board an answer and handing it an empty one — the board would take
+    the second as fact and show nothing.
+    """
+
+    reference: PullRequest
+    sessions: list[str] | None
+    read: list[Session]
+
+
+class PullChoiceScreen(ModalScreen[PullRequest | None]):
+    """Which of a session's pull requests to open, when it named more than one.
+
+    A session that ran long enough names the pull request it was for, the one it was based
+    on, and two it read in passing. Opening all of them is four tabs nobody asked for, and
+    opening the first is a guess — so the list is offered, freshest first, which is the
+    order :func:`clownhead.search.pulls_mentioned` already put them in.
+    """
+
+    CSS = """
+    PullChoiceScreen {
+        align: center middle;
+    }
+    #sheet {
+        width: 78;
+        max-height: 80%;
+        height: auto;
+        padding: 1 2;
+        border: round $panel;
+        background: $surface;
+    }
+    #choices {
+        height: auto;
+        max-height: 12;
+        margin: 1 0;
+    }
+    """
+
+    BINDINGS = [Binding("escape", "cancel", "cancel")]
+
+    def __init__(self, session: Session, references: Sequence[PullRequest]) -> None:
+        super().__init__()
+        self._session = session
+        self._references = list(references)
+
+    def compose(self) -> ComposeResult:
+        """Offer the pull requests this session named, the most recent one highlighted."""
+        with Vertical(id="sheet"):
+            yield Static(f"[bold]Open a pull request for {escape(self._session.label)}[/]")
+            yield OptionList(*(escape(str(reference)) for reference in self._references), id="choices")
+            yield Static("[dim]enter to open in the browser · esc to cancel[/]")
+
+    def on_mount(self) -> None:
+        """Put the cursor on the one the session named last."""
+        self.query_one("#choices", OptionList).focus()
+
+    def on_option_list_option_selected(self, event: OptionList.OptionSelected) -> None:
+        """Answer the sheet with whichever reference was chosen."""
+        event.stop()
+        self.dismiss(self._references[event.option_index])
+
+    def action_cancel(self) -> None:
+        """Leave without opening anything."""
+        self.dismiss(None)
+
+
+class PullsScreen(ModalScreen[Worked | None]):
+    """The pull requests you have open, and which sessions on this machine worked on them.
+
+    The board's usual question runs the other way — here is a session, what was it for —
+    and answering it needs a reference to search for. This is where the references come
+    from: GitHub is asked what you have open, so that the list is complete rather than
+    limited to whatever a transcript happened to mention, and a pull request opened from
+    the web or by somebody else is on it too.
+
+    Three answers arrive separately and the table is redrawn as each does. The list is one
+    request and lands first. The statuses are a request apiece and trickle in over several
+    seconds. The sessions come from a pass over every transcript, which is a second or so
+    and entirely local — so it usually beats GitHub, and the counts are filled in while the
+    checks are still blank. Nothing waits for anything else: a board that held its first
+    frame until the slowest of the three answered would spend ten seconds looking broken.
+
+    Modal rather than a screen of its own so that the board's keys stop at it. `t` is
+    terminate and `n` starts a session, and neither should reach a fleet nobody can see.
+    """
+
+    CSS = """
+    PullsScreen {
+        background: $surface;
+    }
+    #pulls-bar {
+        height: 1;
+        background: $panel;
+        padding: 0 1;
+    }
+    #pulls {
+        height: 1fr;
+        width: 1fr;
+        overflow-x: hidden;
+    }
+    #pull-details {
+        height: auto;
+        padding: 0 1;
+        border-top: solid $panel;
+    }
+    """
+
+    BINDINGS = [
+        Binding("enter", "sessions", "sessions"),
+        Binding("o", "open", "open on github"),
+        Binding("y", "copy", "copy url"),
+        Binding("escape", "back", "back"),
+        Binding("q", "back", "back", show=False),
+        Binding("ctrl+r", "refresh", "refresh", show=False),
+    ]
+
+    def __init__(self, loader: Loader, author: str = pulls.MINE, limit: int = pulls.DEFAULT_LIMIT) -> None:
+        super().__init__()
+        self._loader = loader
+        self._author = author
+        self._limit = limit
+        self._pulls: list[Pull] = []
+        self._statuses: dict[PullRequest, PullStatus] = {}
+        self._holders: dict[PullRequest, list[str]] | None = None
+        self._sessions: dict[str, Session] = {}
+        self._visible: list[Pull] = []
+        self._failure: str | None = None
+        self._listing = True
+        self._enriching = False
+
+    def compose(self) -> ComposeResult:
+        """Lay out the summary bar, the pull request table, the detail pane and the hints."""
+        yield Static(id="pulls-bar")
+        yield DataTable[Any](id="pulls", cursor_type="row", zebra_stripes=True)
+        yield Static(id="pull-details")
+        yield Footer()
+
+    def on_mount(self) -> None:
+        """Ask GitHub and the transcripts at once, and draw whichever answers first."""
+        table = self.query_one("#pulls", DataTable)
+        table.add_columns(*(header for header, _ in PULL_COLUMNS))
+        table.focus()
+        self._draw()
+        self._fetch()
+        self._scan()
+
+    def on_data_table_row_highlighted(self, event: DataTable.RowHighlighted) -> None:
+        """Describe whichever pull request the cursor has moved onto.
+
+        Stopped here rather than left to bubble: the board underneath answers the same
+        message by describing a session, and would do it into a pane that is not on screen.
+        """
+        event.stop()
+        self._draw_details()
+
+    def on_data_table_row_selected(self, event: DataTable.RowSelected) -> None:
+        """Treat choosing a row as asking for its sessions."""
+        event.stop()
+        self.action_sessions()
+
+    @property
+    def selected(self) -> Pull | None:
+        """The pull request under the cursor, if the list is not empty."""
+        table = self.query_one("#pulls", DataTable)
+        if not self._visible or not 0 <= table.cursor_row < len(self._visible):
+            return None
+        return self._visible[table.cursor_row]
+
+    def action_sessions(self) -> None:
+        """Leave, pointing the board at the sessions that worked on this pull request.
+
+        The answer goes back with the reference rather than being left behind. This screen
+        has just read every transcript on the machine to build it, and the board's own
+        search would otherwise read them all again — measured at three seconds — to arrive
+        at the list already in hand.
+        """
+        pull = self.selected
+        if pull is None:
+            self.notify("nothing selected", severity="warning")
+            return
+        found = None if self._holders is None else self._holders.get(pull.reference, [])
+        self.dismiss(Worked(pull.reference, found, list(self._sessions.values())))
+
+    def action_open(self) -> None:
+        """Open the selected pull request on GitHub."""
+        pull = self.selected
+        if pull is None:
+            self.notify("nothing selected", severity="warning")
+            return
+        if not open_url(pull.url):
+            self.notify(pull.url, title="could not open a browser", severity="warning")
+
+    def action_copy(self) -> None:
+        """Put the selected pull request's URL on the clipboard."""
+        pull = self.selected
+        if pull is None:
+            self.notify("nothing selected", severity="warning")
+            return
+        self.app.copy_to_clipboard(pull.url)
+        copy_to_pasteboard(pull.url)
+        self.notify(pull.url, title=str(pull.reference))
+
+    def action_refresh(self) -> None:
+        """Ask GitHub and the transcripts again, from nothing."""
+        if self._listing or self._enriching:
+            return
+        self._pulls = []
+        self._statuses = {}
+        self._holders = None
+        self._failure = None
+        self._listing = True
+        self._draw()
+        self._fetch()
+        self._scan()
+
+    def action_back(self) -> None:
+        """Leave the pull requests and go back to the fleet."""
+        self.dismiss(None)
+
+    @work(thread=True, group="pulls")
+    def _fetch(self) -> None:
+        """Ask GitHub for the list, then for each status, off the event loop."""
+        try:
+            listed = pulls.mine(self._author, self._limit)
+        except Unavailable as error:
+            hand_back(self, self._unavailable, str(error))
+            return
+        hand_back(self, self._listed, listed)
+        for pull, status in pulls.stream_statuses(listed):
+            hand_back(self, self._enriched, (pull, status))
+        hand_back(self, self._enriched_all, None)
+
+    @work(thread=True, group="pull-sessions")
+    def _scan(self) -> None:
+        """Read every transcript once for every pull request it names.
+
+        The sessions that have ended are read too, whatever the board is showing. Work on a
+        pull request is usually finished, so the session that did it has usually ended, and
+        a count of zero on a merged pull request would be an answer about the board's `c`
+        rather than about the machine.
+        """
+        try:
+            sessions = self._loader(True)
+            holders = sessions_by_pull(sessions)
+        except OSError as error:
+            hand_back(self, self._scan_failed, str(error))
+            return
+        hand_back(self, self._scanned, (sessions, holders))
+
+    def _unavailable(self, detail: str) -> None:
+        self._listing = False
+        self._failure = detail
+        self._draw()
+
+    def _listed(self, listed: list[Pull]) -> None:
+        self._listing = False
+        self._enriching = bool(listed)
+        self._pulls = listed
+        self._draw()
+
+    def _enriched(self, found: tuple[Pull, PullStatus]) -> None:
+        pull, status = found
+        self._statuses[pull.reference] = status
+        self._draw()
+
+    def _enriched_all(self, _: None) -> None:
+        self._enriching = False
+        self._draw()
+
+    def _scanned(self, found: tuple[list[Session], dict[PullRequest, list[str]]]) -> None:
+        sessions, holders = found
+        self._sessions = {session.session_id: session for session in sessions}
+        self._holders = holders
+        self._draw()
+
+    def _scan_failed(self, detail: str) -> None:
+        self._holders = {}
+        self.notify(detail, title="could not read the transcripts", severity="warning")
+        self._draw()
+
+    def _draw(self) -> None:
+        """Redraw the table, keeping the cursor wherever its reader left it.
+
+        The order changes underneath the cursor here in a way it never does on the fleet
+        board: a pull request whose checks have just come back red climbs from the middle
+        to the top, and every row below it shifts. So the cursor follows the pull request
+        it was on rather than the position it was at — except at the top, which is a place
+        rather than a row. Somebody who has not moved yet is reading the most urgent thing
+        there is, and should still be reading it once the board knows what that is.
+        """
+        table = self.query_one("#pulls", DataTable)
+        previous = None if table.cursor_row <= 0 else self.selected
+        self._visible = pulls.ranked(self._pulls, self._statuses)
+
+        table.clear()
+        for row in build_pull_rows(self._visible, self._statuses, self._holders):
+            table.add_row(*row.cells)
+        if previous is not None:
+            restored = next((i for i, p in enumerate(self._visible) if p.reference == previous.reference), None)
+            if restored is not None:
+                table.move_cursor(row=restored)
+
+        self.query_one("#pulls-bar", Static).update(self._summary())
+        self._draw_details()
+
+    def _draw_details(self) -> None:
+        pane = self.query_one("#pull-details", Static)
+        pull = self.selected
+        if pull is None:
+            pane.update("[dim]no pull request selected[/]")
+            return
+        holding = (
+            None
+            if self._holders is None
+            else [
+                self._sessions[session_id]
+                for session_id in self._holders.get(pull.reference, ())
+                if session_id in self._sessions
+            ]
+        )
+        pane.update(describe_pull(pull, self._statuses.get(pull.reference), holding))
+
+    def _summary(self) -> str:
+        if self._failure:
+            return f"[bold red]github could not be asked[/] {escape(self._failure)}"
+        if self._listing:
+            return "[dim]asking github what you have open…[/]"
+        if not self._pulls:
+            return f"[dim]no open pull requests for {escape(self._author)}[/]"
+        parts = [f"{len(self._pulls)} open"]
+        if self._enriching:
+            parts.append(f"[dim]reading status {len(self._statuses)}/{len(self._pulls)}…[/]")
+        if self._holders is None:
+            parts.append("[dim]reading transcripts…[/]")
+        else:
+            worked = sum(1 for pull in self._pulls if self._holders.get(pull.reference))
+            parts.append(f"{worked} with sessions here")
+        return " · ".join(parts)
 
 
 class FleetApp(App[None]):
@@ -607,7 +988,9 @@ class FleetApp(App[None]):
     BINDINGS = [
         Binding("enter", "go", "go"),
         Binding("f", "focus_session", "focus"),
+        Binding("o", "open_pull_request", "open pr"),
         Binding("slash", "filter", "filter"),
+        Binding("p", "pull_requests", "pull requests"),
         Binding("n", "start", "new session"),
         Binding("c", "toggle_closed", "closed", show=False),
         Binding("y", "copy_resume", "copy resume"),
@@ -634,6 +1017,12 @@ class FleetApp(App[None]):
     into this session — and the board answers it by whichever route that row needs, rather
     than by asking which of `f` and `y` the row happens to want. It is the only key that
     ends the board, which is what running something in its terminal has to cost.
+
+    `o` sits beside `f` because it is the same kind of key: both take the session under the
+    cursor somewhere else, one to its terminal and one to the pull request it was for. `p`
+    sits beside `/` for the matching reason — both change what the board is a board of, and
+    the two are halves of one question, since `/` searches for a pull request you can name
+    and `p` is where you go when you cannot.
 
     Retiring a worktree has no key at all, and is in the palette instead — see
     :meth:`FleetApp.get_system_commands`, which carries everything here by name as well. A
@@ -663,6 +1052,8 @@ class FleetApp(App[None]):
         self._visible: list[Session] = []
         self._previews: dict[str, list[Message]] = {}
         self._preview_asked: set[str] = set()
+        self._session_pulls: dict[str, list[PullRequest]] = {}
+        self._pulls_asked: set[str] = set()
         self._needle = seeded_needle(target)
         self._target: Reference | None = target
         self._read: dict[Reference, set[str]] = {}
@@ -741,6 +1132,16 @@ class FleetApp(App[None]):
             self.action_go,
         )
         yield SystemCommand(
+            "Pull requests",
+            "What you have open on GitHub, and which sessions here worked on each",
+            self.action_pull_requests,
+        )
+        yield SystemCommand(
+            "Open this session's pull request",
+            "Open what its transcript says it was working on, in the browser",
+            self.action_open_pull_request,
+        )
+        yield SystemCommand(
             "Start a new session for this reference",
             "Make a worktree named after the pull request or issue being filtered on",
             self.action_start,
@@ -783,6 +1184,7 @@ class FleetApp(App[None]):
             ("PID",) * self._settings.show_pid
             + ("TTY",) * self._settings.show_tty
             + ("WORKTREE",) * self._settings.show_worktree
+            + ("PRS",) * self._settings.show_prs
         )
         return (*BASE_COLUMNS, *optional, "WHERE")
 
@@ -817,6 +1219,8 @@ class FleetApp(App[None]):
         """
         self._read.clear()
         self._named.clear()
+        self._session_pulls.clear()
+        self._pulls_asked.clear()
         self._searching = None
         self.start_reload()
 
@@ -883,7 +1287,7 @@ class FleetApp(App[None]):
         """Ask git where this could be started and GitHub what to call it, off the event loop."""
         repos = checkouts.repos_for(reference, sessions, named)
         name = issues.slug(reference.base_slug, issues.fetch_title(reference.title_query))
-        self._hand_back(self._ask_start, (reference, name, repos))
+        hand_back(self, self._ask_start, (reference, name, repos))
 
     def _ask_start(self, resolved: tuple[Reference, str, list[Path]]) -> None:
         reference, name, repos = resolved
@@ -909,6 +1313,77 @@ class FleetApp(App[None]):
             return
         self._launch = plan
         self.exit()
+
+    def action_pull_requests(self) -> None:
+        """Open the board of pull requests you have open, and come back pointed at one.
+
+        Leaving it with `enter` seeds the filter with the chosen pull request, which is the
+        same route as pasting its URL into `/` — the board has one way of showing the
+        sessions for a reference and this arrives at it rather than inventing a second.
+        The sessions that have ended are folded in on the way, because work on a pull
+        request has usually finished and a board that made you press `c` to see the session
+        you just went looking for would be asking you to guess that it was there.
+        """
+        self.push_screen(PullsScreen(self._loader), self._pull_chosen)
+
+    def _pull_chosen(self, worked: Worked | None) -> None:
+        """Point the board at the chosen pull request, keeping the answer that came with it."""
+        if worked is None:
+            return
+        if worked.sessions is not None:
+            self._read.setdefault(worked.reference, set()).update(s.session_id for s in worked.read)
+            self._named.setdefault(worked.reference, set()).update(worked.sessions)
+        box = self.query_one("#filter", Input)
+        box.display = True
+        box.value = worked.reference.prompt
+        self._needle = box.value
+        if not self._show_closed:
+            self._show_closed = True
+            self.start_reload()
+        self._retarget(worked.reference)
+        self._draw()
+
+    def action_open_pull_request(self) -> None:
+        """Open what the selected session was working on, in the browser.
+
+        A session names as many pull requests as ever scrolled past it, so more than one is
+        the normal case and the choice is offered rather than guessed at. The read is the
+        same one the detail pane already asked for, so by the time anybody has looked at a
+        row long enough to press this the answer is usually already in hand.
+        """
+        session = self.selected_session
+        if session is None:
+            self.notify("nothing selected", severity="warning")
+            return
+        references = self._session_pulls.get(session.session_id)
+        if references is None:
+            self._ensure_pulls([session])
+            self.notify("reading its transcript — try again in a moment", title=session.label)
+            return
+        if not references:
+            self.notify("its transcript names no pull request", title=session.label, severity="warning")
+            return
+        if len(references) == 1:
+            self._open_pull(references[0])
+            return
+        self.push_screen(PullChoiceScreen(session, references), self._open_pull)
+
+    def _open_pull(self, reference: PullRequest | None) -> None:
+        """Open a pull request in the browser, saying so either way.
+
+        ``url`` rather than ``prompt``: the two part company for an owner-less reference,
+        where ``prompt`` is the ``widgets#309`` shorthand — the right thing to hand a
+        session standing in the repository, and not something a browser can open.
+        """
+        if reference is None:
+            return
+        if not reference.url:
+            self.notify(str(reference), title="no url to open — the reference names no owner", severity="warning")
+            return
+        if open_url(reference.url):
+            self.notify(reference.url, title="opened")
+            return
+        self.notify(reference.url, title="could not open a browser", severity="warning")
 
     def action_history(self) -> None:
         """Open the conversation of the selected session beside the fleet, and read it."""
@@ -979,15 +1454,15 @@ class FleetApp(App[None]):
         try:
             shell = shell_of(session, processes)
         except LookupError as error:
-            self._hand_back(self._tab_left_open, str(error))
+            hand_back(self, self._tab_left_open, str(error))
             return
         if not wait_for_exit(pid):
-            self._hand_back(self._tab_left_open, f"{session.label} is still running")
+            hand_back(self, self._tab_left_open, f"{session.label} is still running")
             return
         try:
             close_tab(shell)
         except (LookupError, OSError) as error:
-            self._hand_back(self._tab_left_open, f"{session.label}: {error}")
+            hand_back(self, self._tab_left_open, f"{session.label}: {error}")
 
     def _tab_left_open(self, detail: str) -> None:
         self.notify(detail, title="tab left open", severity="warning")
@@ -1013,13 +1488,13 @@ class FleetApp(App[None]):
     def _inspect_worktree(self, session: Session) -> None:
         found = survey([session], older_than=CLEANUP_AGE, only=session.cwd)
         if not found:
-            self._hand_back(self._worktree_kept, f"git does not know {shorten_path(session.cwd)}")
+            hand_back(self, self._worktree_kept, f"git does not know {shorten_path(session.cwd)}")
             return
         candidate = found[0]
         if candidate.kept_for is not None:
-            self._hand_back(self._worktree_kept, f"{candidate.worktree.name}: {candidate.kept_for}")
+            hand_back(self, self._worktree_kept, f"{candidate.worktree.name}: {candidate.kept_for}")
             return
-        self._hand_back(self._ask_remove_worktree, candidate)
+        hand_back(self, self._ask_remove_worktree, candidate)
 
     def _ask_remove_worktree(self, candidate: Candidate) -> None:
         branch = candidate.worktree.branch or "a detached HEAD"
@@ -1042,7 +1517,7 @@ class FleetApp(App[None]):
     @work(thread=True, group="worktree")
     def _cleanup_worktrees(self) -> None:
         candidates = [candidate for candidate in survey(self._sessions, older_than=CLEANUP_AGE) if candidate.merged]
-        self._hand_back(self._ask_cleanup, candidates)
+        hand_back(self, self._ask_cleanup, candidates)
 
     def _ask_cleanup(self, candidates: Sequence[Candidate]) -> None:
         going = [candidate for candidate in candidates if candidate.removable]
@@ -1071,11 +1546,11 @@ class FleetApp(App[None]):
             try:
                 remove_worktree(candidate.worktree, branch=branches)
             except (LookupError, OSError) as error:
-                self._hand_back(self._worktree_kept, f"{candidate.worktree.name}: {error}")
+                hand_back(self, self._worktree_kept, f"{candidate.worktree.name}: {error}")
                 continue
             removed += 1
         if removed:
-            self._hand_back(self._worktrees_removed, (removed, branches))
+            hand_back(self, self._worktrees_removed, (removed, branches))
 
     def _worktrees_removed(self, outcome: tuple[int, bool]) -> None:
         removed, branches = outcome
@@ -1183,15 +1658,11 @@ class FleetApp(App[None]):
         try:
             sessions = self._loader(self._show_closed)
         except Exception as error:
-            self._hand_back(self._reload_failed, str(error))
+            hand_back(self, self._reload_failed, str(error))
             return
         if self._settings.paint_tabs:
             attention.paint(sessions, self._terminal)
-        self._hand_back(self._reload_finished, sessions)
-
-    def _hand_back[T](self, callback: Callable[[T], None], value: T) -> None:
-        if self.is_running:
-            self.call_from_thread(callback, value)
+        hand_back(self, self._reload_finished, sessions)
 
     def _reload_finished(self, sessions: list[Session]) -> None:
         self._loading = False
@@ -1245,7 +1716,7 @@ class FleetApp(App[None]):
         except OSError:
             named = set()
         read = {session.session_id for session in sessions}
-        self._hand_back(self._search_finished, (reference, read, named))
+        hand_back(self, self._search_finished, (reference, read, named))
 
     def _search_finished(self, found: tuple[Reference, set[str], set[str]]) -> None:
         reference, read, named = found
@@ -1259,13 +1730,17 @@ class FleetApp(App[None]):
         previous = self.selected_session
         self._visible = self._filtered()
 
+        if self._settings.show_prs:
+            self._ensure_pulls(self._visible)
+
         table = self.query_one("#fleet", DataTable)
         table.clear()
-        for row in build_rows(self._visible, datetime.now(tz=UTC)):
+        for row in build_rows(self._visible, datetime.now(tz=UTC), self._session_pulls):
             optional = (
                 ((row.pid,) if self._settings.show_pid else ())
                 + ((row.tty,) if self._settings.show_tty else ())
                 + ((row.worktree,) if self._settings.show_worktree else ())
+                + ((row.prs,) if self._settings.show_prs else ())
             )
             table.add_row(Text(row.status, style=row.style), row.name, row.quiet, row.age, *optional, row.where)
         if previous is not None:
@@ -1293,8 +1768,43 @@ class FleetApp(App[None]):
         if session is None:
             self.query_one("#details", Static).update("[dim]no session selected[/]")
             return
+        self._ensure_pulls([session])
         terminal = attention.terminal_of(session, self._terminal) if session.app else None
-        self.query_one("#details", Static).update(describe(session, terminal=terminal.name if terminal else None))
+        self.query_one("#details", Static).update(
+            describe(
+                session,
+                terminal=terminal.name if terminal else None,
+                pulls=self._session_pulls.get(session.session_id),
+            )
+        )
+
+    def _ensure_pulls(self, sessions: Iterable[Session]) -> None:
+        """Read what pull requests these sessions named, once per session per board.
+
+        Asked of one session or of the whole visible board, depending on who needs the
+        answer: the detail pane wants the row under the cursor, and the PRS column wants
+        every row at once. Either way it is one worker over the sessions not yet read, so
+        scrolling a long board does not spawn a thread per row.
+
+        What is found is kept until `^r`, for the same reason a transcript search is: the
+        answer changes only when a session says something new, and re-reading it every five
+        seconds is an expensive way to learn nothing.
+        """
+        pending = [session.session_id for session in sessions if session.session_id not in self._pulls_asked]
+        if not pending:
+            return
+        self._pulls_asked.update(pending)
+        self._read_pulls(pending)
+
+    @work(thread=True, group="session-pulls")
+    def _read_pulls(self, session_ids: list[str]) -> None:
+        """Scan transcripts for pull requests, off the event loop."""
+        hand_back(self, self._pulls_read, {session_id: pulls_mentioned(session_id) for session_id in session_ids})
+
+    def _pulls_read(self, found: dict[str, list[PullRequest]]) -> None:
+        """Fold in what the transcripts named and redraw, since a column may be showing it."""
+        self._session_pulls.update(found)
+        self._draw()
 
     def _repaint(self) -> None:
         """Answer a flipped tab setting now rather than at the next reload.
@@ -1328,8 +1838,13 @@ class FleetApp(App[None]):
     def _settings_changed(self, settings: Settings | None) -> None:
         if settings is None:
             return
-        columns = (settings.show_pid, settings.show_tty, settings.show_worktree)
-        rebuild = columns != (self._settings.show_pid, self._settings.show_tty, self._settings.show_worktree)
+        columns = (settings.show_pid, settings.show_tty, settings.show_worktree, settings.show_prs)
+        rebuild = columns != (
+            self._settings.show_pid,
+            self._settings.show_tty,
+            self._settings.show_worktree,
+            self._settings.show_prs,
+        )
         retime = settings.interval != self._settings.interval
         repaint = settings.paint_tabs != self._settings.paint_tabs
         self._settings = settings
@@ -1351,7 +1866,7 @@ class FleetApp(App[None]):
             messages = self._reader(session_id, limit=self._settings.history_turns)
         except Exception:
             messages = []
-        self._hand_back(self._history_loaded, (session_id, messages))
+        hand_back(self, self._history_loaded, (session_id, messages))
 
     def _history_loaded(self, loaded: tuple[str, list[Message]]) -> None:
         session_id, messages = loaded

@@ -25,6 +25,7 @@ class Settings(BaseModel):
     show_pid: bool = False
     show_tty: bool = False
     show_worktree: bool = False
+    show_prs: bool = False
     show_closed: bool = False
     foreground: bool = True
     paint_tabs: bool = True

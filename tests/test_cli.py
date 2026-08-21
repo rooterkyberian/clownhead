@@ -684,3 +684,95 @@ def test_the_board_runs_nothing_when_it_was_simply_quit(monkeypatch, live_fleet)
     result = runner.invoke(cli.app, ["tui"])
 
     assert result.exit_code == 0
+
+
+PULL_URL = "https://github.com/acme/widgets/pull/42"
+
+
+def test_prs_lists_what_github_says_is_open(live_fleet, github):
+    result = runner.invoke(cli.app, ["prs"])
+
+    assert result.exit_code == 0
+    assert "1 open · @me" in result.stdout
+    assert "acme/widgets#42" in result.stdout
+    assert "approved" in result.stdout
+
+
+def test_prs_counts_the_sessions_that_worked_on_each(live_fleet, tmp_path, github):
+    transcript(tmp_path, "4e020900-df7c", f"{PULL_URL} is ready")
+
+    result = runner.invoke(cli.app, ["prs"])
+
+    assert "acme/widgets#42" in result.stdout
+    assert result.stdout.count("1") >= 1
+
+
+def test_prs_reads_the_sessions_that_have_ended_too(monkeypatch, github):
+    seen: dict[str, object] = {}
+    monkeypatch.setattr(discovery, "list_sessions", lambda cwd=None, **kwargs: seen.update(kwargs) or fleet())
+
+    runner.invoke(cli.app, ["prs"])
+
+    assert seen["include_closed"] is True
+
+
+def test_prs_skips_the_transcripts_when_told_to(monkeypatch, github):
+    asked: list[str] = []
+    monkeypatch.setattr(discovery, "list_sessions", lambda *a, **k: asked.append("read") or fleet())
+
+    result = runner.invoke(cli.app, ["prs", "--no-sessions"])
+
+    assert result.exit_code == 0
+    assert asked == []
+
+
+def test_prs_says_github_could_not_be_asked_rather_than_printing_nothing(monkeypatch, live_fleet):
+    def refuse(author, limit):
+        raise cli.Unavailable("gh: not logged in")
+
+    monkeypatch.setattr(cli.pulls, "mine", refuse)
+
+    result = runner.invoke(cli.app, ["prs"])
+
+    assert result.exit_code == 1
+    assert "github could not be asked" in result.stderr
+    assert "not logged in" in result.stderr
+
+
+def test_prs_tells_an_empty_list_from_a_failure(monkeypatch, live_fleet):
+    monkeypatch.setattr(cli.pulls, "mine", lambda author, limit: [])
+
+    result = runner.invoke(cli.app, ["prs"])
+
+    assert result.exit_code == 0
+    assert "no open pull requests for @me" in result.stdout
+
+
+def test_prs_passes_the_author_and_the_limit_through(monkeypatch, live_fleet):
+    seen: list[tuple[str, int]] = []
+    monkeypatch.setattr(cli.pulls, "mine", lambda author, limit: seen.append((author, limit)) or [])
+
+    runner.invoke(cli.app, ["prs", "--author", "someone", "--limit", "5"])
+
+    assert seen == [("someone", 5)]
+
+
+def test_ls_prs_column_names_what_each_session_worked_on(live_fleet, tmp_path):
+    transcript(tmp_path, "4e020900-df7c", "https://github.com/acme/widgets/pull/42 is ready")
+
+    result = runner.invoke(cli.app, ["ls", "--columns", "name,prs"])
+
+    assert result.exit_code == 0
+    assert "PRS" in result.stdout
+    assert "widgets#42" in result.stdout
+
+
+def test_ls_reads_no_transcripts_unless_the_prs_column_was_asked_for(live_fleet, monkeypatch):
+    asked: list[str] = []
+    monkeypatch.setattr(cli.search, "pulls_by_session", lambda sessions: asked.append("read") or {})
+
+    runner.invoke(cli.app, ["ls", "--columns", "name,where"])
+    assert asked == []
+
+    runner.invoke(cli.app, ["ls", "--columns", "name,prs"])
+    assert asked == ["read"]
