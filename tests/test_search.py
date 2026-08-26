@@ -51,9 +51,9 @@ def test_parse_pull_request_refuses_what_does_not_name_one(reference):
     ],
 )
 def test_mention_pattern_needs_the_repository_and_the_whole_number(text, expected):
-    pattern = PullRequest("data-platform", 309).mention_pattern()
+    wanted = PullRequest("data-platform", 309).mention_pattern()
 
-    assert bool(pattern.search(text.encode())) is expected
+    assert wanted.found_in(text.encode()) is expected
 
 
 @pytest.mark.parametrize(
@@ -79,16 +79,31 @@ def test_parse_reference_reads_either_kind_and_leaves_the_shorthand_to_pull_requ
     assert parse_reference(reference) == expected
 
 
-def test_mentions_finds_a_reference_split_across_a_chunk_boundary(monkeypatch, tmp_path):
-    monkeypatch.setattr(search, "CHUNK_BYTES", 13)
+@pytest.mark.parametrize(
+    ("said", "expected"),
+    [
+        ("widgets#42", True),
+        (" widgets#42 ", True),
+        ("widgets#420", False),
+        ("my-widgets#42", False),
+    ],
+)
+def test_mentions_bounds_a_reference_against_the_ends_of_the_file(tmp_path, said, expected):
     path = tmp_path / "transcript.jsonl"
-    path.write_text(" " * 10 + "widgets#42" + " " * 10)
+    path.write_text(said)
 
-    assert mentions(path, PullRequest("widgets", 42).mention_pattern()) is True
+    assert mentions(path, PullRequest("widgets", 42).mention_pattern()) is expected
 
 
 def test_mentions_reports_no_match_for_an_unreadable_file(tmp_path):
     assert mentions(tmp_path / "gone.jsonl", PullRequest("widgets", 42).mention_pattern()) is False
+
+
+def test_mentions_reports_no_match_for_an_empty_transcript(tmp_path):
+    path = tmp_path / "transcript.jsonl"
+    path.write_bytes(b"")
+
+    assert mentions(path, PullRequest("widgets", 42).mention_pattern()) is False
 
 
 def transcript(root: Path, session_id: str, said: str, cwd: str = "/tmp/one") -> Path:
@@ -228,22 +243,11 @@ def test_pulls_mentioned_reads_a_subagent_transcript_too(tmp_path):
     assert search.pulls_mentioned("one", tmp_path) == [PullRequest("widgets", 7, "acme")]
 
 
-def test_pulls_mentioned_finds_one_split_across_a_chunk_boundary(tmp_path, monkeypatch):
-    monkeypatch.setattr(search, "CHUNK_BYTES", 64)
-    padding = "x" * 60
-    transcript(tmp_path, "one", f"{padding} https://github.com/acme/widgets/pull/7 tail")
+def test_pulls_mentioned_says_nothing_about_an_empty_transcript(tmp_path):
+    path = transcript(tmp_path, "one", "https://github.com/acme/widgets/pull/7")
+    path.write_bytes(b"")
 
-    assert search.pulls_mentioned("one", tmp_path) == [PullRequest("widgets", 7, "acme")]
-
-
-def test_pulls_mentioned_orders_the_same_however_the_chunks_fell(tmp_path, monkeypatch):
-    said = "https://github.com/acme/widgets/pull/7 " + "y" * 400 + " https://github.com/acme/gadgets/pull/9"
-    transcript(tmp_path, "one", said)
-    whole = search.pulls_mentioned("one", tmp_path)
-
-    monkeypatch.setattr(search, "CHUNK_BYTES", 64)
-
-    assert search.pulls_mentioned("one", tmp_path) == whole
+    assert search.pulls_mentioned("one", tmp_path) == []
 
 
 def test_pulls_mentioned_survives_a_transcript_it_cannot_read(tmp_path):

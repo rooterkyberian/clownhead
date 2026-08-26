@@ -47,7 +47,7 @@ so a session that opened on one pull request and spent the afternoon on its foll
 Asked of the session under the cursor it is one transcript and a few milliseconds,
 which is what the detail pane spends and why it is kept until `^r`.
 Asked of the fleet it is one pass that answers for every pull request at once —
-around a fifth of a second over a few hundred megabytes —
+55 ms over 151 MB of transcripts —
 where searching per pull request would read the whole corpus again for each.
 That pass is what the pull request board's session counts are,
 and what the optional `PRS` column is.
@@ -58,14 +58,21 @@ whichever rows the cursor has visited are already read when the column is switch
 A cell says `?` until the read lands and `-` once it has and the session named nothing,
 the same distinction the pull request board draws between a count it has and one it has not looked up.
 
-The scan is anchored on a literal `github.com`,
-and is the one pattern here that is case-sensitive.
-Both are the same decision:
-a pattern that may begin with `https://` has no first byte to look for,
-so the engine tries at every offset instead of jumping between occurrences.
-Measured over 138 MB that is 34 MB/s against 1580 MB/s,
-for a flag that matches nothing extra —
-transcripts hold URLs a browser or `gh` printed, in lower case.
+Transcripts are mapped and read as raw bytes by RE2,
+which is what makes a search of the whole corpus something a keystroke can start.
+Both readings ask only whether some string appears and where,
+and decoding megabytes of tool output to answer that costs far more than the answer is worth.
+
+The scan is anchored on a literal `github.com`.
+RE2 looks for a literal the pattern requires and runs its automaton only where that literal lands,
+and a pattern that may begin with `https://` or `www.` leaves it nothing to look for:
+over 151 MB that is 3910 MB/s anchored against 641 MB/s with the scheme in front.
+The captures are identical either way,
+because everything read out of a match lives to the right of the host.
+
+It is also the one pattern here that is case-sensitive.
+Transcripts hold URLs a browser or `gh` printed, in lower case,
+so over the same corpus the flag costs 15 ms in 54 and turns up one spelling more in 324.
 
 ## Your pull requests
 

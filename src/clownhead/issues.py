@@ -22,6 +22,8 @@ from collections.abc import Sequence
 from dataclasses import dataclass
 from enum import StrEnum
 
+from clownhead.scan import KEY_BYTES, NAME_BYTES, Mention, mention
+
 GH_BINARY_VAR = "CLOWNHEAD_GH_BIN"
 GH_TIMEOUT = 10.0
 SLUG_LIMIT = 48
@@ -95,11 +97,11 @@ class Issue:
             return None
         return ["issue", "view", self.key, "--repo", f"{self.owner}/{self.repo}"]
 
-    def mention_pattern(self) -> re.Pattern[bytes]:
-        """A pattern matching every way a transcript writes this issue down.
+    def mention_pattern(self) -> Mention:
+        """A test matching every way a transcript writes this issue down.
 
         A GitHub issue carries its repository, in the ``repo/issues/2`` of a URL and the
-        ``repo#2`` of a mention — the same anchoring :func:`clownhead.search.mention_pattern`
+        ``repo#2`` of a mention — the same bounding :meth:`clownhead.search.PullRequest.mention_pattern`
         explains, and the same overlap GitHub itself has, where ``repo#2`` names an issue
         and a pull request interchangeably.
 
@@ -109,10 +111,8 @@ class Issue:
         have come from nowhere but a URL.
         """
         if self.tracker is Tracker.JIRA:
-            expression = rf"(?<![\w-]){re.escape(self.key)}(?!\d)"
-        else:
-            expression = rf"(?<![\w.-]){re.escape(self.repo or '')}(?:/issues/|#){self.key}(?!\d)"
-        return re.compile(expression.encode(), re.IGNORECASE)
+            return mention(re.escape(self.key), KEY_BYTES)
+        return mention(rf"{re.escape(self.repo or '')}(?:/issues/|#){self.key}", NAME_BYTES)
 
 
 def parse_issue(text: str) -> Issue | None:

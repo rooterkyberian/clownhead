@@ -78,7 +78,7 @@ def test_parse_issue_refuses_what_is_not_an_issue_url(reference):
     ],
 )
 def test_github_mention_pattern_needs_the_repository_and_the_whole_number(text, expected):
-    assert bool(github("9").mention_pattern().search(text.encode())) is expected
+    assert github("9").mention_pattern().found_in(text.encode()) is expected
 
 
 @pytest.mark.parametrize(
@@ -94,7 +94,7 @@ def test_github_mention_pattern_needs_the_repository_and_the_whole_number(text, 
     ],
 )
 def test_jira_mention_pattern_matches_the_whole_key_only(text, expected):
-    assert bool(jira().mention_pattern().search(text.encode())) is expected
+    assert jira().mention_pattern().found_in(text.encode()) is expected
 
 
 @pytest.mark.parametrize(

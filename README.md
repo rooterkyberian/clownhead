@@ -113,7 +113,7 @@ closed  design-system:87e26be1  -                       ~/dev/acme/design-system
 
 It is the one column that costs a pass over the disk,
 which is why it is off until asked for —
-about a fifth of a second for a few hundred megabytes of transcripts,
+55 ms for 151 MB of transcripts,
 read once and kept until `^r`.
 A row says `?` until that read lands and `-` once it has and the session named nothing;
 the repository gives way before the number does when the column is too narrow,

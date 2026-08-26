@@ -22,16 +22,16 @@ read the whole corpus again for each one asked about.
 from __future__ import annotations
 
 import re
-from collections.abc import Iterable, Iterator
+from collections.abc import Iterable
 from dataclasses import dataclass
 from pathlib import Path
+
+import re2
 
 from clownhead.discovery import transcript_paths
 from clownhead.issues import Issue, parse_issue
 from clownhead.models import Session
-
-CHUNK_BYTES = 1 << 20
-OVERLAP_BYTES = 256
+from clownhead.scan import NAME_BYTES, Mention, mapped, mention
 
 PULL_REQUEST_PATTERN = r"github\.com/(?P<owner>[\w.-]+)/(?P<repo>[\w.-]+)/pull/(?P<number>\d+)"
 """How a pull request URL is spelled, in the one place both readers of one take it from.
@@ -42,18 +42,15 @@ taught to one and not the other shows up as a session the board says worked on a
 request that the filter then cannot find.
 
 It starts at the host rather than at the scheme, and the optional ``https://`` is added
-back below for the reader that wants it. That is not tidiness — it is the whole
-performance of the reverse scan. A pattern that *may* begin with ``https://`` or ``www.``
-has no first byte to look for, so the engine must try at every offset in the corpus;
-anchored on a literal ``github.com``, it jumps between occurrences instead. Measured over
-138 MB the difference was 34 MB/s against 1580 MB/s. The captures are identical either
-way, because everything the scan reads out lives to the right of the host.
+back below for the reader that wants it. Everything either reader takes out of a match
+lives to the right of the host, so the two spellings capture identically and the shorter
+one is what both can share.
 """
 
 PULL_REQUEST_URL = re.compile(rf"(?:https?://)?(?:www\.)?{PULL_REQUEST_PATTERN}", re.IGNORECASE)
 PULL_REQUEST_SHORTHAND = re.compile(r"(?:(?P<owner>[\w.-]+)/)?(?P<repo>[\w.-]+)#(?P<number>\d+)")
 
-ANY_PULL_REQUEST = re.compile(PULL_REQUEST_PATTERN.encode())
+ANY_PULL_REQUEST = re2.compile(PULL_REQUEST_PATTERN.encode())
 r"""Every pull request a transcript names, rather than one that was asked about.
 
 URLs alone, where :meth:`PullRequest.mention_pattern` also takes the ``repo#309`` shorthand.
@@ -67,12 +64,9 @@ Issues and Jira keys are left to :func:`sessions_mentioning`, which is asked abo
 reference at a time. This runs over every transcript on the machine to build a board of
 pull requests, and there is no board of issues for the other halves to fill.
 
-Case-sensitive, alone among the patterns here, and measurably so — for the same reason the
-pattern is anchored on the host. The flag denies the engine that literal-prefix jump just
-as surely as an optional scheme would, and it buys nothing: ``\w`` already matches both
-cases in a bytes pattern, so the flag reaches only ``github.com`` and ``pull``, which
-arrive in transcripts as something a browser or ``gh`` printed, in lower case. Measured
-over a real corpus it found the same 782 references either way, in 0.18s rather than 1.56s.
+Case-sensitive, alone among the patterns here. ``\w`` matches both cases in a bytes pattern
+already, so the flag would reach only ``github.com`` and ``pull``, which arrive in a
+transcript as something a browser or ``gh`` printed, in lower case.
 """
 
 
@@ -145,17 +139,17 @@ class PullRequest:
             return None
         return ["pr", "view", str(self.number), "--repo", f"{self.owner}/{self.repo}"]
 
-    def mention_pattern(self) -> re.Pattern[bytes]:
-        """A pattern matching every way a transcript writes one pull request down.
+    def mention_pattern(self) -> Mention:
+        """A test matching every way a transcript writes one pull request down.
 
         Both spellings carry the repository — the ``repo/pull/309`` of a URL and the
         ``repo#309`` of a mention — which is what keeps one repository's 309 apart from
-        another's. The number is anchored on its right because ``pull/309`` is otherwise a
+        another's. The number is bounded on its right because ``pull/309`` is otherwise a
         substring of ``pull/3090``, and the repository on its left because ``data-platform``
-        is one of ``my-data-platform``.
+        is one of ``my-data-platform``. Both bounds are checked by :class:`Mention` on the
+        bytes around a match, since the engine underneath has no lookaround to carry them.
         """
-        expression = rf"(?<![\w.-]){re.escape(self.repo)}(?:/pull/|#){self.number}(?!\d)"
-        return re.compile(expression.encode(), re.IGNORECASE)
+        return mention(rf"{re.escape(self.repo)}(?:/pull/|#){self.number}", NAME_BYTES)
 
 
 type Reference = PullRequest | Issue
@@ -200,17 +194,17 @@ def sessions_mentioning(
     The sessions to look in are passed rather than discovered, so the answer covers
     exactly the fleet the caller is already showing and inherits whatever scoped it.
     """
-    pattern = reference.mention_pattern()
+    wanted = reference.mention_pattern()
     return {
         session.session_id
         for session in sessions
-        if any(mentions(path, pattern) for path in transcript_paths(session.session_id, root))
+        if any(mentions(path, wanted) for path in transcript_paths(session.session_id, root))
     }
 
 
-def mentions(path: Path, pattern: re.Pattern[bytes]) -> bool:
+def mentions(path: Path, wanted: Mention) -> bool:
     """Whether a transcript names the pull request anywhere in it."""
-    return any(pattern.search(window) for _, window in _windows(path))
+    return any(wanted.found_in(buffer) for buffer in mapped(path))
 
 
 def pulls_mentioned(session_id: str, root: Path | None = None) -> list[PullRequest]:
@@ -293,9 +287,9 @@ def _pulls_in(path: Path) -> dict[PullRequest, int]:
     the board is built by the one parser, out of the one grammar.
     """
     spellings: dict[bytes, int] = {}
-    for start, window in _windows(path):
-        for match in ANY_PULL_REQUEST.finditer(window):
-            offset = start + match.start()
+    for buffer in mapped(path):
+        for match in ANY_PULL_REQUEST.finditer(buffer):
+            offset = match.start()
             if offset > spellings.get(match.group(), -1):
                 spellings[match.group()] = offset
 
@@ -305,35 +299,3 @@ def _pulls_in(path: Path) -> dict[PullRequest, int]:
         if reference is not None:
             found[reference] = max(found.get(reference, -1), offset)
     return found
-
-
-def _windows(path: Path) -> Iterator[tuple[int, bytes]]:
-    """A transcript as overlapping byte windows, each with its offset into the file.
-
-    Read as bytes in chunks rather than parsed as the JSON it is: the questions asked of a
-    transcript are only ever whether some string appears in it and where, and decoding
-    megabytes of tool output to answer that costs far more than the answer is worth.
-
-    Consecutive windows overlap by more than the longest mention can be — a GitHub
-    repository name stops at 100 characters — so one split across the boundary between two
-    chunks is still whole in one of them. That overlap is the single invariant both readers
-    depend on and the reason they share this rather than each keeping a copy: a mention
-    found twice, once in a chunk and again in the overlap carried into the next, reports
-    the same absolute offset both times, so the ordering cannot depend on where the chunk
-    boundaries happened to fall.
-
-    A transcript that cannot be read yields nothing, which both callers read as naming
-    nothing — the same answer as an empty file, and the right one for a question about
-    what a session said.
-    """
-    start = 0
-    carry = b""
-    try:
-        with path.open("rb") as handle:
-            while chunk := handle.read(CHUNK_BYTES):
-                window = carry + chunk
-                yield start, window
-                carry = chunk[-OVERLAP_BYTES:]
-                start += len(window) - len(carry)
-    except OSError:
-        return
