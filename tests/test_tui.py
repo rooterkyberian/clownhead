@@ -150,6 +150,10 @@ def table_of(app: FleetApp) -> DataTable:
     return app.query_one("#fleet", DataTable)
 
 
+def footer_keys(app: FleetApp) -> set[str]:
+    return {binding.action for _, binding, _, _ in app.screen.active_bindings.values() if binding.show}
+
+
 def notified(app: FleetApp) -> str:
     return "\n".join(str(notification.message) for notification in app._notifications)
 
@@ -1374,6 +1378,7 @@ async def test_the_palette_carries_every_action_the_board_has():
 
     async with app.run_test() as pilot:
         await settle(app, pilot)
+        await pilot.press("down")
         offered = {command.title: command.callback for command in app.get_system_commands(app.screen)}
 
         assert set(offered) >= {
@@ -1391,6 +1396,43 @@ async def test_the_palette_carries_every_action_the_board_has():
         assert offered["Terminate this session"] == app.action_terminate
         assert offered["Retire this session's worktree"] == app.action_remove_worktree
         assert offered["Cleanup worktrees"] == app.action_cleanup_worktrees
+
+
+async def test_the_palette_leaves_out_terminating_a_session_with_no_process():
+    app = build_app(sessions=worktree_fleet())
+
+    async with app.run_test() as pilot:
+        await settle(app, pilot)
+        offered = {command.title for command in app.get_system_commands(app.screen)}
+
+        assert "Terminate this session" not in offered
+        assert "Copy this session's resume command" in offered
+
+
+async def test_terminate_leaves_the_footer_when_the_process_is_gone():
+    app = build_app(sessions=worktree_fleet())
+
+    async with app.run_test() as pilot:
+        await settle(app, pilot)
+
+        assert "terminate" not in footer_keys(app)
+        assert "copy_resume" in footer_keys(app)
+
+        await pilot.press("down")
+
+        assert "terminate" in footer_keys(app)
+
+
+async def test_terminate_signals_nothing_when_the_process_is_gone(monkeypatch):
+    monkeypatch.setattr(tui_module, "terminate", lambda session, processes: pytest.fail("must not signal"))
+    app = build_app(sessions=worktree_fleet())
+
+    async with app.run_test() as pilot:
+        await settle(app, pilot)
+        await pilot.press("t")
+        await pilot.pause()
+
+        assert not isinstance(app.screen, tui_module.ConfirmScreen)
 
 
 async def test_every_command_the_palette_offers_explains_itself():

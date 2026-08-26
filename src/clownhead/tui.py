@@ -1161,11 +1161,12 @@ class FleetApp(App[None]):
             "Put the command that brings it back on the clipboard",
             self.action_copy_resume,
         )
-        yield SystemCommand(
-            "Terminate this session",
-            "Send its process SIGTERM, once it has been confirmed",
-            self.action_terminate,
-        )
+        if self._can_terminate():
+            yield SystemCommand(
+                "Terminate this session",
+                "Send its process SIGTERM, once it has been confirmed",
+                self.action_terminate,
+            )
         yield SystemCommand(
             "Retire this session's worktree",
             "Remove the checkout it worked in, leaving its branch behind",
@@ -1176,6 +1177,25 @@ class FleetApp(App[None]):
             "Remove every worktree whose work is already in its default branch, branches optional",
             self.action_cleanup_worktrees,
         )
+
+    def check_action(self, action: str, parameters: tuple[object, ...]) -> bool | None:
+        """Whether an action is offered for the session under the cursor.
+
+        `t` is the one that ever answers no. A session that has ended keeps its transcript
+        and whatever the registry remembers, and the process id both once held is dropped
+        from them precisely because that id may since have been handed to something else —
+        so SIGTERM has nowhere to go and the key could only answer with a refusal. Hidden
+        rather than greyed out, which is Textual's other answer: the footer truncates as
+        it is, and the width is worth more to a key that still does something.
+        """
+        if action != "terminate":
+            return True
+        return self._can_terminate()
+
+    def _can_terminate(self) -> bool:
+        """Whether the session under the cursor still has a process to send SIGTERM to."""
+        session = self.selected_session
+        return session is not None and session.pid is not None
 
     @property
     def columns(self) -> tuple[str, ...]:
@@ -1765,6 +1785,7 @@ class FleetApp(App[None]):
 
     def _draw_details(self) -> None:
         session = self.selected_session
+        self.refresh_bindings()
         if session is None:
             self.query_one("#details", Static).update("[dim]no session selected[/]")
             return
