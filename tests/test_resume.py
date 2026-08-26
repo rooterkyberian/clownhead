@@ -1,5 +1,6 @@
 from pathlib import Path
 
+from clownhead.discovery import CONFIG_DIR_VAR
 from clownhead.models import Session
 from clownhead.resume import Launch, resume_argv, resume_plan, resume_shell_command, start_plan
 
@@ -92,3 +93,37 @@ def test_a_launch_quotes_what_a_shell_would_otherwise_read_as_its_own(tmp_path):
     plan = Launch(tmp_path, ("claude", "--name", "issue 2", "widgets#2 & more"))
 
     assert plan.shell_command == f"(cd {tmp_path} && claude --name 'issue 2' 'widgets#2 & more')"
+
+
+def test_resume_carries_the_config_directory_clownhead_was_spawned_with(monkeypatch, tmp_path):
+    monkeypatch.setenv(CONFIG_DIR_VAR, "/Users/you/.claude-personal")
+
+    command = resume_shell_command(session(tmp_path))
+
+    assert command == f"(cd {tmp_path} && CLAUDE_CONFIG_DIR=/Users/you/.claude-personal claude --resume a-b)"
+
+
+def test_resume_leaves_the_default_config_directory_unsaid(monkeypatch, tmp_path):
+    monkeypatch.setenv(CONFIG_DIR_VAR, str(Path.home() / ".claude"))
+
+    assert CONFIG_DIR_VAR not in resume_shell_command(session(tmp_path))
+
+
+def test_the_carried_config_directory_is_environment_and_not_an_argument(monkeypatch, tmp_path):
+    monkeypatch.setenv(CONFIG_DIR_VAR, "/Users/you/.claude-personal")
+
+    assert resume_argv(session(tmp_path)) == ["claude", "--resume", "a-b"]
+
+
+def test_starting_a_session_carries_the_config_directory_too(monkeypatch, tmp_path):
+    monkeypatch.setenv(CONFIG_DIR_VAR, "/Users/you/.claude-personal")
+
+    plan = start_plan(tmp_path, name="plat-4471", prompt="https://craft.atlassian.net/browse/PLAT-4471")
+
+    assert plan.shell_command.startswith(f"(cd {tmp_path} && CLAUDE_CONFIG_DIR=/Users/you/.claude-personal claude ")
+
+
+def test_a_launch_quotes_a_carried_value_a_shell_would_split(tmp_path):
+    plan = Launch(tmp_path, ("claude",), ((CONFIG_DIR_VAR, "/Users/you/Application Support/.claude"),))
+
+    assert plan.shell_command == f"(cd {tmp_path} && CLAUDE_CONFIG_DIR='/Users/you/Application Support/.claude' claude)"

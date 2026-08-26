@@ -8,6 +8,9 @@ A session that does not exist yet is the same shape of answer — a directory, a
 to run in it — so starting one lives here too. Both are built as an argument vector rather
 than a string, because they are run as often as they are copied, and quoting a line only
 to take it apart again is how the two spellings drift.
+
+A command copied out of the board is run in some other shell, which is why the environment
+that decides which fleet it lands in travels with it.
 """
 
 from __future__ import annotations
@@ -16,20 +19,30 @@ from dataclasses import dataclass
 from pathlib import Path
 from shlex import quote
 
+from clownhead.discovery import CONFIG_DIR_VAR, relocated_config_dir
 from clownhead.models import Session, split_worktree
 
 
 @dataclass(frozen=True)
 class Launch:
-    """A directory and the command to run in it, ready to be copied or handed the terminal."""
+    """A directory and the command to run in it, ready to be copied or handed the terminal.
+
+    ``env`` is what the command needs said out loud rather than inherited. clownhead runs
+    the command it hands the terminal with its own environment already under it, so the
+    assignments are there for the copied line, which is pasted into a shell that was
+    started some other way.
+    """
 
     directory: Path
     argv: tuple[str, ...]
+    env: tuple[tuple[str, str], ...] = ()
 
     @property
     def shell_command(self) -> str:
         """Single shell line that runs it where it belongs."""
-        return f"(cd {self.directory} && {' '.join(quote(argument) for argument in self.argv)})"
+        assignments = (f"{name}={quote(value)}" for name, value in self.env)
+        words = " ".join((*assignments, *(quote(argument) for argument in self.argv)))
+        return f"(cd {self.directory} && {words})"
 
 
 def resume_plan(session: Session) -> Launch:
@@ -46,10 +59,11 @@ def resume_plan(session: Session) -> Launch:
     directory full of the wrong project, which is worse than a command that stops.
     """
     argv = ("claude", "--resume", session.session_id)
+    env = carried_env()
     repo, worktree = split_worktree(session.cwd)
     if worktree and repo.exists():
-        return Launch(repo, (*argv, "--worktree", worktree))
-    return Launch(session.cwd, argv)
+        return Launch(repo, (*argv, "--worktree", worktree), env)
+    return Launch(session.cwd, argv, env)
 
 
 def start_plan(repo: Path, *, name: str, prompt: str) -> Launch:
@@ -71,7 +85,8 @@ def start_plan(repo: Path, *, name: str, prompt: str) -> Launch:
     it back is the answer worth having; a session that started editing on the strength of
     an issue title is the one you would have to unpick.
     """
-    return Launch(repo, ("claude", "--permission-mode", "plan", "--worktree", name, "--name", name, prompt))
+    argv = ("claude", "--permission-mode", "plan", "--worktree", name, "--name", name, prompt)
+    return Launch(repo, argv, carried_env())
 
 
 def resume_argv(session: Session) -> list[str]:
@@ -82,3 +97,19 @@ def resume_argv(session: Session) -> list[str]:
 def resume_shell_command(session: Session) -> str:
     """Single shell line that resumes one session where it belongs."""
     return resume_plan(session).shell_command
+
+
+def carried_env() -> tuple[tuple[str, str], ...]:
+    """Environment that has to travel with a copied command for it to reach the same fleet.
+
+    ``CLAUDE_CONFIG_DIR`` scopes Claude Code to one config directory: a board opened under
+    a relocated one lists sessions whose transcripts a default-config shell cannot see, so
+    a bare ``claude --resume <id>`` pasted into that shell fails to find the conversation
+    the board was showing. The variable is carried at the value clownhead itself was
+    spawned with, which is the directory the listing came from.
+
+    The default directory is left off. It is what a shell without the variable picks
+    anyway, and it is the case nearly every command is copied in.
+    """
+    directory = relocated_config_dir()
+    return () if directory is None else ((CONFIG_DIR_VAR, str(directory)),)

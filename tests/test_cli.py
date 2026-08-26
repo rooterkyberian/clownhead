@@ -161,12 +161,15 @@ def test_ls_columns_select_what_to_show_and_in_what_order(live_fleet):
     assert "input needed" not in result.stdout
 
 
-def test_ls_columns_can_ask_for_the_resume_command(live_fleet):
+def test_ls_columns_can_ask_for_the_resume_command(live_fleet, monkeypatch):
+    monkeypatch.setenv("CLAUDE_CONFIG_DIR", "/tmp/fleet")
+    monkeypatch.setenv("COLUMNS", "120")
+
     result = runner.invoke(cli.app, ["ls", "--columns", "name,resume"])
 
     assert result.exit_code == 0
     assert "RESUME" in result.stdout
-    assert "claude --resume 4e020900-df7c" in result.stdout
+    assert "CLAUDE_CONFIG_DIR=/tmp/fleet claude --resume 4e020900-df7c" in result.stdout
 
 
 def test_ls_thins_the_default_columns_on_a_narrow_terminal(live_fleet, monkeypatch):

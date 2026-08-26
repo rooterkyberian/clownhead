@@ -8,6 +8,7 @@ from pathlib import Path
 import pytest
 
 from clownhead import pulls as pulls_module
+from clownhead.discovery import CONFIG_DIR_VAR
 from clownhead.pulls import Pull, Status
 from clownhead.search import PullRequest
 
@@ -42,6 +43,18 @@ def unreachable_desktop(monkeypatch) -> list[list[str]]:
 
     monkeypatch.setattr(subprocess, "run", guarded)
     return attempted
+
+
+@pytest.fixture(autouse=True)
+def default_config_dir(monkeypatch) -> None:
+    """Answer the suite from the Claude Code default config directory.
+
+    ``CLAUDE_CONFIG_DIR`` is read fresh out of the environment wherever it is asked for,
+    and clownhead is written by people whose own shells set it — so a suite that inherited
+    it would assert against whichever directory the developer happened to be running under
+    and disagree with CI about commands that carry it. Tests that care set it themselves.
+    """
+    monkeypatch.delenv(CONFIG_DIR_VAR, raising=False)
 
 
 @pytest.fixture
