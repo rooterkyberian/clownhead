@@ -251,3 +251,98 @@ def test_wait_for_exit_reads_a_refused_signal_as_still_running(monkeypatch):
 
 def _gone():
     raise ProcessLookupError
+
+
+def test_send_message_queues_a_user_message(monkeypatch, listener):
+    path, delivered = listener
+    monkeypatch.setattr(control, "messaging_socket", lambda session_id, registry=None: path)
+
+    control.send_message(session(), "the migration finished", processes=table())
+
+    assert delivered() == [
+        {"type": "user", "message": {"role": "user", "content": "the migration finished"}},
+    ]
+
+
+def test_send_message_trims_the_text_before_sending_it(monkeypatch, listener):
+    path, delivered = listener
+    monkeypatch.setattr(control, "messaging_socket", lambda session_id, registry=None: path)
+
+    control.send_message(session(), "  the migration finished  ", processes=table())
+
+    assert delivered()[0]["message"]["content"] == "the migration finished"
+
+
+@pytest.mark.parametrize("text", ["", "   "])
+def test_send_message_refuses_a_blank_message(monkeypatch, text):
+    monkeypatch.setattr(control, "messaging_socket", lambda session_id, registry=None: pytest.fail("must not send"))
+
+    with pytest.raises(ValueError, match="blank"):
+        control.send_message(session(), text, processes=table())
+
+
+def test_send_message_refuses_a_session_that_has_ended(monkeypatch):
+    monkeypatch.setattr(control, "messaging_socket", lambda session_id, registry=None: pytest.fail("must not send"))
+    closed = session().model_copy(update={"status": Status.CLOSED})
+
+    with pytest.raises(LookupError, match="has ended"):
+        control.send_message(closed, "the migration finished", processes=table())
+
+
+def test_send_message_refuses_a_session_with_no_process(monkeypatch):
+    monkeypatch.setattr(control, "messaging_socket", lambda session_id, registry=None: pytest.fail("must not send"))
+
+    with pytest.raises(LookupError, match="no process"):
+        control.send_message(session(pid=None), "the migration finished", processes=table())
+
+
+def test_send_message_refuses_a_process_id_that_has_been_reused(monkeypatch):
+    monkeypatch.setattr(control, "messaging_socket", lambda session_id, registry=None: pytest.fail("must not send"))
+
+    with pytest.raises(LookupError, match="no longer"):
+        control.send_message(session(), "the migration finished", processes=table(command="-zsh"))
+
+
+def test_send_message_reads_the_live_process_table_when_none_is_given(monkeypatch, listener):
+    path, delivered = listener
+    monkeypatch.setattr(control, "process_table", table)
+    monkeypatch.setattr(control, "messaging_socket", lambda session_id, registry=None: path)
+
+    control.send_message(session(), "the migration finished")
+
+    assert delivered()[0]["message"]["content"] == "the migration finished"
+
+
+def test_send_message_refuses_a_session_with_no_control_channel(monkeypatch):
+    monkeypatch.setattr(control, "messaging_socket", lambda session_id, registry=None: None)
+
+    with pytest.raises(LookupError, match="not listening"):
+        control.send_message(session(), "the migration finished", processes=table())
+
+
+def test_send_message_refuses_a_socket_nobody_is_listening_on(monkeypatch, socket_dir):
+    monkeypatch.setattr(control, "messaging_socket", lambda session_id, registry=None: socket_dir / "gone.sock")
+
+    with pytest.raises(LookupError, match="nothing is listening"):
+        control.send_message(session(), "the migration finished", processes=table())
+
+
+@pytest.mark.parametrize("text", ["/compact", "/rename invoice-parser", "/craft:commit", "  /clear  "])
+def test_send_message_refuses_a_slash_command(monkeypatch, text):
+    monkeypatch.setattr(control, "messaging_socket", lambda session_id, registry=None: pytest.fail("must not send"))
+
+    with pytest.raises(ValueError, match="has to be typed into the session"):
+        control.send_message(session(), text, processes=table())
+
+
+@pytest.mark.parametrize(
+    "text",
+    ["/tmp/repo is the wrong checkout", "look at /Users/me/notes.md", "// is a comment"],
+)
+def test_send_message_sends_a_path_that_only_looks_like_a_command(monkeypatch, listener, text):
+    path, delivered = listener
+    monkeypatch.setattr(control, "messaging_socket", lambda session_id, registry=None: path)
+
+    control.send_message(session(), text, processes=table())
+
+    assert delivered()[0]["message"]["content"] == text

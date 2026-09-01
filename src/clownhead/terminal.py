@@ -47,9 +47,50 @@ STDIN, STDOUT, STDERR = 0, 1, 2
 ATTENTION_MARK = "\N{WARNING SIGN}"
 BUNDLE_ID_VAR = "__CFBundleIdentifier"
 OPEN_BINARY = "/usr/bin/open"
+OSASCRIPT_BINARY = "/usr/bin/osascript"
 XDG_OPEN_BINARY = "xdg-open"
 PBCOPY_BINARY = "/usr/bin/pbcopy"
 ACTIVATION_TIMEOUT = 5.0
+TYPING_TIMEOUT = 5.0
+
+TYPED = "typed"
+OPENED = "opened"
+ITERM2_TYPE = """
+on run argv
+  set targetTty to item 1 of argv
+  set theLine to item 2 of argv
+  tell application "iTerm2"
+    repeat with theWindow in windows
+      repeat with theTab in tabs of theWindow
+        repeat with theSession in sessions of theTab
+          if (tty of theSession) is targetTty then
+            tell theSession to write text theLine
+            return "typed"
+          end if
+        end repeat
+      end repeat
+    end repeat
+  end tell
+  return "no session on that tty"
+end run
+"""
+ITERM2_OPEN = """
+on run argv
+  set theCommand to item 1 of argv
+  tell application "iTerm2"
+    if (count of windows) is 0 then
+      create window with default profile
+      tell current session of current window to write text theCommand
+    else
+      tell current window
+        set theTab to (create tab with default profile)
+        tell current session of theTab to write text theCommand
+      end tell
+    end if
+  end tell
+  return "opened"
+end run
+"""
 
 JETBRAINS_PREFIXES = ("com.jetbrains.", "com.google.android.studio")
 
@@ -78,6 +119,8 @@ class Terminal:
     supports_notifications = False
     supports_foreground = False
     supports_tab_focus = False
+    supports_typing = False
+    supports_tabs = False
 
     def __init__(self, bundle_id: str | None = None, app: Path | None = None, name: str | None = None) -> None:
         self.bundle_id = bundle_id or type(self).bundle_id
@@ -125,6 +168,25 @@ class Terminal:
         """
         return Selection(False)
 
+    def type_text(self, tty: Path, text: str) -> bool:
+        """Type a line into the session on ``tty`` as its keyboard would, if it can.
+
+        Declined by default, and said so rather than raised: the caller has another route
+        to try, and an emulator with no scripting interface is the ordinary case rather
+        than a failure. Writing the text to the device instead would only draw it over
+        whatever the session has on screen, since a pty carries what a caller writes to
+        it towards the emulator and never towards the program reading from it.
+        """
+        return False
+
+    def open_tab(self, command: str) -> bool:
+        """Open a tab of its own running ``command``, if it can; declined by default.
+
+        The command carries its own working directory, so nothing here is told where the
+        session belongs: what is handed over is the line a shell would have been given.
+        """
+        return False
+
     def set_tab_color(self, tty: Path, color: Rgb) -> None:
         """Tint the tab; a no-op where tab colours are unsupported."""
 
@@ -144,6 +206,8 @@ class ITerm2Terminal(Terminal):
     supports_attention = True
     supports_tab_color = True
     supports_notifications = True
+    supports_typing = True
+    supports_tabs = True
 
     def request_attention(self, tty: Path, text: str | None = None) -> None:
         """Bounce the dock icon and flash the tab, leaving the title alone."""
@@ -165,6 +229,24 @@ class ITerm2Terminal(Terminal):
     def notify(self, tty: Path, message: str) -> None:
         """Post a notification through the emulator."""
         self.write(tty, f"{ESC}]9;{message}{BEL}")
+
+    def type_text(self, tty: Path, text: str) -> bool:
+        """Put a line in the session drawn on ``tty``, as though it had been typed there.
+
+        iTerm2 keeps the tty of every session it draws, so the one wanted is found by the
+        device the board already knows rather than by which window happens to be in front.
+        A tty iTerm2 draws nothing on is a session behind a multiplexer, or in another
+        emulator entirely, and the answer is no either way.
+        """
+        return _osascript(ITERM2_TYPE, str(tty), text) == TYPED
+
+    def open_tab(self, command: str) -> bool:
+        """Run the command in a new tab, or in a new window where iTerm2 has none open.
+
+        The tab lands in whichever window is frontmost, which is the one the board is
+        likely drawn in and the one a person looking for the session will look in.
+        """
+        return _osascript(ITERM2_OPEN, command) == OPENED
 
 
 class KittyTerminal(Terminal):
@@ -359,3 +441,18 @@ def copy_to_pasteboard(text: str) -> bool:
 def on_macos() -> bool:
     """Whether this host can raise applications by bundle id."""
     return sys.platform == "darwin"
+
+
+def _osascript(source: str, *arguments: str) -> str | None:
+    """Run one AppleScript and hand back what it printed, or ``None`` if it failed."""
+    try:
+        result = subprocess.run(  # noqa: S603
+            [OSASCRIPT_BINARY, "-e", source, *arguments],
+            capture_output=True,
+            text=True,
+            check=False,
+            timeout=TYPING_TIMEOUT,
+        )
+    except (OSError, subprocess.SubprocessError):
+        return None
+    return result.stdout.strip() if result.returncode == 0 else None

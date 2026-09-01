@@ -26,14 +26,15 @@ from textual.message import Message as TextualMessage
 from textual.message_pump import MessagePump
 from textual.notifications import SeverityLevel
 from textual.screen import ModalScreen, Screen
-from textual.widgets import DataTable, Footer, Input, Label, OptionList, Static, Switch
+from textual.widgets import DataTable, Footer, Input, Label, OptionList, Select, Static, Switch
 
 from clownhead import attention, checkouts, issues, pulls
 from clownhead import settings as settings_store
-from clownhead.control import close_tab, rename, shell_of, terminate, wait_for_exit
+from clownhead.control import SLASH_COMMAND, close_tab, rename, send_message, shell_of, terminate, wait_for_exit
 from clownhead.discovery import Message, Process, process_table, recent_messages, relocated_config_dir
 from clownhead.issues import Unavailable
 from clownhead.models import Session, Status, split_worktree
+from clownhead.panes import open_session, type_into
 from clownhead.pulls import Pull
 from clownhead.pulls import Status as PullStatus
 from clownhead.render import (
@@ -56,7 +57,7 @@ from clownhead.search import (
     sessions_by_pull,
     sessions_mentioning,
 )
-from clownhead.settings import Settings
+from clownhead.settings import ResumeIn, Settings
 from clownhead.terminal import Terminal, copy_to_pasteboard, open_url
 from clownhead.worktrees import Candidate, survey
 from clownhead.worktrees import remove as remove_worktree
@@ -526,6 +527,9 @@ class SettingsScreen(ModalScreen[Settings | None]):
     #sheet Input {
         width: 12;
     }
+    #resume_in {
+        width: 20;
+    }
     """
 
     BINDINGS = [
@@ -562,11 +566,23 @@ class SettingsScreen(ModalScreen[Settings | None]):
             with Horizontal(classes="row"):
                 yield Label("turns of history")
                 yield Input(value=str(self._settings.history_turns), id="history_turns", type="integer")
+            with Horizontal(classes="row"):
+                yield Label("resume into")
+                yield Select(
+                    [(where.value, where) for where in ResumeIn],
+                    value=self._settings.resume_in,
+                    allow_blank=False,
+                    id="resume_in",
+                )
             yield Static("[dim]esc to close[/]")
 
     def on_switch_changed(self, event: Switch.Changed) -> None:
         """Apply a flipped switch to the copy being edited."""
         self._settings = self._settings.model_copy(update={str(event.switch.id): event.value})
+
+    def on_select_changed(self, event: Select.Changed) -> None:
+        """Apply a picked value to the copy being edited."""
+        self._settings = self._settings.model_copy(update={str(event.select.id): event.value})
 
     def on_input_changed(self, event: Input.Changed) -> None:
         """Apply a typed number, ignoring anything half-typed or out of range."""
@@ -992,9 +1008,10 @@ class FleetApp(App[None]):
         Binding("slash", "filter", "filter"),
         Binding("p", "pull_requests", "pull requests"),
         Binding("n", "start", "new session"),
+        Binding("s", "send", "send"),
         Binding("c", "toggle_closed", "closed", show=False),
-        Binding("y", "copy_resume", "copy resume"),
-        Binding("r", "rename", "rename"),
+        Binding("r", "resume_in_terminal", "resume"),
+        Binding("R", "rename", "rename"),
         Binding("t", "terminate", "terminate"),
         Binding("comma", "settings", "settings"),
         Binding("q", "quit", "quit"),
@@ -1009,14 +1026,19 @@ class FleetApp(App[None]):
     keeps: what a session is doing, then the ways of acting on it, and `q` last — every TUI
     quits on `q`, so it is the one binding nobody needs told. `^r` and `escape` are hidden
     rather than dropped: the board reloads on its own interval and escape is contextual, so
-    neither is worth the width, and both still answer. `c` is hidden because the top bar
-    says it better — the count of closed sessions is the switch, and a switch that shows
-    the number it would fold in needs no key advertised beside it.
+    neither is worth the width, and both still answer.
+
+    `r` and `R` are the pair a hand has to be told apart: the lowercase one is the reflex,
+    and it goes to resuming, which is what a board full of ended sessions is for. Renaming
+    takes the shift because it is the rarer of the two and the one that changes what every
+    other session calls this one. `c` is hidden because the top bar says it better — the
+    count of closed sessions is the switch, and a switch that shows the number it would fold
+    in needs no key advertised beside it.
 
     `enter` leads because it is the one key that means the same thing on every row — get me
-    into this session — and the board answers it by whichever route that row needs, rather
-    than by asking which of `f` and `y` the row happens to want. It is the only key that
-    ends the board, which is what running something in its terminal has to cost.
+    into this session — and the board answers it by whichever route that row needs, where
+    `f` and `r` each pick one of those routes and hold to it. It is the only key that ends
+    the board, which is what running something in its terminal has to cost.
 
     `o` sits beside `f` because it is the same kind of key: both take the session under the
     cursor somewhere else, one to its terminal and one to the pull request it was for. `p`
@@ -1029,6 +1051,10 @@ class FleetApp(App[None]):
     key is for what you do to a session while reading the board, and worktrees are not
     that: they are tidied occasionally, on purpose, and a letter spent on them is a letter
     that can be pressed by accident.
+
+    Copying a resume command is in the palette for its own reason. `r` opens the session
+    where the settings say, and the clipboard is one of the places it can be told to put
+    one, so a key of its own would be a second way to spell a setting.
     """
 
     def __init__(
@@ -1151,17 +1177,28 @@ class FleetApp(App[None]):
             "Signal it, and bring the window it is running in to the front",
             self.action_focus_session,
         )
+        if self._has_process():
+            yield SystemCommand(
+                "Send this session a message",
+                "Put a prompt in its queue, which it picks up at the end of the turn it is on",
+                self.action_send,
+            )
         yield SystemCommand(
             "Rename this session",
             "Ask the session itself for a name that says what the job is",
             self.action_rename,
         )
         yield SystemCommand(
+            "Resume this session in a terminal",
+            "Open it where the settings say: a tmux window, an iTerm2 tab, or the clipboard",
+            self.action_resume_in_terminal,
+        )
+        yield SystemCommand(
             "Copy this session's resume command",
             "Put the command that brings it back on the clipboard",
             self.action_copy_resume,
         )
-        if self._can_terminate():
+        if self._has_process():
             yield SystemCommand(
                 "Terminate this session",
                 "Send its process SIGTERM, once it has been confirmed",
@@ -1181,19 +1218,21 @@ class FleetApp(App[None]):
     def check_action(self, action: str, parameters: tuple[object, ...]) -> bool | None:
         """Whether an action is offered for the session under the cursor.
 
-        `t` is the one that ever answers no. A session that has ended keeps its transcript
-        and whatever the registry remembers, and the process id both once held is dropped
-        from them precisely because that id may since have been handed to something else —
-        so SIGTERM has nowhere to go and the key could only answer with a refusal. Hidden
-        rather than greyed out, which is Textual's other answer: the footer truncates as
-        it is, and the width is worth more to a key that still does something.
+        `t` and `s` are the ones that ever answer no, and they answer it together: both
+        need the session's process. A session that has ended keeps its transcript and
+        whatever the registry remembers, and the process id both once held is dropped from
+        them precisely because that id may since have been handed to something else — so
+        SIGTERM has nowhere to go, the socket that took prompts went with the process, and
+        either key could only answer with a refusal. Hidden rather than greyed out, which
+        is Textual's other answer: the footer truncates as it is, and the width is worth
+        more to a key that still does something.
         """
-        if action != "terminate":
+        if action not in {"terminate", "send"}:
             return True
-        return self._can_terminate()
+        return self._has_process()
 
-    def _can_terminate(self) -> bool:
-        """Whether the session under the cursor still has a process to send SIGTERM to."""
+    def _has_process(self) -> bool:
+        """Whether the session under the cursor still has a process to reach."""
         session = self.selected_session
         return session is not None and session.pid is not None
 
@@ -1581,6 +1620,41 @@ class FleetApp(App[None]):
     def _worktree_kept(self, detail: str) -> None:
         self.notify(detail, title="worktree kept", severity="warning")
 
+    def action_send(self) -> None:
+        """Put a prompt in the selected session's queue."""
+        session = self.selected_session
+        if session is None:
+            self.notify("nothing selected", severity="warning")
+            return
+        self.push_screen(
+            PromptScreen(f"[bold]Send {session.label}[/]"),
+            partial(self._send_message, session),
+        )
+
+    def _send_message(self, session: Session, message: str | None) -> None:
+        if message is None:
+            return
+        try:
+            landed = self._deliver(session, message)
+        except (ValueError, LookupError, OSError) as error:
+            self.notify(str(error), title="not sent", severity="error")
+            return
+        self.notify(f"{session.label} {landed}")
+        self.start_reload()
+
+    def _deliver(self, session: Session, message: str) -> str:
+        """Hand the message over by whichever route can carry it, saying which that was.
+
+        A slash command is typed, because the socket delivers it as a message from another
+        session and a session declines the commands it takes only from its own keyboard.
+        Everything else goes down the socket, which reaches a session in any terminal and
+        leaves the keyboard alone.
+        """
+        if SLASH_COMMAND.match(message):
+            return f"had it typed by {type_into(session, message, self._terminal)}"
+        send_message(session, message)
+        return "has it queued"
+
     def action_rename(self) -> None:
         """Give the selected session a new name, in the session itself."""
         session = self.selected_session
@@ -1618,6 +1692,43 @@ class FleetApp(App[None]):
         self.copy_to_clipboard(command)
         copy_to_pasteboard(command)
         self.notify(command, title=f"resume {session.label}")
+
+    def action_resume_in_terminal(self) -> None:
+        """Resume the selected session in a terminal of its own, leaving the board where it is.
+
+        A session still running is offered as a fork instead. Its transcript is the file
+        that process is writing, and a second Claude Code resuming it would be the other
+        writer, where a fork copies the conversation and carries on under an id of its own.
+        The question is asked because a fork is a session more than you had, and because
+        `enter` and `f` are the keys for going to the one already up.
+        """
+        session = self.selected_session
+        if session is None:
+            self.notify("nothing selected", severity="warning")
+            return
+        if session.is_finished:
+            self._resume(session, fork=False)
+            return
+        question = (
+            f"[bold]{session.label} is still running. Fork it?[/]"
+            f"\n[dim]a copy of the conversation so far, carrying on under its own id[/]"
+            f"\n[dim]enter goes to the session itself[/]"
+        )
+        self.push_screen(ConfirmScreen(question), partial(self._fork, session))
+
+    def _fork(self, session: Session, confirmed: bool | None) -> None:
+        if not confirmed:
+            return
+        self._resume(session, fork=True)
+
+    def _resume(self, session: Session, fork: bool) -> None:
+        what = "forked" if fork else "resumed"
+        try:
+            where = open_session(resume_plan(session, fork), self._settings.resume_in, session.label)
+        except (LookupError, OSError) as error:
+            self.notify(str(error), title=f"not {what}", severity="error")
+            return
+        self.notify(f"{session.label} {what} {where}")
 
     def action_filter(self) -> None:
         """Reveal the filter box and type into it."""

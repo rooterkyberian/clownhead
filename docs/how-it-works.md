@@ -218,6 +218,47 @@ registry, transcript, prompt box and terminal title all follow,
 and the session is told its new name.
 Sessions that have ended, and ones older than Claude Code's control channel, have nothing listening and say so instead.
 
+## Messaging
+
+Telling a session something means finding its terminal and typing there,
+which is a window to hunt down and a train of thought to put back together afterwards.
+`s` puts the line in its queue from here instead.
+
+The channel is the one the rename goes down,
+and the message is the one sessions already send each other:
+Claude Code queues it, says it came from somewhere other than that session's own keyboard,
+and the session reads it at the end of whatever turn it is on.
+An idle one starts a turn on it, and pays for that turn as if you had typed it there.
+Whoever is sitting at that terminal watches it arrive.
+
+The framing is what makes the key safe to hand out.
+A session told a message came from elsewhere holds on to the work it only takes from you:
+renaming, compacting and settings changes are declined however the message asks for them.
+
+A message that opens on a slash command therefore goes by another route.
+The text would travel verbatim,
+so `/compact` would reach the session as those eight characters
+and come back a turn later as the session explaining that the command is yours to type.
+Running one means being the keyboard it takes commands from,
+which means asking whatever owns the pty to type on the board's behalf.
+
+tmux is asked first, and answers for any pane it owns whatever emulator it is drawn in.
+Where no multiplexer stands between them, iTerm2 is asked instead,
+and puts the line in the session it draws on that tty.
+Both are found by the tty the board already resolved,
+because a line typed into the wrong session is a command run in the wrong repository.
+A session in a terminal neither of them owns keeps the refusal, which names the emulator.
+
+Typing costs what the socket was giving.
+A pane takes the keys whatever the session is doing with them,
+so a session sitting on a permission prompt reads the line as the answer to that prompt.
+`r` is the rename that needs none of this, over a control message of its own.
+
+The socket says nothing about what became of the message.
+A session whose inbound settings drop it looks from here like one that took it,
+so what confirms an arrival is the transcript `→` reads,
+where the answer shows up like any other turn.
+
 ## Conversation
 
 The turns shown by `→` are read from the tail of the session's transcript.
@@ -243,7 +284,8 @@ how many turns of history to read,
 whether closed sessions are in from the start,
 whether focusing raises the window,
 whether a terminated session's tab is closed after it,
-and whether tabs are tinted at all.
+whether tabs are tinted at all,
+and where `r` puts a session it resumes.
 
 The PID, TTY and WORKTREE columns are off by default:
 the first two matter when a session needs killing or signalling, not while reading the board,
@@ -261,10 +303,31 @@ the process is gone and its id may since have been reused by something else.
 
 A session is a transcript on disk,
 so killing the terminal loses nothing and `claude --resume <id>` in the original directory brings the conversation back.
-`y` in the overseer puts that command for the selected session on the clipboard,
-`cd` included.
+Copying that command for the selected session is in the command palette, `cd` included.
 `enter` runs it here,
 which ends the board you were reading in order to decide.
+
+`r` runs it somewhere else and leaves the board up,
+which is the answer when the next thing you want is the row below.
+Where that is comes from the settings.
+A tmux window, if the board is inside tmux,
+and a detached session named after the one being resumed if it is not,
+since there is no client here to switch and a session outlives the board that made it.
+An iTerm2 tab in the frontmost window.
+Or the clipboard, which is the route that needs nothing to be running
+and the one it falls back to by default.
+
+The environment travels with the command in every case.
+A tmux server outlives the shells that talk to it and keeps the one it first started with,
+so `CLAUDE_CONFIG_DIR` reaches the new pane by being passed to tmux on the command that makes it;
+the iTerm2 tab is handed the same shell line the palette copies, assignments and all.
+
+A session still running is offered as a fork.
+Its transcript is the file that process is writing,
+and a second Claude Code resuming it would be the other writer,
+so `--fork-session` goes on the command:
+the conversation up to now is copied and carries on under an id of its own,
+which is a session more than you had and why the question is asked at all.
 
 Worktree sessions resume from the owning repository with `--worktree <name>`,
 which attaches to the worktree that still stands and rebuilds the one that has been pruned.

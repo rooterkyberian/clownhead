@@ -127,3 +127,13 @@ def test_a_launch_quotes_a_carried_value_a_shell_would_split(tmp_path):
     plan = Launch(tmp_path, ("claude",), ((CONFIG_DIR_VAR, "/Users/you/Application Support/.claude"),))
 
     assert plan.shell_command == f"(cd {tmp_path} && CLAUDE_CONFIG_DIR='/Users/you/Application Support/.claude' claude)"
+
+
+def test_resume_plan_forks_the_conversation_when_asked(tmp_path):
+    plan = resume_plan(session(tmp_path), fork=True)
+
+    assert plan.argv == ("claude", "--resume", "a-b", "--fork-session")
+
+
+def test_resume_plan_keeps_the_session_id_by_default(tmp_path):
+    assert "--fork-session" not in resume_plan(session(tmp_path)).argv

@@ -4,7 +4,7 @@ from pathlib import Path
 import pytest
 from rich.console import Console
 from rich.markup import render as render_markup
-from textual.widgets import DataTable, Input, Static, Switch
+from textual.widgets import DataTable, Input, Select, Static, Switch
 
 from clownhead import settings as settings_store
 from clownhead import tui as tui_module
@@ -12,7 +12,7 @@ from clownhead.discovery import Message, Process
 from clownhead.issues import Issue, Tracker
 from clownhead.models import Session, Status
 from clownhead.pulls import Status as PullStatus
-from clownhead.settings import Settings
+from clownhead.settings import ResumeIn, Settings
 from clownhead.terminal import ITerm2Terminal
 from clownhead.tui import FleetApp, PullChoiceScreen, config_dir_notice, matches
 from clownhead.worktrees import Candidate, Worktree
@@ -1027,11 +1027,25 @@ async def test_tui_copies_a_resume_command_for_a_closed_session(monkeypatch):
 
     async with app.run_test() as pilot:
         await settle(app, pilot)
-        await pilot.press("y")
+        app.action_copy_resume()
 
         expected = "(cd /tmp/invoice-parser && claude --resume 9a1b2c3d-eeee)"
         assert copied == [expected]
         assert app._clipboard == expected
+
+
+async def test_tui_copy_resume_has_no_key_of_its_own(monkeypatch):
+    copied: list[str] = []
+    monkeypatch.setattr(tui_module, "copy_to_pasteboard", copied.append)
+    app = build_app(sessions=[closed_session()])
+
+    async with app.run_test() as pilot:
+        await settle(app, pilot)
+        await pilot.press("y")
+        await pilot.pause()
+
+        assert copied == []
+        assert "copy_resume" not in footer_keys(app)
 
 
 async def test_tui_copy_resume_on_an_empty_fleet_copies_nothing(monkeypatch):
@@ -1041,7 +1055,7 @@ async def test_tui_copy_resume_on_an_empty_fleet_copies_nothing(monkeypatch):
 
     async with app.run_test() as pilot:
         await settle(app, pilot)
-        await pilot.press("y")
+        app.action_copy_resume()
 
         assert copied == []
 
@@ -1386,6 +1400,8 @@ async def test_the_palette_carries_every_action_the_board_has():
             "Settings",
             "Closed sessions",
             "Focus this session's terminal",
+            "Send this session a message",
+            "Resume this session in a terminal",
             "Rename this session",
             "Copy this session's resume command",
             "Terminate this session",
@@ -1406,7 +1422,9 @@ async def test_the_palette_leaves_out_terminating_a_session_with_no_process():
         offered = {command.title for command in app.get_system_commands(app.screen)}
 
         assert "Terminate this session" not in offered
+        assert "Send this session a message" not in offered
         assert "Copy this session's resume command" in offered
+        assert "Resume this session in a terminal" in offered
 
 
 async def test_terminate_leaves_the_footer_when_the_process_is_gone():
@@ -1416,7 +1434,7 @@ async def test_terminate_leaves_the_footer_when_the_process_is_gone():
         await settle(app, pilot)
 
         assert "terminate" not in footer_keys(app)
-        assert "copy_resume" in footer_keys(app)
+        assert "resume_in_terminal" in footer_keys(app)
 
         await pilot.press("down")
 
@@ -1616,7 +1634,7 @@ async def test_tui_rename_offers_the_current_name_for_editing():
 
     async with app.run_test() as pilot:
         await settle(app, pilot)
-        await pilot.press("r")
+        await pilot.press("R")
         await pilot.pause()
 
         assert isinstance(app.screen, tui_module.PromptScreen)
@@ -1630,7 +1648,7 @@ async def test_tui_rename_asks_the_session_once_submitted(monkeypatch):
 
     async with app.run_test() as pilot:
         await settle(app, pilot)
-        await pilot.press("r")
+        await pilot.press("R")
         await pilot.pause()
         app.screen.query_one("#answer", Input).value = "invoice-parser"
         await pilot.press("enter")
@@ -1645,7 +1663,7 @@ async def test_tui_rename_is_dropped_when_the_prompt_is_abandoned(monkeypatch):
 
     async with app.run_test() as pilot:
         await settle(app, pilot)
-        await pilot.press("r")
+        await pilot.press("R")
         await pilot.pause()
         app.screen.query_one("#answer", Input).value = "invoice-parser"
         await pilot.press("escape")
@@ -1661,7 +1679,7 @@ async def test_tui_rename_sends_nothing_when_the_name_would_not_change(monkeypat
 
     async with app.run_test() as pilot:
         await settle(app, pilot)
-        await pilot.press("r")
+        await pilot.press("R")
         await pilot.pause()
         app.screen.query_one("#answer", Input).value = answer
         await pilot.press("enter")
@@ -1673,7 +1691,7 @@ async def test_tui_rename_typing_does_not_filter_the_fleet():
 
     async with app.run_test() as pilot:
         await settle(app, pilot)
-        await pilot.press("r")
+        await pilot.press("R")
         await pilot.pause()
         app.screen.query_one("#answer", Input).value = "invoice"
         await pilot.pause()
@@ -1690,7 +1708,7 @@ async def test_tui_rename_reports_a_refusal(monkeypatch):
 
     async with app.run_test() as pilot:
         await settle(app, pilot)
-        await pilot.press("r")
+        await pilot.press("R")
         await pilot.pause()
         app.screen.query_one("#answer", Input).value = "invoice-parser"
         await pilot.press("enter")
@@ -1706,10 +1724,293 @@ async def test_tui_rename_on_an_empty_fleet_asks_nothing(monkeypatch):
 
     async with app.run_test() as pilot:
         await settle(app, pilot)
-        await pilot.press("r")
+        await pilot.press("R")
         await pilot.pause()
 
         assert not isinstance(app.screen, tui_module.PromptScreen)
+
+
+async def test_tui_send_asks_with_an_empty_box():
+    app = build_app()
+
+    async with app.run_test() as pilot:
+        await settle(app, pilot)
+        await pilot.press("s")
+        await pilot.pause()
+
+        assert isinstance(app.screen, tui_module.PromptScreen)
+        assert app.screen.query_one("#answer", Input).value == ""
+
+
+async def test_tui_send_queues_the_message_once_submitted(monkeypatch):
+    sent: list[tuple[str, str]] = []
+    monkeypatch.setattr(tui_module, "send_message", lambda session, text: sent.append((session.label, text)))
+    app = build_app()
+
+    async with app.run_test() as pilot:
+        await settle(app, pilot)
+        await pilot.press("s")
+        await pilot.pause()
+        app.screen.query_one("#answer", Input).value = "rebase on main first"
+        await pilot.press("enter")
+        await pilot.pause()
+
+        assert sent == [("payments-api-7c", "rebase on main first")]
+
+
+async def test_tui_send_is_dropped_when_the_prompt_is_abandoned(monkeypatch):
+    monkeypatch.setattr(tui_module, "send_message", lambda session, text: pytest.fail("must not send"))
+    app = build_app()
+
+    async with app.run_test() as pilot:
+        await settle(app, pilot)
+        await pilot.press("s")
+        await pilot.pause()
+        app.screen.query_one("#answer", Input).value = "rebase on main first"
+        await pilot.press("escape")
+        await pilot.pause()
+
+        assert not isinstance(app.screen, tui_module.PromptScreen)
+
+
+async def test_tui_send_sends_nothing_when_the_box_is_left_blank(monkeypatch):
+    monkeypatch.setattr(tui_module, "send_message", lambda session, text: pytest.fail("must not send"))
+    app = build_app()
+
+    async with app.run_test() as pilot:
+        await settle(app, pilot)
+        await pilot.press("s")
+        await pilot.pause()
+        app.screen.query_one("#answer", Input).value = "   "
+        await pilot.press("enter")
+        await pilot.pause()
+
+        assert not isinstance(app.screen, tui_module.PromptScreen)
+
+
+async def test_tui_send_typing_does_not_filter_the_fleet():
+    app = build_app()
+
+    async with app.run_test() as pilot:
+        await settle(app, pilot)
+        await pilot.press("s")
+        await pilot.pause()
+        await pilot.press("w", "e", "b")
+        await pilot.pause()
+
+        assert app.screen.query_one("#answer", Input).value == "web"
+        assert table_of(app).row_count == 2
+
+
+async def test_tui_send_reports_a_refusal(monkeypatch):
+    def refuse(session, text):
+        raise LookupError("payments-api-7c is not listening for messages")
+
+    monkeypatch.setattr(tui_module, "send_message", refuse)
+    app = build_app()
+
+    async with app.run_test() as pilot:
+        await settle(app, pilot)
+        await pilot.press("s")
+        await pilot.pause()
+        app.screen.query_one("#answer", Input).value = "rebase on main first"
+        await pilot.press("enter")
+        await pilot.pause()
+
+        messages = [notification.message for notification in app._notifications]
+        assert messages == ["payments-api-7c is not listening for messages"]
+
+
+async def test_tui_send_on_an_empty_fleet_asks_nothing(monkeypatch):
+    monkeypatch.setattr(tui_module, "send_message", lambda session, text: pytest.fail("must not send"))
+    app = build_app(sessions=[])
+
+    async with app.run_test() as pilot:
+        await settle(app, pilot)
+        await pilot.press("s")
+        await pilot.pause()
+
+        assert not isinstance(app.screen, tui_module.PromptScreen)
+
+
+async def test_tui_send_types_a_slash_command_instead_of_queueing_it(monkeypatch):
+    typed: list[tuple[str, str]] = []
+    monkeypatch.setattr(tui_module, "send_message", lambda session, text: pytest.fail("must not send"))
+    monkeypatch.setattr(
+        tui_module,
+        "type_into",
+        lambda session, text, terminal: typed.append((session.label, text)) or "tmux",
+    )
+    app = build_app()
+
+    async with app.run_test() as pilot:
+        await settle(app, pilot)
+        await pilot.press("s")
+        await pilot.pause()
+        app.screen.query_one("#answer", Input).value = "/compact"
+        await pilot.press("enter")
+        await pilot.pause()
+
+        assert typed == [("payments-api-7c", "/compact")]
+        assert [n.message for n in app._notifications] == ["payments-api-7c had it typed by tmux"]
+
+
+async def test_tui_send_queues_a_message_that_only_looks_like_a_command(monkeypatch):
+    sent: list[tuple[str, str]] = []
+    monkeypatch.setattr(tui_module, "type_into", lambda *args: pytest.fail("must not type"))
+    monkeypatch.setattr(tui_module, "send_message", lambda session, text: sent.append((session.label, text)))
+    app = build_app()
+
+    async with app.run_test() as pilot:
+        await settle(app, pilot)
+        await pilot.press("s")
+        await pilot.pause()
+        app.screen.query_one("#answer", Input).value = "/tmp/repo is the wrong checkout"
+        await pilot.press("enter")
+        await pilot.pause()
+
+        assert sent == [("payments-api-7c", "/tmp/repo is the wrong checkout")]
+        assert [n.message for n in app._notifications] == ["payments-api-7c has it queued"]
+
+
+async def test_tui_send_reports_a_terminal_that_cannot_be_typed_into(monkeypatch):
+    def refuse(session, text, terminal):
+        raise LookupError("payments-api-7c runs in generic, which nothing can type into")
+
+    monkeypatch.setattr(tui_module, "type_into", refuse)
+    app = build_app()
+
+    async with app.run_test() as pilot:
+        await settle(app, pilot)
+        await pilot.press("s")
+        await pilot.pause()
+        app.screen.query_one("#answer", Input).value = "/compact"
+        await pilot.press("enter")
+        await pilot.pause()
+
+        messages = [n.message for n in app._notifications]
+        assert messages == ["payments-api-7c runs in generic, which nothing can type into"]
+
+
+async def test_send_leaves_the_footer_when_the_process_is_gone():
+    app = build_app(sessions=worktree_fleet())
+
+    async with app.run_test() as pilot:
+        await settle(app, pilot)
+
+        assert "send" not in footer_keys(app)
+
+        await pilot.press("down")
+
+        assert "send" in footer_keys(app)
+
+
+async def test_tui_resume_opens_a_closed_session_where_the_settings_say(monkeypatch):
+    opened: list[tuple[str, str, str]] = []
+    monkeypatch.setattr(
+        tui_module,
+        "open_session",
+        lambda plan, how, name: opened.append((str(plan.directory), how, name)) or "in tmux window x",
+    )
+    app = build_app(sessions=[closed_session()], settings=Settings(resume_in=ResumeIn.TMUX))
+
+    async with app.run_test() as pilot:
+        await settle(app, pilot)
+        await pilot.press("r")
+        await pilot.pause()
+
+        assert opened == [("/tmp/invoice-parser", ResumeIn.TMUX, "invoice-parser-3d")]
+        assert [n.message for n in app._notifications] == ["invoice-parser-3d resumed in tmux window x"]
+
+
+async def test_tui_resume_offers_to_fork_a_session_that_is_still_running(monkeypatch):
+    monkeypatch.setattr(tui_module, "open_session", lambda *args: pytest.fail("must not open"))
+    app = build_app()
+
+    async with app.run_test() as pilot:
+        await settle(app, pilot)
+        await pilot.press("r")
+        await pilot.pause()
+
+        assert isinstance(app.screen, tui_module.ConfirmScreen)
+
+
+async def test_tui_fork_resumes_a_live_session_under_its_own_id(monkeypatch):
+    opened: list[tuple[str, ...]] = []
+    monkeypatch.setattr(
+        tui_module,
+        "open_session",
+        lambda plan, how, name: opened.append(plan.argv) or "in tmux window payments-api-7c",
+    )
+    app = build_app(settings=Settings(resume_in=ResumeIn.TMUX))
+
+    async with app.run_test() as pilot:
+        await settle(app, pilot)
+        await pilot.press("r")
+        await pilot.pause()
+        await pilot.press("y")
+        await pilot.pause()
+
+        assert opened == [("claude", "--resume", "4e020900-df7c", "--fork-session")]
+        assert [n.message for n in app._notifications] == ["payments-api-7c forked in tmux window payments-api-7c"]
+
+
+@pytest.mark.parametrize("key", ["n", "escape"])
+async def test_tui_fork_is_dropped_when_the_question_is_declined(monkeypatch, key):
+    monkeypatch.setattr(tui_module, "open_session", lambda *args: pytest.fail("must not open"))
+    app = build_app()
+
+    async with app.run_test() as pilot:
+        await settle(app, pilot)
+        await pilot.press("r")
+        await pilot.pause()
+        await pilot.press(key)
+        await pilot.pause()
+
+        assert not isinstance(app.screen, tui_module.ConfirmScreen)
+
+
+async def test_tui_resume_reports_a_route_that_would_not_take_it(monkeypatch):
+    def refuse(plan, how, name):
+        raise LookupError("iterm2 did not open a tab for it")
+
+    monkeypatch.setattr(tui_module, "open_session", refuse)
+    app = build_app(sessions=[closed_session()], settings=Settings(resume_in=ResumeIn.ITERM2))
+
+    async with app.run_test() as pilot:
+        await settle(app, pilot)
+        await pilot.press("r")
+        await pilot.pause()
+
+        assert [n.message for n in app._notifications] == ["iterm2 did not open a tab for it"]
+
+
+async def test_tui_resume_on_an_empty_fleet_opens_nothing(monkeypatch):
+    monkeypatch.setattr(tui_module, "open_session", lambda *args: pytest.fail("must not resume"))
+    app = build_app(sessions=[])
+
+    async with app.run_test() as pilot:
+        await settle(app, pilot)
+        await pilot.press("r")
+        await pilot.pause()
+
+        assert [n.message for n in app._notifications] == ["nothing selected"]
+
+
+async def test_tui_settings_screen_picks_where_to_resume():
+    app = build_app()
+
+    async with app.run_test() as pilot:
+        await settle(app, pilot)
+        await pilot.press("comma")
+        await pilot.pause()
+
+        app.screen.query_one("#resume_in", Select).value = ResumeIn.ITERM2
+        await pilot.pause()
+        await pilot.press("escape")
+        await settle(app, pilot)
+
+        assert app._settings.resume_in is ResumeIn.ITERM2
 
 
 async def test_tui_settings_screen_edits_and_saves(monkeypatch):

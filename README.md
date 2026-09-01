@@ -28,6 +28,8 @@ which is ahead of the last release.
   kitty gets notifications,
   and everything else (an IDE's embedded terminal included) falls back to the bell and a tab renamed to `⚠ <session>: <why>`.
   Raising a window is macOS-only.
+  Typing a slash command into a session takes tmux or iTerm2;
+  messages reach a session in any of them.
 - Sessions in a JetBrains IDE get their terminal tab selected as well,
   which takes an Accessibility grant for whichever application clownhead is running in:
   System Settings, Privacy & Security, Accessibility.
@@ -55,14 +57,30 @@ and the pane below the table carries the id, path, process and terminal the colu
   or by pull request or issue, below.
 - `p` opens the pull requests you have open on GitHub, below.
 - `n` starts a new session for the pull request or issue being filtered on.
+- `s` sends the session a message:
+  it joins the queue and is read at the end of whatever turn that session is on,
+  and the answer turns up in the conversation `→` opens.
+  A slash command takes the other door,
+  typed into the session by tmux or by iTerm2,
+  since a session runs what its own keyboard sends it
+  and declines what a message asks of it.
+  A session in a terminal neither of those owns says so instead of typing.
 - `c` folds in the sessions that have already ended.
   The count in the top bar is that same switch,
   and clicking it works too.
-- `y` copies its resume command.
-- `r` renames it.
+- `r` resumes a session that has ended, leaving the board up:
+  a tmux window, an iTerm2 tab, or the clipboard, whichever the settings say.
+  On a session still running it asks whether to fork it,
+  which copies the conversation so far into a session with an id of its own
+  and leaves the live one alone.
+- `R` renames it.
 - `t` asks whether to send its process SIGTERM, and can close its tab behind it.
 - `,` opens the settings.
-- `^p` opens the command palette.
+- `^p` opens the command palette,
+  which carries every key above by name and the three things with no key of their own:
+  copying a session's resume command,
+  retiring the worktree it worked in,
+  and clearing out every worktree whose work has already merged.
 - `q` quits.
 
 ## Tab colours

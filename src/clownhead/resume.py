@@ -45,7 +45,7 @@ class Launch:
         return f"(cd {self.directory} && {words})"
 
 
-def resume_plan(session: Session) -> Launch:
+def resume_plan(session: Session, fork: bool = False) -> Launch:
     """Where to resume a session from, and the command that does it.
 
     A worktree session records the worktree itself as its directory, but ``--worktree``
@@ -57,8 +57,13 @@ def resume_plan(session: Session) -> Launch:
     Any other missing directory keeps its ``cd`` and the failure that comes with it.
     Resuming a session somewhere other than where it belongs would hand it a working
     directory full of the wrong project, which is worse than a command that stops.
+
+    ``fork`` takes the conversation and leaves the session id behind, which is what makes
+    a session that is still running safe to open a second time: the transcript the live
+    process is writing stays its own, and the copy carries on under an id of its own from
+    everything said up to now.
     """
-    argv = ("claude", "--resume", session.session_id)
+    argv = ("claude", "--resume", session.session_id, *(("--fork-session",) if fork else ()))
     env = carried_env()
     repo, worktree = split_worktree(session.cwd)
     if worktree and repo.exists():

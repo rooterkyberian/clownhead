@@ -1,4 +1,5 @@
 import plistlib
+import subprocess
 from pathlib import Path
 
 import pytest
@@ -403,3 +404,72 @@ def test_open_url_reports_a_desktop_with_nothing_to_open_it(monkeypatch):
     monkeypatch.setattr(terminal_module.subprocess, "run", refuse)
 
     assert terminal_module.open_url("https://example.com") is False
+
+
+def answering(stdout: str, returncode: int = 0):
+    """A ``subprocess.run`` stand-in that records its argv and answers with ``stdout``."""
+    calls: list[list[str]] = []
+
+    def run(argv, **kwargs):
+        calls.append(argv)
+        return subprocess.CompletedProcess(argv, returncode, stdout=stdout, stderr="")
+
+    return calls, run
+
+
+def test_iterm2_types_a_line_into_the_session_on_a_tty(monkeypatch):
+    calls, run = answering("typed")
+    monkeypatch.setattr(terminal_module.subprocess, "run", run)
+
+    assert terminal_module.ITerm2Terminal().type_text(Path("/dev/ttys004"), "/compact") is True
+    assert calls == [
+        ["/usr/bin/osascript", "-e", terminal_module.ITERM2_TYPE, "/dev/ttys004", "/compact"],
+    ]
+
+
+def test_iterm2_declines_a_tty_it_draws_nothing_on(monkeypatch):
+    _, run = answering("no session on that tty")
+    monkeypatch.setattr(terminal_module.subprocess, "run", run)
+
+    assert terminal_module.ITerm2Terminal().type_text(Path("/dev/ttys999"), "/compact") is False
+
+
+def test_iterm2_declines_when_the_script_fails(monkeypatch):
+    _, run = answering("", returncode=1)
+    monkeypatch.setattr(terminal_module.subprocess, "run", run)
+
+    assert terminal_module.ITerm2Terminal().type_text(Path("/dev/ttys004"), "/compact") is False
+
+
+def test_a_generic_terminal_cannot_be_typed_into():
+    assert terminal_module.Terminal().type_text(Path("/dev/ttys004"), "/compact") is False
+    assert terminal_module.Terminal().supports_typing is False
+    assert terminal_module.ITerm2Terminal().supports_typing is True
+
+
+def test_iterm2_opens_a_tab_running_a_command(monkeypatch):
+    calls, run = answering("opened")
+    monkeypatch.setattr(terminal_module.subprocess, "run", run)
+
+    assert terminal_module.ITerm2Terminal().open_tab("(cd /tmp/repo && claude --resume 4e02)") is True
+    assert calls == [
+        [
+            "/usr/bin/osascript",
+            "-e",
+            terminal_module.ITERM2_OPEN,
+            "(cd /tmp/repo && claude --resume 4e02)",
+        ],
+    ]
+
+
+def test_iterm2_declines_a_tab_when_the_script_fails(monkeypatch):
+    _, run = answering("", returncode=1)
+    monkeypatch.setattr(terminal_module.subprocess, "run", run)
+
+    assert terminal_module.ITerm2Terminal().open_tab("claude --resume 4e02") is False
+
+
+def test_a_generic_terminal_opens_no_tab():
+    assert terminal_module.Terminal().open_tab("claude --resume 4e02") is False
+    assert terminal_module.Terminal().supports_tabs is False
+    assert terminal_module.ITerm2Terminal().supports_tabs is True

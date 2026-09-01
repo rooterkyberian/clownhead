@@ -8,6 +8,7 @@ refusing to start.
 
 from __future__ import annotations
 
+from enum import StrEnum
 from pathlib import Path
 
 from pydantic import BaseModel, Field, ValidationError
@@ -16,6 +17,19 @@ from clownhead.state import state_dir
 
 MIN_INTERVAL = 1.0
 MAX_INTERVAL = 3600.0
+
+
+class ResumeIn(StrEnum):
+    """Where a resumed session is put.
+
+    The clipboard is the default because it is the one that works everywhere: a command on
+    the pasteboard is a command you paste wherever you want it, and the two that open the
+    session for you need the terminal to be one of the two that can be asked.
+    """
+
+    CLIPBOARD = "clipboard"
+    ITERM2 = "iterm2"
+    TMUX = "tmux"
 
 
 class Settings(BaseModel):
@@ -30,6 +44,7 @@ class Settings(BaseModel):
     foreground: bool = True
     paint_tabs: bool = True
     close_tab_on_terminate: bool = False
+    resume_in: ResumeIn = ResumeIn.CLIPBOARD
     history_turns: int = Field(default=20, ge=1, le=200)
 
 
