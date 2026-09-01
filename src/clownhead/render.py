@@ -37,6 +37,7 @@ STATUS_STYLES: dict[Status, str] = {
     Status.BLOCKED: "bold dark_orange",
     Status.FAILED: "bold dark_orange",
     Status.BUSY: "cyan",
+    Status.SHELL: "dim cyan",
     Status.IDLE: "dim",
     Status.COMPLETED: "dim",
     Status.CLOSED: "dim",

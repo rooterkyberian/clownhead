@@ -2,8 +2,9 @@
 
 ``claude agents --json`` is the only built-in listing that includes interactive
 sessions, so it is the source of truth for what is live. Everything else in this module
-layers extra facts on top of that payload: the controlling TTY from ``ps`` and the
-registry heartbeat from ``sessions`` under the Claude Code config directory.
+layers extra facts on top of that payload: the controlling TTY from ``ps``, and the
+published status and the moment it was reached from the registry under ``sessions`` in
+the Claude Code config directory, which keeps a state the listing collapses.
 
 Sessions that have ended are found the other way round — from what they left on disk,
 under ``projects`` and in the registry — and are only trusted to be closed because the
@@ -25,13 +26,14 @@ import subprocess
 from collections.abc import Iterable, Mapping, Sequence
 from dataclasses import dataclass
 from datetime import UTC, datetime
+from enum import IntEnum, auto
 from itertools import islice
 from pathlib import Path
 from typing import Any
 
 from pydantic import ValidationError
 
-from clownhead.models import Kind, Session, Status
+from clownhead.models import Kind, Session, Status, epoch_millis_to_datetime
 
 SOCKET_DIR = Path("/tmp/cc-socks")  # noqa: S108
 CONFIG_DIR_VAR = "CLAUDE_CONFIG_DIR"
@@ -48,10 +50,15 @@ APP_MARKER = f"{APP_SUFFIX}/Contents/MacOS/"
 CLAUDE_COMMAND = "claude"
 SHELL_COMMANDS = frozenset({"sh", "bash", "zsh", "fish", "dash", "ksh", "tcsh", "csh"})
 
-ATTENTION_RANK = 0
-BUSY_RANK = 1
-QUIET_RANK = 2
-FINISHED_RANK = 3
+
+class Rank(IntEnum):
+    """Where a session's state puts it in the board's order, declared in that order."""
+
+    ATTENTION = auto()
+    BUSY = auto()
+    SHELL = auto()
+    QUIET = auto()
+    FINISHED = auto()
 
 
 @dataclass(frozen=True)
@@ -75,6 +82,26 @@ class Message:
     role: str
     text: str
     at: datetime | None = None
+
+
+@dataclass(frozen=True)
+class Beat:
+    """What a session last published about itself in the interactive registry.
+
+    A record dates the status it names, so :attr:`at` is when the session last became
+    what it is and not merely the last sign of life.
+
+    :attr:`status` is the finer of the two the CLI has: the listing maps everything that
+    is neither idle nor waiting onto ``busy``, while the record it maps from keeps
+    ``shell`` apart. Both come out of the same files, so the distinction costs nothing.
+    """
+
+    at: datetime | None
+    status: Status
+
+
+NO_BEAT = Beat(at=None, status=Status.UNKNOWN)
+"""What a session with no record of its own is enriched against, saying nothing about it."""
 
 
 def claude_binary() -> str:
@@ -276,19 +303,24 @@ def _argv0(command: str) -> str:
     return command.split(maxsplit=1)[0] if command else ""
 
 
-def registry_heartbeats(registry: Path | None = None) -> dict[int, datetime]:
-    """Last heartbeat per process id, read from the interactive session registry.
+def registry_beats(registry: Path | None = None) -> dict[int, Beat]:
+    """Last status and the moment it was reached, per process id, from the registry.
 
     A session that dies without cleaning up leaves its file behind, so entries here are
-    only meaningful when joined against sessions the CLI still reports as live.
+    only meaningful when joined against sessions the CLI still reports as live. A record
+    that dates nothing is kept for the status it names.
+
+    Older records date only themselves, and answer for their status with that: they were
+    written the moment it changed, which is the same answer under another field name.
     """
-    heartbeats: dict[int, datetime] = {}
+    beats: dict[int, Beat] = {}
     for entry in registry_entries(registry):
         pid = entry.get("pid")
-        updated_at = entry.get("updatedAt")
-        if isinstance(pid, int) and isinstance(updated_at, int | float):
-            heartbeats[pid] = datetime.fromtimestamp(updated_at / 1000, tz=UTC)
-    return heartbeats
+        if not isinstance(pid, int):
+            continue
+        dated = entry.get("statusUpdatedAt") or entry.get("updatedAt")
+        beats[pid] = Beat(at=epoch_millis_to_datetime(dated), status=Status(entry.get("status", Status.UNKNOWN)))
+    return beats
 
 
 def registry_entries(registry: Path | None = None) -> list[dict[str, Any]]:
@@ -439,26 +471,42 @@ def enrich(
     sessions: Iterable[Session],
     *,
     processes: Mapping[int, Process] | None = None,
-    heartbeats: Mapping[int, datetime] | None = None,
+    beats: Mapping[int, Beat] | None = None,
 ) -> list[Session]:
-    """Attach TTY, owning application and heartbeat facts to sessions with a process id."""
+    """Attach TTY, owning application and registry facts to sessions with a process id."""
     table = processes or {}
+    records = beats or {}
     enriched: list[Session] = []
     for session in sessions:
         if session.pid is None:
             enriched.append(session)
             continue
         process = table.get(session.pid)
+        beat = records.get(session.pid, NO_BEAT)
         enriched.append(
             session.model_copy(
                 update={
                     "tty": (process.tty if process else None) or session.tty,
                     "app": owning_application(session.pid, table) or session.app,
-                    "updated_at": (heartbeats or {}).get(session.pid, session.updated_at),
+                    "status": refine(session.status, beat.status),
+                    "updated_at": beat.at or session.updated_at,
                 }
             )
         )
     return enriched
+
+
+def refine(listed: Status, published: Status) -> Status:
+    """The registry's status where the CLI's listing collapsed it, and the listing's otherwise.
+
+    ``claude agents --json`` hands out three of the four states a session publishes:
+    anything that is neither idle nor waiting arrives as ``busy``, which folds a session
+    mid-turn together with one whose turn is over and whose background command is not.
+    Only that collapse is undone, so a listing and a registry that disagree about anything
+    else leave the listing to win — the CLI is what decides a session is live at all, and a
+    record outlives the session that wrote it.
+    """
+    return published if listed is Status.BUSY and published is Status.SHELL else listed
 
 
 def sort_key(session: Session) -> tuple[int, float]:
@@ -469,15 +517,17 @@ def sort_key(session: Session) -> tuple[int, float]:
     closed is the one you are most likely to want back.
     """
     if session.needs_attention:
-        rank = ATTENTION_RANK
+        rank = Rank.ATTENTION
     elif session.status is Status.BUSY:
-        rank = BUSY_RANK
+        rank = Rank.BUSY
+    elif session.status is Status.SHELL:
+        rank = Rank.SHELL
     elif session.is_finished:
-        rank = FINISHED_RANK
+        rank = Rank.FINISHED
     else:
-        rank = QUIET_RANK
+        rank = Rank.QUIET
     started = session.started_at.timestamp() if session.started_at else 0.0
-    return rank, -started if rank == FINISHED_RANK else started
+    return rank, -started if rank is Rank.FINISHED else started
 
 
 def list_sessions(
@@ -494,7 +544,7 @@ def list_sessions(
     """
     live = parse_sessions(fetch_payload(cwd, include_completed=include_closed))
     kept = [session for session in live if session.kind is Kind.INTERACTIVE] if interactive_only else list(live)
-    sessions = enrich(kept, processes=process_table(), heartbeats=registry_heartbeats())
+    sessions = enrich(kept, processes=process_table(), beats=registry_beats())
     if include_closed:
         sessions.extend(closed_sessions(live, cwd))
     return sorted(sessions, key=sort_key)

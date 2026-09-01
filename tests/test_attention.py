@@ -42,6 +42,7 @@ def session(status: Status, tty: Path | None = TTY, name: str = "one") -> Sessio
 def test_color_for_maps_attention_states():
     assert attention.color_for(Status.WAITING) == Rgb(220, 50, 47)
     assert attention.color_for(Status.BUSY) == Rgb(38, 139, 210)
+    assert attention.color_for(Status.SHELL) is None
     assert attention.color_for(Status.IDLE) is None
 
 

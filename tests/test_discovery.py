@@ -205,7 +205,9 @@ def test_enrich_attaches_tty_owning_application_and_heartbeat():
         (8, 1, None, "/Applications/iTerm.app/Contents/MacOS/iTerm2"),
     )
 
-    enriched = discovery.enrich(sessions, processes=processes, heartbeats={7: heartbeat})
+    beats = {7: discovery.Beat(at=heartbeat, status=Status.IDLE)}
+
+    enriched = discovery.enrich(sessions, processes=processes, beats=beats)
 
     assert enriched[0].tty == Path("/dev/ttys007")
     assert enriched[0].app == Path("/Applications/iTerm.app")
@@ -241,30 +243,80 @@ def test_enrich_leaves_pidless_sessions_alone():
     assert enriched[0].app is None
 
 
-def test_registry_heartbeats_reads_pid_keyed_files(tmp_path):
-    (tmp_path / "77730.json").write_text(json.dumps({"pid": 77730, "updatedAt": 1786356508914}))
+def test_enrich_tells_a_background_shell_apart_from_a_turn_in_flight():
+    reached = datetime(2026, 5, 1, tzinfo=UTC)
+    sessions = [Session(session_id="a-b", cwd=Path("/tmp"), pid=7, status=Status.BUSY)]
+
+    enriched = discovery.enrich(sessions, beats={7: discovery.Beat(at=reached, status=Status.SHELL)})
+
+    assert enriched[0].status is Status.SHELL
+    assert enriched[0].updated_at == reached
+
+
+def test_enrich_keeps_the_timestamp_an_undated_record_cannot_answer_for():
+    heartbeat = datetime(2026, 5, 1, tzinfo=UTC)
+    sessions = [Session(session_id="a-b", cwd=Path("/tmp"), pid=7, updated_at=heartbeat)]
+
+    enriched = discovery.enrich(sessions, beats={7: discovery.Beat(at=None, status=Status.SHELL)})
+
+    assert enriched[0].updated_at == heartbeat
+
+
+@pytest.mark.parametrize(
+    ("listed", "published", "expected"),
+    [
+        (Status.BUSY, Status.SHELL, Status.SHELL),
+        (Status.BUSY, Status.BUSY, Status.BUSY),
+        (Status.IDLE, Status.SHELL, Status.IDLE),
+        (Status.WAITING, Status.IDLE, Status.WAITING),
+        (Status.CLOSED, Status.BUSY, Status.CLOSED),
+        (Status.BUSY, Status.UNKNOWN, Status.BUSY),
+    ],
+)
+def test_refine(listed, published, expected):
+    assert discovery.refine(listed, published) is expected
+
+
+def test_registry_beats_reads_pid_keyed_files(tmp_path):
+    registry_file(tmp_path, 77730, "a-b", status="shell", status_updated_at=1786356508914)
     (tmp_path / "bad.json").write_text("not json")
-    (tmp_path / "partial.json").write_text(json.dumps({"pid": 5}))
+    (tmp_path / "unnumbered.json").write_text(json.dumps({"sessionId": "c-d"}))
 
-    heartbeats = discovery.registry_heartbeats(tmp_path)
+    beats = discovery.registry_beats(tmp_path)
 
-    assert set(heartbeats) == {77730}
-    assert heartbeats[77730] == datetime.fromtimestamp(1786356508914 / 1000, tz=UTC)
+    assert set(beats) == {77730}
+    assert beats[77730] == discovery.Beat(
+        at=datetime.fromtimestamp(1786356508914 / 1000, tz=UTC),
+        status=Status.SHELL,
+    )
 
 
-def test_registry_heartbeats_tolerates_missing_directory(tmp_path):
-    assert discovery.registry_heartbeats(tmp_path / "nope") == {}
+def test_registry_beats_dates_a_status_an_older_record_dates_only_itself(tmp_path):
+    (tmp_path / "5.json").write_text(json.dumps({"pid": 5, "status": "busy", "updatedAt": 1786356508914}))
+
+    assert discovery.registry_beats(tmp_path)[5].at == datetime.fromtimestamp(1786356508914 / 1000, tz=UTC)
 
 
-def test_sort_key_puts_attention_first_then_busy():
+def test_registry_beats_keeps_a_record_that_dates_nothing(tmp_path):
+    (tmp_path / "5.json").write_text(json.dumps({"pid": 5, "status": "busy"}))
+
+    assert discovery.registry_beats(tmp_path)[5] == discovery.Beat(at=None, status=Status.BUSY)
+
+
+def test_registry_beats_tolerates_missing_directory(tmp_path):
+    assert discovery.registry_beats(tmp_path / "nope") == {}
+
+
+def test_sort_key_puts_attention_first_then_busy_then_shell():
     waiting = Session(session_id="a", cwd=Path("/tmp"), status=Status.WAITING)
     busy = Session(session_id="b", cwd=Path("/tmp"), status=Status.BUSY)
-    idle = Session(session_id="c", cwd=Path("/tmp"), status=Status.IDLE)
-    closed = Session(session_id="d", cwd=Path("/tmp"), status=Status.CLOSED)
+    shell = Session(session_id="c", cwd=Path("/tmp"), status=Status.SHELL)
+    idle = Session(session_id="d", cwd=Path("/tmp"), status=Status.IDLE)
+    closed = Session(session_id="e", cwd=Path("/tmp"), status=Status.CLOSED)
 
-    ordered = sorted([closed, idle, busy, waiting], key=discovery.sort_key)
+    ordered = sorted([closed, idle, shell, busy, waiting], key=discovery.sort_key)
 
-    assert [session.session_id for session in ordered] == ["a", "b", "c", "d"]
+    assert [session.session_id for session in ordered] == ["a", "b", "c", "d", "e"]
 
 
 def test_sort_key_puts_the_most_recently_closed_session_first():
@@ -316,7 +368,7 @@ MIXED_PAYLOAD = [
 def test_list_sessions_drops_background_by_default(monkeypatch):
     monkeypatch.setattr(discovery, "fetch_payload", lambda *a, **k: MIXED_PAYLOAD)
     monkeypatch.setattr(discovery, "process_table", dict)
-    monkeypatch.setattr(discovery, "registry_heartbeats", dict)
+    monkeypatch.setattr(discovery, "registry_beats", dict)
 
     sessions = discovery.list_sessions(interactive_only=True)
 
@@ -326,7 +378,7 @@ def test_list_sessions_drops_background_by_default(monkeypatch):
 def test_list_sessions_keeps_background_when_asked(monkeypatch):
     monkeypatch.setattr(discovery, "fetch_payload", lambda *a, **k: MIXED_PAYLOAD)
     monkeypatch.setattr(discovery, "process_table", dict)
-    monkeypatch.setattr(discovery, "registry_heartbeats", dict)
+    monkeypatch.setattr(discovery, "registry_beats", dict)
 
     sessions = discovery.list_sessions(interactive_only=False)
 
@@ -341,6 +393,7 @@ def registry_file(
     status: str = "busy",
     socket_path: str | None = None,
     updated_at: int = 1786356599914,
+    status_updated_at: int | None = None,
 ) -> None:
     entry = {
         "pid": pid,
@@ -351,6 +404,7 @@ def registry_file(
         "status": status,
         "startedAt": 1786356508914,
         "updatedAt": updated_at,
+        "statusUpdatedAt": status_updated_at or updated_at,
     }
     if socket_path is not None:
         entry["messagingSocketPath"] = socket_path
@@ -492,12 +546,12 @@ def test_relocated_config_dir_is_none_when_the_directory_is_the_default_one(monk
     assert discovery.relocated_config_dir() is None
 
 
-def test_heartbeats_and_transcripts_are_read_from_the_configured_directory(monkeypatch, tmp_path):
+def test_beats_and_transcripts_are_read_from_the_configured_directory(monkeypatch, tmp_path):
     registry_file(tmp_path / "sessions", 9, "a-b")
     transcript_file(tmp_path / "projects", "c-d")
     monkeypatch.setenv("CLAUDE_CONFIG_DIR", str(tmp_path))
 
-    assert discovery.registry_heartbeats()[9] == datetime.fromtimestamp(1786356599914 / 1000, tz=UTC)
+    assert discovery.registry_beats()[9].at == datetime.fromtimestamp(1786356599914 / 1000, tz=UTC)
     assert [session.session_id for session in discovery.transcript_sessions()] == ["c-d"]
 
 

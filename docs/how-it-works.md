@@ -8,7 +8,7 @@ and for whoever has to fix it.
 ## Discovery
 
 `claude agents --json` is the source of truth for what is live.
-Each entry is enriched with the controlling TTY from `ps` and the last heartbeat from the session registry under the Claude Code config directory.
+Each entry is enriched with the controlling TTY from `ps`, and with the last heartbeat and the published status from the session registry under the Claude Code config directory.
 
 Interactive sessions are found through per-process sockets in `/tmp/cc-socks`.
 A sandboxed shell can run the CLI but not list that directory,
@@ -16,14 +16,37 @@ in which case `claude agents --json` silently degrades to background agents only
 clownhead checks for that case and refuses,
 instead of reporting an empty herd.
 
+## Statuses
+
+A session publishes one of four states into its registry record: `busy`, `shell`, `idle`, `waiting`.
+`busy` is a model turn in flight or a delegated agent working.
+`shell` is a turn that has finished with a background command of its own still running.
+`waiting` is a prompt or a dialog with nobody answering it.
+
+`claude agents --json` hands out three of the four:
+everything that is neither idle nor waiting arrives as `busy`,
+which puts a session mid-turn and a session sitting on a half-hour-old background command under one word.
+clownhead reads the registry record the listing was built from and puts `shell` back,
+and undoes nothing else:
+the CLI is what decides a session is live at all, and a record outlives the session that wrote it.
+
+`shell` sorts below `busy` and above `idle`, and colours no terminal tab.
+A tab is coloured for what the session is doing on your behalf,
+and a session whose turn is over is one you can type into whatever its background command is still doing.
+
+The record dates the status it names,
+so `QUIET` is time in the current status rather than the last sign of life.
+A record old enough to date only itself answers with that instead,
+which was written the moment its status changed and so gives the same answer.
+
 ## Where it looks
 
 Sessions, transcripts and the registry live under `~/.claude` unless `CLAUDE_CONFIG_DIR` moves them,
 and the CLI scopes its listing to whichever directory it was invoked under.
 clownhead reads the same variable,
 so the herd is listed and enriched out of one directory.
-Get that wrong and `QUIET` empties out:
-the heartbeats are being looked for somewhere those sessions never wrote one.
+Get that wrong and `QUIET` empties out and every `shell` reads `busy`:
+both come from records being looked for somewhere those sessions never wrote one.
 A board watching a relocated directory says so in its top bar,
 since a herd listed out of the wrong one looks exactly like a quiet machine;
 `clownhead doctor` prints the directory it settled on either way.

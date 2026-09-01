@@ -24,6 +24,7 @@ STATUS_COLORS: dict[Status, Rgb | None] = {
     Status.BLOCKED: Rgb(203, 75, 22),
     Status.FAILED: Rgb(203, 75, 22),
     Status.BUSY: Rgb(38, 139, 210),
+    Status.SHELL: None,
     Status.IDLE: None,
     Status.COMPLETED: None,
     Status.CLOSED: None,
@@ -52,7 +53,13 @@ class SignalResult:
 
 
 def color_for(status: Status) -> Rgb | None:
-    """Tab colour for a status, or ``None`` when the tab should be left alone."""
+    """Tab colour for a status, or ``None`` when the tab should be left alone.
+
+    A tab is coloured for what it is doing on your behalf, so ``shell`` is left alone
+    alongside ``idle``: the turn is over and the session is yours to type into, whatever
+    its background command is still doing. The board says ``shell`` in the status column
+    for anyone who wants to know which of the two it is.
+    """
     return STATUS_COLORS.get(status)
 
 

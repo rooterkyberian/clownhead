@@ -37,9 +37,12 @@ which is ahead of the last release.
 
 ## Keys
 
-`QUIET` is time since the session last beat,
+`QUIET` is how long a live session has been in the status it is in,
 `AGE` is time since its process started,
 and the pane below the table carries the id, path, process and terminal the columns cannot fit.
+
+`STATUS` reads `busy` while a turn is in flight and `shell` once the turn is over with a background command still running.
+A row that has sat on `shell` for half an hour is usually a command nobody is waiting for any more.
 
 - `→` (or a click on the row) opens that session's conversation beside the board,
   usually the fastest way to tell what it is actually doing.

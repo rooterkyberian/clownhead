@@ -212,7 +212,7 @@ def _fleet(include_closed: bool) -> list[Session]:
             session_id=BACKFILL_SESSION,
             cwd=DEMO_HOME / DATA_PLATFORM,
             name="backfill-rerun",
-            status=Status.BUSY,
+            status=Status.SHELL,
             started_at=now - timedelta(minutes=26),
             updated_at=now - timedelta(seconds=3),
             tty=DEMO_HOME / "tty/ttys008",

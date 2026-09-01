@@ -13,11 +13,16 @@ from pydantic import BaseModel, ConfigDict, model_validator
 class Status(StrEnum):
     """State a Claude Code session reports about itself.
 
+    ``BUSY`` is a model turn in flight and ``SHELL`` is a turn already finished with a
+    background command still running — a distinction ``claude agents --json`` drops and
+    :func:`clownhead.discovery.refine` puts back from the registry.
+
     ``COMPLETED`` is a background agent the CLI reports as finished; ``CLOSED`` is an
     interactive session the registry remembers but the CLI no longer lists.
     """
 
     BUSY = "busy"
+    SHELL = "shell"
     IDLE = "idle"
     WAITING = "waiting"
     BLOCKED = "blocked"
@@ -54,7 +59,12 @@ def split_worktree(cwd: Path) -> tuple[Path, str | None]:
     return (Path(repo), name) if marker else (cwd, None)
 
 
-def _epoch_millis_to_datetime(value: Any) -> datetime | None:
+def epoch_millis_to_datetime(value: Any) -> datetime | None:
+    """A Claude Code timestamp as a datetime, and ``None`` where it was not one.
+
+    Every time Claude Code writes down is epoch milliseconds, and every one of them is
+    optional: a record names the moments it has and leaves out the rest.
+    """
     if isinstance(value, int | float):
         return datetime.fromtimestamp(value / 1000, tz=UTC)
     return None
@@ -97,8 +107,8 @@ class Session(BaseModel):
             "name": data.get("name"),
             "status": data.get("status", data.get("state", "unknown")),
             "waiting_for": data.get("waitingFor"),
-            "started_at": _epoch_millis_to_datetime(data.get("startedAt")),
-            "updated_at": _epoch_millis_to_datetime(data.get("updatedAt")),
+            "started_at": epoch_millis_to_datetime(data.get("startedAt")),
+            "updated_at": epoch_millis_to_datetime(data.get("updatedAt")),
         }
 
     @property

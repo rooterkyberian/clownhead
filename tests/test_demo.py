@@ -29,7 +29,7 @@ def loader(demo_home):
 
 def test_the_demo_fleet_covers_the_statuses_worth_showing(loader):
     statuses = {session.status for session in loader(True)}
-    assert statuses == {Status.WAITING, Status.BUSY, Status.IDLE, Status.CLOSED}
+    assert statuses == {Status.WAITING, Status.BUSY, Status.SHELL, Status.IDLE, Status.CLOSED}
 
 
 def test_closed_sessions_stay_out_until_they_are_asked_for(loader):
