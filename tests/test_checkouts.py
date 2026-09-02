@@ -19,7 +19,7 @@ def remotes(monkeypatch, mapping: dict[str, str]):
 
 
 ISSUE = Issue(tracker=Tracker.GITHUB, key="2", repo="widgets", owner="acme")
-TICKET = Issue(tracker=Tracker.JIRA, key="PLAT-4471", host="craft.atlassian.net")
+TICKET = Issue(tracker=Tracker.JIRA, key="PLAT-4471", host="kyberian.atlassian.net")
 
 
 def test_repos_for_puts_the_matching_remote_first(monkeypatch):

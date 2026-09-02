@@ -327,7 +327,7 @@ def test_send_message_refuses_a_socket_nobody_is_listening_on(monkeypatch, socke
         control.send_message(session(), "the migration finished", processes=table())
 
 
-@pytest.mark.parametrize("text", ["/compact", "/rename invoice-parser", "/craft:commit", "  /clear  "])
+@pytest.mark.parametrize("text", ["/compact", "/rename invoice-parser", "/kyberian:commit", "  /clear  "])
 def test_send_message_refuses_a_slash_command(monkeypatch, text):
     monkeypatch.setattr(control, "messaging_socket", lambda session_id, registry=None: pytest.fail("must not send"))
 

@@ -67,8 +67,8 @@ def test_mention_pattern_needs_the_repository_and_the_whole_number(text, expecte
             Issue(tracker=Tracker.GITHUB, key="7", repo="widgets", owner="acme"),
         ),
         (
-            "https://craft.atlassian.net/browse/PLAT-4471",
-            Issue(tracker=Tracker.JIRA, key="PLAT-4471", host="craft.atlassian.net"),
+            "https://kyberian.atlassian.net/browse/PLAT-4471",
+            Issue(tracker=Tracker.JIRA, key="PLAT-4471", host="kyberian.atlassian.net"),
         ),
         ("payments", None),
         ("#309", None),
@@ -152,9 +152,9 @@ def test_sessions_mentioning_tolerates_a_session_without_a_transcript(tmp_path):
 
 
 def test_sessions_mentioning_searches_for_an_issue_the_same_way(tmp_path):
-    transcript(tmp_path, "a-b", "picking up https://craft.atlassian.net/browse/PLAT-4471")
+    transcript(tmp_path, "a-b", "picking up https://kyberian.atlassian.net/browse/PLAT-4471")
     transcript(tmp_path, "c-d", "nothing to do with it", cwd="/tmp/two")
-    issue = Issue(tracker=Tracker.JIRA, key="PLAT-4471", host="craft.atlassian.net")
+    issue = Issue(tracker=Tracker.JIRA, key="PLAT-4471", host="kyberian.atlassian.net")
 
     found = sessions_mentioning(issue, [session("a-b"), session("c-d", "/tmp/two")], tmp_path)
 

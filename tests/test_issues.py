@@ -7,7 +7,7 @@ def github(number: str, repo: str = "widgets", owner: str = "acme") -> Issue:
     return Issue(tracker=Tracker.GITHUB, key=number, repo=repo, owner=owner)
 
 
-def jira(key: str = "PLAT-4471", host: str = "craft.atlassian.net") -> Issue:
+def jira(key: str = "PLAT-4471", host: str = "kyberian.atlassian.net") -> Issue:
     return Issue(tracker=Tracker.JIRA, key=key, host=host)
 
 
@@ -30,14 +30,14 @@ def test_parse_issue_reads_github_urls(reference, expected):
 @pytest.mark.parametrize(
     ("reference", "expected"),
     [
-        ("https://craft.atlassian.net/browse/PLAT-4471", jira()),
-        ("craft.atlassian.net/browse/PLAT-4471", jira()),
+        ("https://kyberian.atlassian.net/browse/PLAT-4471", jira()),
+        ("kyberian.atlassian.net/browse/PLAT-4471", jira()),
         ("https://jira.example.com/browse/PLAT-4471", jira(host="jira.example.com")),
         (
-            "https://craft.atlassian.net/jira/software/projects/PLAT/boards/1?selectedIssue=PLAT-4471",
+            "https://kyberian.atlassian.net/jira/software/projects/PLAT/boards/1?selectedIssue=PLAT-4471",
             jira(),
         ),
-        ("https://craft.atlassian.net/browse/plat-4471", jira()),
+        ("https://kyberian.atlassian.net/browse/plat-4471", jira()),
     ],
 )
 def test_parse_issue_reads_jira_urls(reference, expected):
@@ -85,7 +85,7 @@ def test_github_mention_pattern_needs_the_repository_and_the_whole_number(text, 
     ("text", "expected"),
     [
         ("PLAT-4471", True),
-        ("https://craft.atlassian.net/browse/PLAT-4471", True),
+        ("https://kyberian.atlassian.net/browse/PLAT-4471", True),
         ("~/dev/api/.claude/worktrees/plat-4471", True),
         ("PLAT-44710", False),
         ("PLAT-447", False),
@@ -101,7 +101,7 @@ def test_jira_mention_pattern_matches_the_whole_key_only(text, expected):
     ("reference", "expected"),
     [
         (github("2"), "https://github.com/acme/widgets/issues/2"),
-        (jira(), "https://craft.atlassian.net/browse/PLAT-4471"),
+        (jira(), "https://kyberian.atlassian.net/browse/PLAT-4471"),
     ],
 )
 def test_prompt_is_the_url_a_session_is_started_with(reference, expected):

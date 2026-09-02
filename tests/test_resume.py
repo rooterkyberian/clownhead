@@ -70,11 +70,11 @@ def test_start_plan_makes_the_worktree_and_names_the_session_after_it(tmp_path):
 
 
 def test_start_shell_command_runs_from_the_repository(tmp_path):
-    plan = start_plan(tmp_path, name="plat-4471", prompt="https://craft.atlassian.net/browse/PLAT-4471")
+    plan = start_plan(tmp_path, name="plat-4471", prompt="https://kyberian.atlassian.net/browse/PLAT-4471")
 
     assert plan.shell_command == (
         f"(cd {tmp_path} && claude --permission-mode plan --worktree plat-4471 "
-        "--name plat-4471 https://craft.atlassian.net/browse/PLAT-4471)"
+        "--name plat-4471 https://kyberian.atlassian.net/browse/PLAT-4471)"
     )
 
 
@@ -118,7 +118,7 @@ def test_the_carried_config_directory_is_environment_and_not_an_argument(monkeyp
 def test_starting_a_session_carries_the_config_directory_too(monkeypatch, tmp_path):
     monkeypatch.setenv(CONFIG_DIR_VAR, "/Users/you/.claude-personal")
 
-    plan = start_plan(tmp_path, name="plat-4471", prompt="https://craft.atlassian.net/browse/PLAT-4471")
+    plan = start_plan(tmp_path, name="plat-4471", prompt="https://kyberian.atlassian.net/browse/PLAT-4471")
 
     assert plan.shell_command.startswith(f"(cd {tmp_path} && CLAUDE_CONFIG_DIR=/Users/you/.claude-personal claude ")
 

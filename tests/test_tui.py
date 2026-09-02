@@ -371,8 +371,8 @@ async def test_tui_filters_the_fleet_by_issue(monkeypatch, tmp_path):
 
 async def test_tui_opens_already_pointed_at_a_reference(monkeypatch, tmp_path):
     monkeypatch.setenv("CLAUDE_CONFIG_DIR", str(tmp_path))
-    transcript(tmp_path, "4e020900-df7c", "https://craft.atlassian.net/browse/PLAT-4471 it is")
-    ticket = Issue(tracker=Tracker.JIRA, key="PLAT-4471", host="craft.atlassian.net")
+    transcript(tmp_path, "4e020900-df7c", "https://kyberian.atlassian.net/browse/PLAT-4471 it is")
+    ticket = Issue(tracker=Tracker.JIRA, key="PLAT-4471", host="kyberian.atlassian.net")
     app = build_app(target=ticket)
 
     async with app.run_test() as pilot:
@@ -381,7 +381,7 @@ async def test_tui_opens_already_pointed_at_a_reference(monkeypatch, tmp_path):
 
         assert table_of(app).row_count == 1
         assert "PLAT-4471" in title_of(app)
-        assert app.query_one("#filter", Input).value == "https://craft.atlassian.net/browse/PLAT-4471"
+        assert app.query_one("#filter", Input).value == "https://kyberian.atlassian.net/browse/PLAT-4471"
 
 
 async def test_tui_opened_on_an_issue_does_not_read_it_back_as_a_pull_request(monkeypatch, tmp_path):

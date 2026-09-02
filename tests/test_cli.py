@@ -638,7 +638,7 @@ def test_open_says_so_when_the_fleet_names_no_repository(monkeypatch):
 
 @pytest.mark.parametrize(
     "reference",
-    [ISSUE_URL, "https://github.com/acme/widgets/pull/42", "https://craft.atlassian.net/browse/PLAT-4471"],
+    [ISSUE_URL, "https://github.com/acme/widgets/pull/42", "https://kyberian.atlassian.net/browse/PLAT-4471"],
 )
 def test_a_bare_reference_reaches_open_without_naming_it(live_fleet, monkeypatch, reference, one_checkout):
     result = runner.invoke(cli.app, [reference, "--print"])
