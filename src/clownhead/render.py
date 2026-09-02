@@ -41,6 +41,7 @@ STATUS_STYLES: dict[Status, str] = {
     Status.IDLE: "dim",
     Status.COMPLETED: "dim",
     Status.CLOSED: "dim",
+    Status.ARCHIVED: "dim",
     Status.UNKNOWN: "dim",
 }
 

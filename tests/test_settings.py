@@ -6,11 +6,6 @@ from clownhead import settings as settings_store
 from clownhead.settings import Settings
 
 
-@pytest.fixture(autouse=True)
-def isolated_state(monkeypatch, tmp_path):
-    monkeypatch.setenv("CLOWNHEAD_STATE_DIR", str(tmp_path / "state"))
-
-
 def test_defaults_hide_the_process_columns_and_raise_on_ping():
     settings = Settings()
 

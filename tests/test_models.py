@@ -79,6 +79,16 @@ def test_calm_states(status):
     assert not Session.model_validate(payload).needs_attention
 
 
+@pytest.mark.parametrize("status", [Status.COMPLETED, Status.CLOSED, Status.ARCHIVED])
+def test_finished_states(status):
+    assert Session.model_validate({**INTERACTIVE_PAYLOAD, "status": status.value}).is_finished
+
+
+@pytest.mark.parametrize("status", [Status.IDLE, Status.BUSY, Status.SHELL, Status.WAITING])
+def test_unfinished_states(status):
+    assert not Session.model_validate({**INTERACTIVE_PAYLOAD, "status": status.value}).is_finished
+
+
 def test_age_and_quiet_for():
     now = datetime(2026, 1, 2, tzinfo=UTC)
     session = Session.model_validate(INTERACTIVE_PAYLOAD).model_copy(

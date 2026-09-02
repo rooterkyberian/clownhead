@@ -71,6 +71,11 @@ A row that has sat on `shell` for half an hour is usually a command nobody is wa
 - `c` folds in the sessions that have already ended.
   The count in the top bar is that same switch,
   and clicking it works too.
+- `a` archives a session that has ended,
+  which sinks it below the rest of the closed ones and leaves everything else about it alone.
+  Pressed again on an archived session it takes it back out,
+  and so does anything that brings the session back to life:
+  resuming it, or finding it running for any other reason.
 - `r` resumes a session that has ended, leaving the board up:
   a tmux window, an iTerm2 tab, or the clipboard, whichever the settings say.
   On a session still running it asks whether to fork it,
@@ -78,6 +83,9 @@ A row that has sat on `shell` for half an hour is usually a command nobody is wa
   and leaves the live one alone.
 - `R` renames it.
 - `t` asks whether to send its process SIGTERM, and can close its tab behind it.
+  The question comes with `[x] archive session` ticked,
+  since the session you are killing is usually one you are finished with;
+  `a` unticks it.
 - `,` opens the settings.
 - `^p` opens the command palette,
   which carries every key above by name and the three things with no key of their own:

@@ -57,6 +57,19 @@ def default_config_dir(monkeypatch) -> None:
     monkeypatch.delenv(CONFIG_DIR_VAR, raising=False)
 
 
+@pytest.fixture(autouse=True)
+def isolated_state(monkeypatch, tmp_path) -> Path:
+    """Answer the suite from a state directory of its own.
+
+    Settings and the archive of ended sessions live under ``CLOWNHEAD_STATE_DIR``, which
+    the suite both reads and writes — so without this a test would archive a session in
+    the developer's own board, and read back whatever was already there.
+    """
+    directory = tmp_path / "state"
+    monkeypatch.setenv("CLOWNHEAD_STATE_DIR", str(directory))
+    return directory
+
+
 @pytest.fixture
 def socket_dir() -> Iterator[Path]:
     """A directory short enough to hold a unix socket.

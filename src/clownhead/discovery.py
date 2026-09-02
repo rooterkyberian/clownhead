@@ -23,7 +23,7 @@ import json
 import os
 import re
 import subprocess
-from collections.abc import Iterable, Mapping, Sequence
+from collections.abc import Collection, Iterable, Mapping, Sequence
 from dataclasses import dataclass
 from datetime import UTC, datetime
 from enum import IntEnum, auto
@@ -33,6 +33,7 @@ from typing import Any
 
 from pydantic import ValidationError
 
+from clownhead import archive
 from clownhead.models import Kind, Session, Status, epoch_millis_to_datetime
 
 SOCKET_DIR = Path("/tmp/cc-socks")  # noqa: S108
@@ -59,6 +60,11 @@ class Rank(IntEnum):
     SHELL = auto()
     QUIET = auto()
     FINISHED = auto()
+    ARCHIVED = auto()
+
+
+ENDED_RANKS = frozenset({Rank.FINISHED, Rank.ARCHIVED})
+"""The ranks that sort newest-first, which is every rank a session that has ended can take."""
 
 
 @dataclass(frozen=True)
@@ -365,22 +371,29 @@ def closed_sessions(
     cwd: Path | None = None,
     registry: Path | None = None,
     transcripts: Path | None = None,
+    archived: Collection[str] | None = None,
 ) -> list[Session]:
-    """Sessions that have ended but can still be resumed, marked closed.
+    """Sessions that have ended but can still be resumed, marked closed or archived.
 
     Two records outlive a session. Its transcript is the complete one — that is all
     ``claude --resume`` needs — while the registry keeps the richer metadata but is
     pruned when a session exits cleanly, so it only contributes the ones that crashed.
     Registry facts win where both remember the same session.
 
+    ``archived`` is the set of session ids you have said you are done with, read from
+    :mod:`clownhead.archive` when it is not given. It only ever changes the status: an
+    archived session is still discovered and still resumable, and :func:`sort_key` puts it
+    below the rest.
+
     Neither the process id nor the TTY survives: the process is gone and its id may since
     have been recycled by something that would not enjoy being signalled.
     """
     live_ids = {session.session_id for session in live}
+    put_away = archive.load() if archived is None else archived
     remembered = {session.session_id: session for session in transcript_sessions(transcripts)}
     remembered.update({session.session_id: session for session in registry_sessions(registry)})
     return [
-        session.model_copy(update={"status": Status.CLOSED, "tty": None, "pid": None})
+        mark_archived(session.model_copy(update={"status": Status.CLOSED, "tty": None, "pid": None}), put_away)
         for session_id, session in remembered.items()
         if session_id and session_id not in live_ids and (cwd is None or session.cwd.is_relative_to(cwd))
     ]
@@ -510,11 +523,13 @@ def refine(listed: Status, published: Status) -> Status:
 
 
 def sort_key(session: Session) -> tuple[int, float]:
-    """Order sessions attention-first and finished last.
+    """Order sessions attention-first, finished last, and archived below those.
 
     Live sessions sort oldest-first, because a session that has been idle for a week is
     the one worth noticing. Finished ones sort newest-first, because the session you just
-    closed is the one you are most likely to want back.
+    closed is the one you are most likely to want back — and an archived one is the
+    session you have already said you are done with, so it goes under the rest of them
+    while staying on the board and staying resumable.
     """
     if session.needs_attention:
         rank = Rank.ATTENTION
@@ -522,12 +537,14 @@ def sort_key(session: Session) -> tuple[int, float]:
         rank = Rank.BUSY
     elif session.status is Status.SHELL:
         rank = Rank.SHELL
+    elif session.status is Status.ARCHIVED:
+        rank = Rank.ARCHIVED
     elif session.is_finished:
         rank = Rank.FINISHED
     else:
         rank = Rank.QUIET
     started = session.started_at.timestamp() if session.started_at else 0.0
-    return rank, -started if rank is Rank.FINISHED else started
+    return rank, -started if rank in ENDED_RANKS else started
 
 
 def list_sessions(
@@ -541,13 +558,33 @@ def list_sessions(
     With ``include_closed`` the listing also covers sessions that have ended: background
     agents the CLI reports as completed, and interactive sessions that survive only as a
     transcript on disk.
+
+    This is also where the archive is kept honest. Every session found running is taken
+    out of it, since a session being alive is the end of anyone being done with it, and a
+    listing is how clownhead learns that a session is alive — whoever resumed it, and
+    wherever they resumed it from. What is left of the archive is what marks the sessions
+    that have ended, live and closed alike.
     """
     live = parse_sessions(fetch_payload(cwd, include_completed=include_closed))
     kept = [session for session in live if session.kind is Kind.INTERACTIVE] if interactive_only else list(live)
-    sessions = enrich(kept, processes=process_table(), beats=registry_beats())
+    enriched = enrich(kept, processes=process_table(), beats=registry_beats())
+    archived = archive.restore(*(session.session_id for session in enriched if not session.is_finished))
+    sessions = [mark_archived(session, archived) for session in enriched]
     if include_closed:
-        sessions.extend(closed_sessions(live, cwd))
+        sessions.extend(closed_sessions(live, cwd, archived=archived))
     return sorted(sessions, key=sort_key)
+
+
+def mark_archived(session: Session, archived: Collection[str]) -> Session:
+    """A session the archive names, marked archived, and any other session unchanged.
+
+    Only a session that has ended can be marked. A running one has a status of its own to
+    report, and :func:`list_sessions` has already taken it out of the archive by the time
+    this sees it.
+    """
+    if session.is_finished and session.session_id in archived:
+        return session.model_copy(update={"status": Status.ARCHIVED})
+    return session
 
 
 def _newest_entry(session_id: str, registry: Path | None) -> dict[str, Any] | None:

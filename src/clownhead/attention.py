@@ -28,6 +28,7 @@ STATUS_COLORS: dict[Status, Rgb | None] = {
     Status.IDLE: None,
     Status.COMPLETED: None,
     Status.CLOSED: None,
+    Status.ARCHIVED: None,
     Status.UNKNOWN: None,
 }
 

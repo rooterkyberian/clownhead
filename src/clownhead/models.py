@@ -19,6 +19,10 @@ class Status(StrEnum):
 
     ``COMPLETED`` is a background agent the CLI reports as finished; ``CLOSED`` is an
     interactive session the registry remembers but the CLI no longer lists.
+
+    ``ARCHIVED`` is a closed session you have said you are done with — the one state here
+    that Claude Code has no opinion about, kept in clownhead's own state directory by
+    :mod:`clownhead.archive` and applied to the session when it is discovered.
     """
 
     BUSY = "busy"
@@ -29,6 +33,7 @@ class Status(StrEnum):
     FAILED = "failed"
     COMPLETED = "completed"
     CLOSED = "closed"
+    ARCHIVED = "archived"
     UNKNOWN = "unknown"
 
     @classmethod
@@ -48,7 +53,9 @@ class Kind(StrEnum):
 
 
 ATTENTION_STATES = frozenset({Status.WAITING, Status.BLOCKED, Status.FAILED})
-FINISHED_STATES = frozenset({Status.COMPLETED, Status.CLOSED})
+FINISHED_STATES = frozenset({Status.COMPLETED, Status.CLOSED, Status.ARCHIVED})
+CLOSED_STATES = frozenset({Status.CLOSED, Status.ARCHIVED})
+"""The two states an interactive session that has ended can be in, archived or not."""
 
 WORKTREE_MARKER = "/.claude/worktrees/"
 

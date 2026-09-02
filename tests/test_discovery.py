@@ -5,7 +5,7 @@ from pathlib import Path
 
 import pytest
 
-from clownhead import discovery
+from clownhead import archive, discovery
 from clownhead.models import Session, Status
 
 
@@ -319,6 +319,29 @@ def test_sort_key_puts_attention_first_then_busy_then_shell():
     assert [session.session_id for session in ordered] == ["a", "b", "c", "d", "e"]
 
 
+def test_sort_key_puts_an_archived_session_below_the_merely_closed_ones():
+    closed = Session(session_id="a", cwd=Path("/tmp"), status=Status.CLOSED)
+    archived = Session(session_id="b", cwd=Path("/tmp"), status=Status.ARCHIVED)
+    idle = Session(session_id="c", cwd=Path("/tmp"), status=Status.IDLE)
+
+    ordered = sorted([archived, closed, idle], key=discovery.sort_key)
+
+    assert [session.session_id for session in ordered] == ["c", "a", "b"]
+
+
+def test_sort_key_puts_the_most_recently_archived_session_first():
+    older = Session(
+        session_id="a", cwd=Path("/tmp"), status=Status.ARCHIVED, started_at=datetime(2026, 1, 1, tzinfo=UTC)
+    )
+    newer = Session(
+        session_id="b", cwd=Path("/tmp"), status=Status.ARCHIVED, started_at=datetime(2026, 5, 1, tzinfo=UTC)
+    )
+
+    ordered = sorted([older, newer], key=discovery.sort_key)
+
+    assert [session.session_id for session in ordered] == ["b", "a"]
+
+
 def test_sort_key_puts_the_most_recently_closed_session_first():
     older = Session(session_id="a", cwd=Path("/tmp"), status=Status.CLOSED, started_at=datetime(2026, 1, 1, tzinfo=UTC))
     newer = Session(session_id="b", cwd=Path("/tmp"), status=Status.CLOSED, started_at=datetime(2026, 5, 1, tzinfo=UTC))
@@ -461,6 +484,27 @@ def test_closed_sessions_are_the_ones_the_cli_no_longer_reports(tmp_path):
     assert closed[0].status is Status.CLOSED
     assert closed[0].name == "session-2"
     assert closed[0].updated_at == datetime.fromtimestamp(1786356599914 / 1000, tz=UTC)
+
+
+def test_closed_sessions_are_archived_where_the_archive_names_them(tmp_path):
+    registry_file(tmp_path, 1, "a-b")
+    registry_file(tmp_path, 2, "c-d")
+
+    closed = discovery.closed_sessions([], registry=tmp_path, archived={"c-d"})
+
+    assert {session.session_id: session.status for session in closed} == {
+        "a-b": Status.CLOSED,
+        "c-d": Status.ARCHIVED,
+    }
+
+
+def test_closed_sessions_read_the_archive_when_they_are_not_handed_one(tmp_path):
+    registry_file(tmp_path, 2, "c-d")
+    archive.archive("c-d")
+
+    closed = discovery.closed_sessions([], registry=tmp_path)
+
+    assert closed[0].status is Status.ARCHIVED
 
 
 def test_closed_sessions_drop_the_tty_and_pid_because_they_may_be_recycled(tmp_path):
@@ -783,6 +827,31 @@ def test_list_sessions_appends_closed_sessions_when_asked(monkeypatch, tmp_path)
 
     assert [session.session_id for session in sessions] == ["a-b", "e-f"]
     assert sessions[-1].status is Status.CLOSED
+
+
+def test_list_sessions_takes_a_session_that_is_running_back_out_of_the_archive(monkeypatch):
+    archive.archive("a-b")
+    monkeypatch.setattr(discovery, "fetch_payload", lambda *a, **k: MIXED_PAYLOAD)
+    monkeypatch.setattr(discovery, "process_table", dict)
+    monkeypatch.setattr(discovery, "registry_beats", dict)
+
+    sessions = discovery.list_sessions(interactive_only=True)
+
+    assert archive.load() == set()
+    assert sessions[0].status is Status.IDLE
+
+
+def test_list_sessions_marks_a_finished_agent_the_archive_names(monkeypatch, tmp_path):
+    archive.archive("c-d")
+    monkeypatch.setenv("CLAUDE_CONFIG_DIR", str(tmp_path))
+    payload = [{"sessionId": "c-d", "cwd": "/tmp/two", "kind": "background", "state": "completed"}]
+    monkeypatch.setattr(discovery, "fetch_payload", lambda *a, **k: payload)
+    monkeypatch.setattr(discovery, "process_table", dict)
+
+    sessions = discovery.list_sessions(include_closed=True)
+
+    assert [session.status for session in sessions] == [Status.ARCHIVED]
+    assert archive.load() == {"c-d"}
 
 
 def test_list_sessions_asks_the_cli_for_completed_agents_when_including_closed(monkeypatch, tmp_path):

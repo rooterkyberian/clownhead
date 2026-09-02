@@ -214,6 +214,13 @@ since a window can only show one.
 Claude Code writes its transcript as it goes,
 so a session given the chance to shut down cleanly leaves a file that can still be resumed.
 
+The question carries `[x] archive session`, ticked.
+Terminating a session is usually the moment you are finished with it,
+and the alternative is finding it again among the closed ones later to say so.
+`a` unticks it for the session you are killing to start again.
+The tick applies whether or not the process obeys the signal,
+since the archive holds a session id rather than a claim that the process is gone.
+
 Terminating a session leaves its terminal sitting at a shell prompt,
 which is a tab to close by hand for every session ended.
 The settings can close it instead,
@@ -321,6 +328,28 @@ and the third only in a repository that uses worktrees at all.
 read from the transcripts under `~/.claude/projects` plus whatever the session registry still remembers.
 Closed rows carry no PID or TTY:
 the process is gone and its id may since have been reused by something else.
+
+## Archiving
+
+Sessions that have ended pile up faster than they are resumed,
+and `a` is how the ones worth coming back to stay at the top.
+It archives the selected row,
+which sinks it under the closed sessions that have yet to be archived.
+Everything else about the session is left alone.
+It stays on the board, keeps its transcript, and `enter` still resumes it.
+`a` on an archived row takes it back out, and so does activity.
+Resuming from the board does it on the spot,
+and a session the CLI reports as running leaves the archive the next time the fleet is listed,
+whoever resumed it and wherever they resumed it from.
+Forking is the exception, since a fork runs under an id of its own
+and the session it was copied from is as ended as it was.
+
+The archive is clownhead's own note.
+Claude Code publishes no such state:
+it is a list of session ids in `archived.json` under the state directory,
+read when a session that has ended is discovered and applied to it as the `archived` status.
+Holding the id is what lets `t` archive a session while that session is still being signalled,
+and what lets the note outlive the registry record it was taken from.
 
 ## Resurrection
 

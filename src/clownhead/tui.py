@@ -28,12 +28,12 @@ from textual.notifications import SeverityLevel
 from textual.screen import ModalScreen, Screen
 from textual.widgets import DataTable, Footer, Input, Label, OptionList, Select, Static, Switch
 
-from clownhead import attention, checkouts, issues, pulls
+from clownhead import archive, attention, checkouts, issues, pulls
 from clownhead import settings as settings_store
 from clownhead.control import SLASH_COMMAND, close_tab, rename, send_message, shell_of, terminate, wait_for_exit
 from clownhead.discovery import Message, Process, process_table, recent_messages, relocated_config_dir
 from clownhead.issues import Unavailable
-from clownhead.models import Session, Status, split_worktree
+from clownhead.models import CLOSED_STATES, Session, Status, split_worktree
 from clownhead.panes import open_session, type_into
 from clownhead.pulls import Pull
 from clownhead.pulls import Status as PullStatus
@@ -230,6 +230,76 @@ class ConfirmScreen(ModalScreen[bool]):
     def action_cancel(self) -> None:
         """Answer no."""
         self.dismiss(False)
+
+
+class TerminateScreen(ModalScreen[bool | None]):
+    """Whether to signal a session, and whether to archive it once it has gone.
+
+    Archiving is offered here because terminating a session is when you know you are done
+    with it, and the alternative is finding it again among the closed ones later to say
+    so. It starts ticked for the same reason, and `a` unticks it for the session you are
+    killing to start again.
+
+    The tick applies whichever way the signal goes: a session that ignores SIGTERM is
+    archived all the same, since the archive is a note about a session id rather than a
+    claim that the process is gone, and an id archived by mistake is untickable from the
+    board with `a`.
+
+    It answers ``True`` for terminate and archive, ``False`` for terminate alone, and
+    ``None`` for neither.
+    """
+
+    CSS = """
+    TerminateScreen {
+        align: center middle;
+    }
+    #sheet {
+        width: 60;
+        height: auto;
+        padding: 1 2;
+        border: round $error;
+        background: $surface;
+    }
+    """
+
+    BINDINGS = [
+        Binding("y", "confirm", "yes"),
+        Binding("enter", "confirm", "yes"),
+        Binding("a", "toggle_archive", "archive"),
+        Binding("n", "cancel", "no"),
+        Binding("escape", "cancel", "no"),
+    ]
+
+    def __init__(self, question: str, archive_it: bool = True) -> None:
+        super().__init__()
+        self._question = question
+        self._archive = archive_it
+
+    def compose(self) -> ComposeResult:
+        """Ask, with the archive tick under the question and the keys under that."""
+        with Vertical(id="sheet"):
+            yield Static(self._question)
+            yield Static(self._archive_line(), id="archive")
+            yield Static("[dim]y to confirm · a for the tick · esc to cancel[/]")
+
+    def action_toggle_archive(self) -> None:
+        """Tick the archive box, or untick it."""
+        self._archive = not self._archive
+        self.query_one("#archive", Static).update(self._archive_line())
+
+    def action_confirm(self) -> None:
+        """Answer yes, to whatever the tick currently says."""
+        self.dismiss(self._archive)
+
+    def action_cancel(self) -> None:
+        """Answer no."""
+        self.dismiss(None)
+
+    def _archive_line(self) -> str:
+        """The tick, with brackets escaped so Rich reads them as a box and not as markup."""
+        if self._archive:
+            return r"\[x] archive session"
+        return r"[dim]\[ ] archive session[/]"
 
 
 class CleanupScreen(ModalScreen[bool | None]):
@@ -1010,6 +1080,7 @@ class FleetApp(App[None]):
         Binding("n", "start", "new session"),
         Binding("s", "send", "send"),
         Binding("c", "toggle_closed", "closed", show=False),
+        Binding("a", "archive", "archive", show=False),
         Binding("r", "resume_in_terminal", "resume"),
         Binding("R", "rename", "rename"),
         Binding("t", "terminate", "terminate"),
@@ -1033,7 +1104,9 @@ class FleetApp(App[None]):
     takes the shift because it is the rarer of the two and the one that changes what every
     other session calls this one. `c` is hidden because the top bar says it better — the
     count of closed sessions is the switch, and a switch that shows the number it would fold
-    in needs no key advertised beside it.
+    in needs no key advertised beside it. `a` is hidden for a related reason: it answers
+    only on a session that has ended, which is a board you have already pressed `c` to be
+    looking at.
 
     `enter` leads because it is the one key that means the same thing on every row — get me
     into this session — and the board answers it by whichever route that row needs, where
@@ -1204,6 +1277,12 @@ class FleetApp(App[None]):
                 "Send its process SIGTERM, once it has been confirmed",
                 self.action_terminate,
             )
+        if self._has_ended():
+            yield SystemCommand(
+                "Archive this session",
+                "Sink it below the other closed ones, or take it back out of the archive",
+                self.action_archive,
+            )
         yield SystemCommand(
             "Retire this session's worktree",
             "Remove the checkout it worked in, leaving its branch behind",
@@ -1218,15 +1297,21 @@ class FleetApp(App[None]):
     def check_action(self, action: str, parameters: tuple[object, ...]) -> bool | None:
         """Whether an action is offered for the session under the cursor.
 
-        `t` and `s` are the ones that ever answer no, and they answer it together: both
-        need the session's process. A session that has ended keeps its transcript and
-        whatever the registry remembers, and the process id both once held is dropped from
-        them precisely because that id may since have been handed to something else — so
-        SIGTERM has nowhere to go, the socket that took prompts went with the process, and
-        either key could only answer with a refusal. Hidden rather than greyed out, which
-        is Textual's other answer: the footer truncates as it is, and the width is worth
-        more to a key that still does something.
+        `t` and `s` answer no together: both need the session's process. A session that has
+        ended keeps its transcript and whatever the registry remembers, and the process id
+        both once held is dropped from them precisely because that id may since have been
+        handed to something else — so SIGTERM has nowhere to go, the socket that took
+        prompts went with the process, and either key could only answer with a refusal.
+
+        `a` is the mirror of those two, and answers no for a session that is still running:
+        archiving decides where an ended session sits among the other ended ones, and a
+        live session has a status of its own that says where it sits.
+
+        Hidden rather than greyed out, which is Textual's other answer: the footer truncates
+        as it is, and the width is worth more to a key that still does something.
         """
+        if action == "archive":
+            return self._has_ended()
         if action not in {"terminate", "send"}:
             return True
         return self._has_process()
@@ -1235,6 +1320,11 @@ class FleetApp(App[None]):
         """Whether the session under the cursor still has a process to reach."""
         session = self.selected_session
         return session is not None and session.pid is not None
+
+    def _has_ended(self) -> bool:
+        """Whether the session under the cursor is one that has finished."""
+        session = self.selected_session
+        return session is not None and session.is_finished
 
     @property
     def columns(self) -> tuple[str, ...]:
@@ -1303,6 +1393,7 @@ class FleetApp(App[None]):
         if not session.is_finished:
             self.action_focus_session()
             return
+        archive.restore(session.session_id)
         self._launch = resume_plan(session)
         self.exit()
 
@@ -1482,10 +1573,10 @@ class FleetApp(App[None]):
         question = f"[bold]Send SIGTERM to {session.label}?[/]\n[dim]{where} · {session.reason}[/]"
         if self._settings.close_tab_on_terminate:
             question += "\n[dim]its terminal tab closes once it has exited[/]"
-        self.push_screen(ConfirmScreen(question), partial(self._terminate, session))
+        self.push_screen(TerminateScreen(question), partial(self._terminate, session))
 
-    def _terminate(self, session: Session, confirmed: bool | None) -> None:
-        if not confirmed:
+    def _terminate(self, session: Session, archive_it: bool | None) -> None:
+        if archive_it is None:
             return
         processes = process_table()
         try:
@@ -1493,6 +1584,8 @@ class FleetApp(App[None]):
         except (LookupError, OSError) as error:
             self.notify(str(error), title="not terminated", severity="error")
             return
+        if archive_it:
+            archive.archive(session.session_id)
         self.notify(f"SIGTERM sent to {session.label}", severity="warning")
         if self._settings.close_tab_on_terminate and session.pid is not None:
             self._close_tab(session, session.pid, processes)
@@ -1682,6 +1775,36 @@ class FleetApp(App[None]):
         self._show_closed = not self._show_closed
         self.start_reload()
 
+    def action_archive(self) -> None:
+        """Put the selected session that has ended away, or take it back out.
+
+        Archiving sinks a session below the rest of the closed ones and leaves everything
+        else about it alone: it stays on the board, keeps its transcript, and `enter` still
+        resumes it. It is the answer to a board where the closed sessions worth coming back
+        to are buried under a fortnight of ones that are not.
+
+        Only offered for a session that has ended, because a live one has a status of its
+        own to report and would lose it the moment it was archived.
+        """
+        session = self.selected_session
+        if session is None:
+            self.notify("nothing selected", severity="warning")
+            return
+        if not session.is_finished:
+            self.notify(f"{session.label} is still running", title="not archived", severity="warning")
+            return
+        try:
+            if session.status is Status.ARCHIVED:
+                archive.restore(session.session_id)
+                self.notify(f"{session.label} is back among the closed")
+            else:
+                archive.archive(session.session_id)
+                self.notify(f"{session.label} archived")
+        except OSError as error:
+            self.notify(str(error), title="archive not written", severity="error")
+            return
+        self.start_reload()
+
     def action_copy_resume(self) -> None:
         """Copy the shell command that resumes the selected session where it left off."""
         session = self.selected_session
@@ -1722,13 +1845,25 @@ class FleetApp(App[None]):
         self._resume(session, fork=True)
 
     def _resume(self, session: Session, fork: bool) -> None:
+        """Open the session somewhere, and take it out of the archive on the way.
+
+        A session being resumed is a session somebody is no longer done with, and the
+        listing would work that out for itself on the next reload — but only once the
+        resumed session is up, and the clipboard route leaves that for whenever the command
+        is pasted. Doing it here is what makes the row change under the cursor that pressed
+        the key. A fork is exempt: it carries an id of its own, and the session it was
+        copied from stays as ended as it was.
+        """
         what = "forked" if fork else "resumed"
         try:
             where = open_session(resume_plan(session, fork), self._settings.resume_in, session.label)
         except (LookupError, OSError) as error:
             self.notify(str(error), title=f"not {what}", severity="error")
             return
+        if not fork:
+            archive.restore(session.session_id)
         self.notify(f"{session.label} {what} {where}")
+        self.start_reload()
 
     def action_filter(self) -> None:
         """Reveal the filter box and type into it."""
@@ -2058,7 +2193,7 @@ class FleetApp(App[None]):
         """
         if not self._show_closed:
             return r"[@click=app.toggle_closed]show \[c]losed[/]"
-        finished = sum(1 for session in self._visible if session.status is Status.CLOSED)
+        finished = sum(1 for session in self._visible if session.status in CLOSED_STATES)
         return rf"[@click=app.toggle_closed]{finished} \[c]losed[/]"
 
 

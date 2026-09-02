@@ -6,6 +6,7 @@ from rich.console import Console
 from rich.markup import render as render_markup
 from textual.widgets import DataTable, Input, Select, Static, Switch
 
+from clownhead import archive
 from clownhead import settings as settings_store
 from clownhead import tui as tui_module
 from clownhead.discovery import Message, Process
@@ -32,11 +33,6 @@ def process_snapshot(monkeypatch) -> dict[int, Process]:
     snapshot = {77730: Process(pid=77730, ppid=55997, tty=Path("/dev/ttys004"), command="claude --resume")}
     monkeypatch.setattr(tui_module, "process_table", lambda: snapshot)
     return snapshot
-
-
-@pytest.fixture(autouse=True)
-def isolated_state(monkeypatch, tmp_path):
-    monkeypatch.setenv("CLOWNHEAD_STATE_DIR", str(tmp_path / "state"))
 
 
 @pytest.fixture(autouse=True)
@@ -752,6 +748,20 @@ async def test_tui_enter_on_a_closed_session_leaves_the_board_to_resume_it():
     assert app.launch.argv == ("claude", "--resume", "87e26be1-0000")
 
 
+async def test_tui_enter_on_an_archived_session_takes_it_back_out_of_the_archive():
+    archive.archive("87e26be1-0000")
+    ended = Session(session_id="87e26be1-0000", cwd=Path("/tmp/design-system"), status=Status.ARCHIVED)
+    app = build_app(sessions=[ended], settings=Settings(paint_tabs=False))
+
+    async with app.run_test() as pilot:
+        await settle(app, pilot)
+        await pilot.press("enter")
+        await pilot.pause()
+
+    assert app.launch is not None
+    assert archive.load() == set()
+
+
 async def test_tui_clicking_a_row_reads_it_rather_than_going_to_it(monkeypatch):
     monkeypatch.setattr(tui_module, "recent_messages", lambda session_id, limit: [])
     terminal = SilentTerminal()
@@ -1070,7 +1080,7 @@ async def test_tui_terminate_asks_before_signalling_anything(monkeypatch):
         await pilot.press("t")
         await pilot.pause()
 
-        assert isinstance(app.screen, tui_module.ConfirmScreen)
+        assert isinstance(app.screen, tui_module.TerminateScreen)
         assert killed == []
 
 
@@ -1131,7 +1141,150 @@ async def test_tui_terminate_on_an_empty_fleet_asks_nothing(monkeypatch):
         await pilot.press("t")
         await pilot.pause()
 
-        assert not isinstance(app.screen, tui_module.ConfirmScreen)
+        assert not isinstance(app.screen, tui_module.TerminateScreen)
+
+
+async def test_tui_terminate_ticks_the_archive_box_to_start_with(monkeypatch):
+    monkeypatch.setattr(tui_module, "terminate", lambda session, processes: None)
+    app = build_app()
+
+    async with app.run_test() as pilot:
+        await settle(app, pilot)
+        await pilot.press("t")
+        await pilot.pause()
+
+        assert "[x] archive session" in str(app.screen.query_one("#archive", Static).content)
+
+        await pilot.press("a")
+        await pilot.pause()
+
+        assert "[ ] archive session" in str(app.screen.query_one("#archive", Static).content)
+
+
+async def test_tui_terminate_archives_the_session_it_signalled(monkeypatch):
+    monkeypatch.setattr(tui_module, "terminate", lambda session, processes: None)
+    app = build_app()
+
+    async with app.run_test() as pilot:
+        await settle(app, pilot)
+        await pilot.press("t")
+        await pilot.pause()
+        await pilot.press("y")
+        await pilot.pause()
+
+        assert archive.load() == {"4e020900-df7c"}
+
+
+async def test_tui_terminate_archives_nothing_once_the_tick_is_taken_off(monkeypatch):
+    killed: list[str] = []
+    monkeypatch.setattr(tui_module, "terminate", lambda session, processes: killed.append(session.label))
+    app = build_app()
+
+    async with app.run_test() as pilot:
+        await settle(app, pilot)
+        await pilot.press("t")
+        await pilot.pause()
+        await pilot.press("a")
+        await pilot.press("y")
+        await pilot.pause()
+
+        assert killed == ["payments-api-7c"]
+        assert archive.load() == set()
+
+
+async def test_tui_terminate_archives_nothing_when_the_question_is_declined(monkeypatch):
+    monkeypatch.setattr(tui_module, "terminate", lambda session, processes: None)
+    app = build_app()
+
+    async with app.run_test() as pilot:
+        await settle(app, pilot)
+        await pilot.press("t")
+        await pilot.pause()
+        await pilot.press("escape")
+        await pilot.pause()
+
+        assert archive.load() == set()
+
+
+async def test_tui_terminate_archives_nothing_when_the_signal_was_refused(monkeypatch):
+    def refuse(session, processes):
+        raise LookupError("pid 77730 is gone")
+
+    monkeypatch.setattr(tui_module, "terminate", refuse)
+    app = build_app()
+
+    async with app.run_test() as pilot:
+        await settle(app, pilot)
+        await pilot.press("t")
+        await pilot.pause()
+        await pilot.press("y")
+        await pilot.pause()
+
+        assert archive.load() == set()
+
+
+async def test_tui_archive_puts_an_ended_session_away():
+    app = build_app(sessions=[closed_session()], include_closed=True)
+
+    async with app.run_test() as pilot:
+        await settle(app, pilot)
+        await pilot.press("a")
+        await pilot.pause()
+
+        assert archive.load() == {"9a1b2c3d-eeee"}
+        assert "invoice-parser-3d archived" in notified(app)
+
+
+async def test_tui_archive_takes_an_archived_session_back_out():
+    archive.archive("9a1b2c3d-eeee")
+    put_away = closed_session().model_copy(update={"status": Status.ARCHIVED})
+    app = build_app(sessions=[put_away], include_closed=True)
+
+    async with app.run_test() as pilot:
+        await settle(app, pilot)
+        await pilot.press("a")
+        await pilot.pause()
+
+        assert archive.load() == set()
+        assert "back among the closed" in notified(app)
+
+
+async def test_tui_archive_leaves_a_session_that_is_still_running_alone():
+    app = build_app()
+
+    async with app.run_test() as pilot:
+        await settle(app, pilot)
+        app.action_archive()
+        await pilot.pause()
+
+        assert archive.load() == set()
+        assert "payments-api-7c is still running" in notified(app)
+
+
+async def test_tui_archive_on_an_empty_fleet_archives_nothing():
+    app = build_app(sessions=[])
+
+    async with app.run_test() as pilot:
+        await settle(app, pilot)
+        app.action_archive()
+        await pilot.pause()
+
+        assert archive.load() == set()
+        assert "nothing selected" in notified(app)
+
+
+async def test_the_palette_offers_archiving_only_for_a_session_that_has_ended():
+    app = build_app(sessions=[*fleet(), closed_session()], include_closed=True)
+
+    async with app.run_test() as pilot:
+        await settle(app, pilot)
+
+        assert "Archive this session" not in {command.title for command in app.get_system_commands(app.screen)}
+
+        table_of(app).move_cursor(row=2)
+        await pilot.pause()
+
+        assert "Archive this session" in {command.title for command in app.get_system_commands(app.screen)}
 
 
 @pytest.fixture
@@ -1450,7 +1603,7 @@ async def test_terminate_signals_nothing_when_the_process_is_gone(monkeypatch):
         await pilot.press("t")
         await pilot.pause()
 
-        assert not isinstance(app.screen, tui_module.ConfirmScreen)
+        assert not isinstance(app.screen, tui_module.TerminateScreen)
 
 
 async def test_every_command_the_palette_offers_explains_itself():
@@ -1921,6 +2074,36 @@ async def test_tui_resume_opens_a_closed_session_where_the_settings_say(monkeypa
 
         assert opened == [("/tmp/invoice-parser", ResumeIn.TMUX, "invoice-parser-3d")]
         assert [n.message for n in app._notifications] == ["invoice-parser-3d resumed in tmux window x"]
+
+
+async def test_tui_resume_takes_an_archived_session_back_out_of_the_archive(monkeypatch):
+    monkeypatch.setattr(tui_module, "open_session", lambda plan, how, name: "in tmux window x")
+    archive.archive("9a1b2c3d-eeee")
+    put_away = closed_session().model_copy(update={"status": Status.ARCHIVED})
+    app = build_app(sessions=[put_away], settings=Settings(resume_in=ResumeIn.TMUX))
+
+    async with app.run_test() as pilot:
+        await settle(app, pilot)
+        await pilot.press("r")
+        await pilot.pause()
+
+        assert archive.load() == set()
+
+
+async def test_tui_fork_leaves_the_session_it_was_copied_from_archived(monkeypatch):
+    """A fork carries an id of its own, so the session behind it is as ended as it was."""
+    monkeypatch.setattr(tui_module, "open_session", lambda plan, how, name: "in tmux window x")
+    archive.archive("4e020900-df7c")
+    app = build_app(settings=Settings(resume_in=ResumeIn.TMUX))
+
+    async with app.run_test() as pilot:
+        await settle(app, pilot)
+        await pilot.press("r")
+        await pilot.pause()
+        await pilot.press("y")
+        await pilot.pause()
+
+        assert archive.load() == {"4e020900-df7c"}
 
 
 async def test_tui_resume_offers_to_fork_a_session_that_is_still_running(monkeypatch):
