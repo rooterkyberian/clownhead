@@ -184,6 +184,16 @@ so a directory that happens to share the name is dropped.
 It costs one `git` call, and it is what puts a checkout at the top of the list
 for a pull request opened from the web that no session here has ever touched.
 
+A repository Claude Code has never been run in gets no worktree, and the sheet says so on the row and under the command.
+Claude Code refuses to make one where its workspace-trust dialog has not been accepted,
+and that dialog only comes up once a session is running there,
+so the first session in a checkout works in the checkout and every later one gets a worktree.
+Which checkouts those are is read from `hasTrustDialogAccepted` in the config directory's `.claude.json`
+— `~/.claude.json` for the default directory, since that file predates the directory.
+A file that cannot be read means nothing is known rather than nothing is trusted,
+and the worktree stays: being wrong that way costs one dialog,
+where the other way would drop the worktree from every start on the machine.
+
 `enter` and `n` both end the board and hand the terminal to `claude`.
 The board puts the command down and whoever launched it runs it,
 since a process replaced while a screen is still up would leave the shell wearing a terminal in raw mode.

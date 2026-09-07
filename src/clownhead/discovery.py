@@ -150,6 +150,40 @@ def transcript_root() -> Path:
     return config_dir() / "projects"
 
 
+def trust_file() -> Path:
+    """Where Claude Code records which directories you have agreed to let it work in.
+
+    Beside the config directory rather than inside it, and at ``~/.claude.json`` for the
+    default one — which is the spelling of a file that predates the directory, not one
+    derivable from it. A relocated directory keeps its own, so trust is scoped the same
+    way sessions and transcripts are.
+    """
+    directory = config_dir()
+    return Path.home() / ".claude.json" if directory == DEFAULT_CONFIG_DIR else directory / ".claude.json"
+
+
+def trusted_dirs() -> set[Path] | None:
+    """Every directory whose workspace-trust dialog has been accepted, or ``None``.
+
+    ``None`` means the question could not be answered — no file, unreadable, or not the
+    JSON it should be — which is a different thing from an empty set. Callers treat it as
+    *assume trusted*: refusing a worktree everywhere because one file moved would break
+    the case that works today, where being wrong the other way costs one dialog.
+    """
+    try:
+        payload = json.loads(trust_file().read_text())
+    except (OSError, json.JSONDecodeError):
+        return None
+    projects = payload.get("projects") if isinstance(payload, dict) else None
+    if not isinstance(projects, dict):
+        return None
+    return {Path(path) for path, record in projects.items() if _trusted(record)}
+
+
+def _trusted(record: Any) -> bool:
+    return isinstance(record, dict) and record.get("hasTrustDialogAccepted") is True
+
+
 def peer_discovery_available() -> bool:
     """Whether the peer socket directory is listable.
 

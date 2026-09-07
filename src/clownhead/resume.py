@@ -71,12 +71,18 @@ def resume_plan(session: Session, fork: bool = False) -> Launch:
     return Launch(session.cwd, argv, env)
 
 
-def start_plan(repo: Path, *, name: str, prompt: str) -> Launch:
+def start_plan(repo: Path, *, name: str, prompt: str, worktree: bool = True) -> Launch:
     """Where to start a session for a reference, and the command that does it.
 
     Claude Code makes the worktree itself, which is the same ``--worktree`` that rebuilds
     a pruned one on resume — so nothing here asks git for anything, and a name that has
     been used before is attached to rather than refused.
+
+    ``worktree`` is what a caller sets false for a repository Claude Code has never been
+    run in. It refuses to make a worktree in a directory whose trust dialog has not been
+    accepted, and the dialog only comes up once a session is running there — so the first
+    session in a checkout works in the checkout, and every one after it gets a worktree.
+    See :func:`clownhead.discovery.trusted_dirs` for how that is known in advance.
 
     The name is spent twice on purpose. As a worktree it is the directory the work happens
     in; as ``--name`` it is what the session calls itself in the prompt box, the terminal
@@ -90,7 +96,8 @@ def start_plan(repo: Path, *, name: str, prompt: str) -> Launch:
     it back is the answer worth having; a session that started editing on the strength of
     an issue title is the one you would have to unpick.
     """
-    argv = ("claude", "--permission-mode", "plan", "--worktree", name, "--name", name, prompt)
+    tree = ("--worktree", name) if worktree else ()
+    argv = ("claude", "--permission-mode", "plan", *tree, "--name", name, prompt)
     return Launch(repo, argv, carried_env())
 
 

@@ -137,3 +137,11 @@ def test_resume_plan_forks_the_conversation_when_asked(tmp_path):
 
 def test_resume_plan_keeps_the_session_id_by_default(tmp_path):
     assert "--fork-session" not in resume_plan(session(tmp_path)).argv
+
+
+def test_start_plan_leaves_the_worktree_out_where_claude_has_not_been_run(tmp_path):
+    """Claude Code refuses a worktree in a directory whose trust dialog is unanswered."""
+    plan = start_plan(tmp_path, name="issue-2", prompt="https://example.invalid/2", worktree=False)
+
+    assert "--worktree" not in plan.argv
+    assert plan.argv == ("claude", "--permission-mode", "plan", "--name", "issue-2", "https://example.invalid/2")

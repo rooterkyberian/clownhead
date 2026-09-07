@@ -7,6 +7,7 @@ from pathlib import Path
 
 import pytest
 
+from clownhead import discovery
 from clownhead import pulls as pulls_module
 from clownhead.discovery import CONFIG_DIR_VAR
 from clownhead.pulls import Pull, Status
@@ -55,6 +56,31 @@ def default_config_dir(monkeypatch) -> None:
     and disagree with CI about commands that carry it. Tests that care set it themselves.
     """
     monkeypatch.delenv(CONFIG_DIR_VAR, raising=False)
+
+
+REAL_TRUST_FILE = discovery.trust_file
+"""Captured before :func:`unknown_trust` replaces it, for the tests about where it points."""
+
+
+@pytest.fixture
+def real_trust_file() -> Callable[[], Path]:
+    """The unpatched :func:`clownhead.discovery.trust_file`."""
+    return REAL_TRUST_FILE
+
+
+@pytest.fixture(autouse=True)
+def unknown_trust(monkeypatch, tmp_path) -> Path:
+    """Answer the suite from a workspace-trust file of its own, which starts out absent.
+
+    ``~/.claude.json`` is the developer's own, and it decides whether a start command
+    carries ``--worktree`` — so a suite reading it would assert on whichever directories
+    that developer happens to have accepted a dialog in. Absent reads as *nothing is
+    known*, which is what every test that has no opinion about trust wants; the ones that
+    do write this file.
+    """
+    trust = tmp_path / "trust.json"
+    monkeypatch.setattr(discovery, "trust_file", lambda: trust)
+    return trust
 
 
 @pytest.fixture(autouse=True)

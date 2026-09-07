@@ -574,6 +574,49 @@ def test_config_dir_falls_back_to_the_claude_default(monkeypatch, override):
     assert discovery.config_dir() == Path.home() / ".claude"
 
 
+def trust(path: Path, projects: dict[str, bool]) -> None:
+    payload = {"projects": {name: {"hasTrustDialogAccepted": accepted} for name, accepted in projects.items()}}
+    path.write_text(json.dumps(payload))
+
+
+def test_trust_file_sits_inside_a_relocated_config_directory(monkeypatch, tmp_path, real_trust_file):
+    monkeypatch.setenv("CLAUDE_CONFIG_DIR", str(tmp_path / "elsewhere"))
+
+    assert real_trust_file() == tmp_path / "elsewhere" / ".claude.json"
+
+
+@pytest.mark.parametrize("override", ["", "~/.claude"])
+def test_trust_file_is_beside_the_home_directory_for_the_default_one(monkeypatch, override, real_trust_file):
+    """The file predates the config directory, so it is not derived from it."""
+    monkeypatch.setenv("CLAUDE_CONFIG_DIR", override)
+
+    assert real_trust_file() == Path.home() / ".claude.json"
+
+
+def test_trusted_dirs_reads_the_directories_whose_dialog_was_accepted(unknown_trust):
+    trust(unknown_trust, {"/dev/widgets": True, "/dev/gadgets": False})
+
+    assert discovery.trusted_dirs() == {Path("/dev/widgets")}
+
+
+def test_trusted_dirs_says_nothing_is_known_rather_than_nothing_is_trusted(unknown_trust):
+    """A caller keeps its worktree on ``None`` and drops it on an empty set, so they differ."""
+    assert discovery.trusted_dirs() is None
+
+
+@pytest.mark.parametrize("body", ["not json at all", '{"projects": []}', "[]"])
+def test_trusted_dirs_says_nothing_is_known_of_a_file_it_cannot_read(unknown_trust, body):
+    unknown_trust.write_text(body)
+
+    assert discovery.trusted_dirs() is None
+
+
+def test_trusted_dirs_answers_empty_where_nothing_has_been_accepted(unknown_trust):
+    trust(unknown_trust, {"/dev/widgets": False})
+
+    assert discovery.trusted_dirs() == set()
+
+
 def test_relocated_config_dir_names_a_moved_directory(monkeypatch, tmp_path):
     monkeypatch.setenv("CLAUDE_CONFIG_DIR", str(tmp_path / "elsewhere"))
 

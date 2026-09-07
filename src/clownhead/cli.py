@@ -365,7 +365,11 @@ def _print_reference(target: Reference, sessions: list[Session]) -> None:
         console.print("[dim]no repository to start one in — the fleet names none[/]")
         return
     name = issues.slug(target.base_slug, issues.fetch_title(target.title_query))
-    _print_command(start_plan(repos[0], name=name, prompt=target.prompt).shell_command)
+    trusted = discovery.trusted_dirs()
+    worktree = trusted is None or repos[0] in trusted
+    if not worktree:
+        console.print("[dim]claude has not been run there, so this first session works in the checkout[/]")
+    _print_command(start_plan(repos[0], name=name, prompt=target.prompt, worktree=worktree).shell_command)
 
 
 def _print_command(command: str) -> None:

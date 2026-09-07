@@ -181,6 +181,9 @@ That sheet leads with the checkout of the pull request's own repository,
 found by name beside the checkouts the fleet already works in
 and confirmed by what its `origin` says,
 so a pull request nothing here has touched still starts in the right place.
+A checkout Claude Code has never been run in is marked `(new to claude)` and starts without a worktree,
+since Claude Code will not make one until you have accepted its trust dialog there.
+Accept it in that first session and every later one gets a worktree.
 
 `enter` leaves the list and points the board at the sessions that worked on that pull request,
 ended ones folded in,

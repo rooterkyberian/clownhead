@@ -28,7 +28,7 @@ from textual.notifications import SeverityLevel
 from textual.screen import ModalScreen, Screen
 from textual.widgets import DataTable, Footer, Input, Label, OptionList, Select, Static, Switch
 
-from clownhead import archive, attention, checkouts, issues, pulls
+from clownhead import archive, attention, checkouts, discovery, issues, pulls
 from clownhead import settings as settings_store
 from clownhead.control import SLASH_COMMAND, close_tab, rename, send_message, shell_of, terminate, wait_for_exit
 from clownhead.discovery import Message, Process, process_table, recent_messages, relocated_config_dir
@@ -486,10 +486,16 @@ class PromptScreen(ModalScreen[str | None]):
 
 @dataclass(frozen=True)
 class StartChoice:
-    """Where a new session was chosen to be started, and whether to run it or copy it."""
+    """Where a new session was chosen to be started, and whether to run it or copy it.
+
+    ``worktree`` travels with the choice rather than being worked out again by whoever
+    runs it. The sheet is what knows the repository's trust, and the command it showed
+    has to be the command that runs.
+    """
 
     repo: Path
     copy: bool = False
+    worktree: bool = True
 
 
 class StartScreen(ModalScreen[StartChoice | None]):
@@ -507,6 +513,13 @@ class StartScreen(ModalScreen[StartChoice | None]):
 
     ``y`` copies the command instead of running it, which is the way out for a session
     that belongs in another window, or on another machine entirely.
+
+    A repository Claude Code has never been run in gets no worktree, and the sheet says so.
+    Claude Code refuses to make one where its trust dialog has not been accepted, and the
+    dialog only comes up once a session is running there — so the first session in a
+    checkout works in the checkout, accepts the dialog, and every later one gets a
+    worktree. Which is exactly the checkout the pull request board goes looking for, so
+    the case is common rather than exotic.
     """
 
     CSS = """
@@ -537,11 +550,18 @@ class StartScreen(ModalScreen[StartChoice | None]):
         Binding("escape", "cancel", "cancel"),
     ]
 
-    def __init__(self, reference: Reference, name: str, repos: Sequence[Path]) -> None:
+    def __init__(
+        self,
+        reference: Reference,
+        name: str,
+        repos: Sequence[Path],
+        trusted: set[Path] | None = None,
+    ) -> None:
         super().__init__()
         self._reference = reference
         self._start_name = name
         self._repos = list(repos)
+        self._trusted = trusted
         self._index = 0
 
     def compose(self) -> ComposeResult:
@@ -549,10 +569,11 @@ class StartScreen(ModalScreen[StartChoice | None]):
         with Vertical(id="sheet"):
             yield Static(f"[bold]Start a session for {escape(str(self._reference))}[/]")
             if len(self._repos) > 1:
-                yield OptionList(*(escape(shorten_path(repo)) for repo in self._repos), id="repos")
+                yield OptionList(*(self._entry(repo) for repo in self._repos), id="repos")
             else:
-                yield Static(f"[dim]in[/] {escape(shorten_path(self._repos[0]))}", id="repos")
+                yield Static(f"[dim]in[/] {self._entry(self._repos[0])}", id="repos")
             yield Static(self._command_line(), id="command")
+            yield Static(self._trust_note(), id="trust")
             yield Static("[dim]enter to start · y to copy · esc to cancel[/]")
 
     def on_mount(self) -> None:
@@ -571,6 +592,8 @@ class StartScreen(ModalScreen[StartChoice | None]):
         self._index = event.option_index
         for command in self.query("#command").results(Static):
             command.update(self._command_line())
+        for note in self.query("#trust").results(Static):
+            note.update(self._trust_note())
 
     def on_option_list_option_selected(self, event: OptionList.OptionSelected) -> None:
         """Answer the sheet with the repository chosen from the list.
@@ -585,11 +608,11 @@ class StartScreen(ModalScreen[StartChoice | None]):
 
     def action_start(self) -> None:
         """Hand back the chosen repository, to be started in."""
-        self.dismiss(StartChoice(self._chosen()))
+        self.dismiss(StartChoice(self._chosen(), worktree=self._has_worktree()))
 
     def action_copy(self) -> None:
         """Hand back the chosen repository, to be copied rather than run."""
-        self.dismiss(StartChoice(self._chosen(), copy=True))
+        self.dismiss(StartChoice(self._chosen(), copy=True, worktree=self._has_worktree()))
 
     def action_cancel(self) -> None:
         """Leave without starting anything."""
@@ -599,8 +622,39 @@ class StartScreen(ModalScreen[StartChoice | None]):
         return self._repos[self._index]
 
     def _command_line(self) -> str:
-        plan = start_plan(self._chosen(), name=self._start_name, prompt=self._reference.prompt)
+        plan = start_plan(
+            self._chosen(),
+            name=self._start_name,
+            prompt=self._reference.prompt,
+            worktree=self._has_worktree(),
+        )
         return f"[dim]{escape(plan.shell_command)}[/]"
+
+    def _entry(self, repo: Path) -> str:
+        """One repository as the list shows it, saying which will cost a trust dialog."""
+        shown = escape(shorten_path(repo))
+        return shown if self._trusts(repo) else f"{shown}  [dim](new to claude)[/]"
+
+    def _trust_note(self) -> str:
+        """The one line explaining why the chosen repository is getting no worktree."""
+        if self._has_worktree():
+            return ""
+        return (
+            "[dim]claude has not been run here, so it asks you to trust the directory first.\n"
+            "This session works in the checkout; later ones get a worktree.[/]"
+        )
+
+    def _has_worktree(self) -> bool:
+        return self._trusts(self._chosen())
+
+    def _trusts(self, repo: Path) -> bool:
+        """Whether Claude Code would make a worktree here without asking anything first.
+
+        Unknown counts as trusted. The set is read off a file that may have moved or gone,
+        and treating a missing answer as *no* would drop the worktree from every start on
+        the machine over a question nobody could answer.
+        """
+        return self._trusted is None or repo in self._trusted
 
 
 class SettingsScreen(ModalScreen[Settings | None]):
@@ -1648,13 +1702,19 @@ class FleetApp(App[None]):
 
     @work(thread=True, group="start")
     def _resolve_start(self, reference: Reference, sessions: list[Session], named: set[str]) -> None:
-        """Ask git where this could be started and GitHub what to call it, off the event loop."""
+        """Ask git where this could be started and GitHub what to call it, off the event loop.
+
+        Which of those repositories Claude Code has been run in is read here too. It is one
+        small file, and reading it beside the ``git`` calls keeps the sheet's first frame
+        right — a repository that quietly lost its worktree after the sheet was already up
+        would be a command that changed under its reader.
+        """
         repos = checkouts.repos_for(reference, sessions, named)
         name = issues.slug(reference.base_slug, issues.fetch_title(reference.title_query))
-        hand_back(self, self._ask_start, (reference, name, repos))
+        hand_back(self, self._ask_start, (reference, name, repos, discovery.trusted_dirs()))
 
-    def _ask_start(self, resolved: tuple[Reference, str, list[Path]]) -> None:
-        reference, name, repos = resolved
+    def _ask_start(self, resolved: tuple[Reference, str, list[Path], set[Path] | None]) -> None:
+        reference, name, repos, trusted = resolved
         self._starting = False
         if not repos:
             self.notify(
@@ -1663,13 +1723,16 @@ class FleetApp(App[None]):
                 severity="warning",
             )
             return
-        self.push_screen(StartScreen(reference, name, repos), partial(self._start_chosen, reference, name))
+        self.push_screen(
+            StartScreen(reference, name, repos, trusted),
+            partial(self._start_chosen, reference, name),
+        )
 
     def _start_chosen(self, reference: Reference, name: str, choice: StartChoice | None) -> None:
         """Run the start command in this terminal, or put it on the clipboard instead."""
         if choice is None:
             return
-        plan = start_plan(choice.repo, name=name, prompt=reference.prompt)
+        plan = start_plan(choice.repo, name=name, prompt=reference.prompt, worktree=choice.worktree)
         if choice.copy:
             self.copy_to_clipboard(plan.shell_command)
             copy_to_pasteboard(plan.shell_command)

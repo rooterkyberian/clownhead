@@ -416,6 +416,87 @@ async def test_tui_start_offers_the_command_for_the_reference_it_is_filtered_to(
         assert "https://github.com/acme/widgets/issues/2" in shown
 
 
+def trusting(unknown_trust, *repos: Path) -> None:
+    """Say which repositories Claude Code has already been run in, and imply the rest."""
+    payload = {"projects": {str(repo): {"hasTrustDialogAccepted": True} for repo in repos}}
+    unknown_trust.write_text(json.dumps(payload))
+
+
+async def test_tui_start_leaves_the_worktree_out_of_a_repository_new_to_claude(monkeypatch, unknown_trust):
+    """The checkout the pull request board goes looking for is usually one of these."""
+    resolved(monkeypatch, [Path("/tmp/widgets")])
+    trusting(unknown_trust, Path("/tmp/elsewhere"))
+    app = build_app(target=ISSUE)
+
+    async with app.run_test() as pilot:
+        await settle(app, pilot)
+        await pilot.press("n")
+        await settle(app, pilot)
+
+        shown = str(app.screen.query_one("#command", Static).content)
+        assert "--worktree" not in shown
+        assert "claude has not been run here" in render_markup(str(app.screen.query_one("#trust", Static).content))
+
+
+async def test_tui_start_keeps_the_worktree_where_claude_has_been_run(monkeypatch, unknown_trust):
+    resolved(monkeypatch, [Path("/tmp/widgets")])
+    trusting(unknown_trust, Path("/tmp/widgets"))
+    app = build_app(target=ISSUE)
+
+    async with app.run_test() as pilot:
+        await settle(app, pilot)
+        await pilot.press("n")
+        await settle(app, pilot)
+
+        assert "--worktree issue-2-open-a-session" in str(app.screen.query_one("#command", Static).content)
+        assert str(app.screen.query_one("#trust", Static).content) == ""
+
+
+async def test_tui_start_keeps_the_worktree_when_trust_cannot_be_read(monkeypatch):
+    """Nothing known is not the same as nothing trusted, and only one of them may drop a worktree."""
+    resolved(monkeypatch, [Path("/tmp/widgets")])
+    app = build_app(target=ISSUE)
+
+    async with app.run_test() as pilot:
+        await settle(app, pilot)
+        await pilot.press("n")
+        await settle(app, pilot)
+
+        assert "--worktree issue-2-open-a-session" in str(app.screen.query_one("#command", Static).content)
+
+
+async def test_tui_start_marks_which_repositories_are_new_to_claude(monkeypatch, unknown_trust):
+    resolved(monkeypatch, [Path("/tmp/widgets"), Path("/tmp/gadgets")])
+    trusting(unknown_trust, Path("/tmp/gadgets"))
+    app = build_app(target=ISSUE)
+
+    async with app.run_test() as pilot:
+        await settle(app, pilot)
+        await pilot.press("n")
+        await settle(app, pilot)
+
+        listed = app.screen.query_one("#repos", OptionList)
+        rendered = [render_markup(str(listed.get_option_at_index(i).prompt)).plain for i in range(2)]
+        assert rendered == ["/tmp/widgets  (new to claude)", "/tmp/gadgets"]
+
+
+async def test_tui_start_runs_the_command_the_sheet_showed(monkeypatch, unknown_trust):
+    """What is handed to the terminal is the line its reader agreed to, worktree and all."""
+    resolved(monkeypatch, [Path("/tmp/widgets")])
+    trusting(unknown_trust, Path("/tmp/elsewhere"))
+    app = build_app(target=ISSUE)
+
+    async with app.run_test() as pilot:
+        await settle(app, pilot)
+        await pilot.press("n")
+        await settle(app, pilot)
+        await pilot.press("enter")
+        await pilot.pause()
+
+    assert app.launch is not None
+    assert "--worktree" not in app.launch.argv
+
+
 async def test_tui_start_leaves_the_board_with_the_command_to_run(monkeypatch):
     resolved(monkeypatch, [Path("/tmp/widgets")])
     app = build_app(target=ISSUE)
