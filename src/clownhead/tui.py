@@ -964,7 +964,7 @@ class PullsScreen(ModalScreen[Worked | None]):
         """
         table = self.query_one("#pulls", DataTable)
         previous = None if table.cursor_row <= 0 else self.selected
-        self._visible = pulls.ranked(self._pulls, self._statuses)
+        self._visible = pulls.ranked(pulls.still_open(self._pulls, self._statuses), self._statuses)
 
         table.clear()
         for row in build_pull_rows(self._visible, self._statuses, self._holders):
@@ -999,15 +999,15 @@ class PullsScreen(ModalScreen[Worked | None]):
             return f"[bold red]github could not be asked[/] {escape(self._failure)}"
         if self._listing:
             return "[dim]asking github what you have open…[/]"
-        if not self._pulls:
+        if not self._visible:
             return f"[dim]no open pull requests for {escape(self._author)}[/]"
-        parts = [f"{len(self._pulls)} open"]
+        parts = [f"{len(self._visible)} open"]
         if self._enriching:
             parts.append(f"[dim]reading status {len(self._statuses)}/{len(self._pulls)}…[/]")
         if self._holders is None:
             parts.append("[dim]reading transcripts…[/]")
         else:
-            worked = sum(1 for pull in self._pulls if self._holders.get(pull.reference))
+            worked = sum(1 for pull in self._visible if self._holders.get(pull.reference))
             parts.append(f"{worked} with sessions here")
         return " · ".join(parts)
 

@@ -50,7 +50,17 @@ def test_mine_asks_gh_for_the_author_and_only_what_is_open(monkeypatch, tmp_path
     pulls.mine("someone", limit=5)
 
     argv = seen.read_text().split()
-    assert argv[:5] == ["search", "prs", "--author=someone", "--state=open", "--limit=5"]
+    assert argv[:4] == ["search", "prs", "--author=someone", "--state=open"]
+    assert "--limit=5" in argv
+
+
+def test_mine_leaves_out_the_repositories_that_have_been_archived(monkeypatch, tmp_path, fake_gh, a_pull):
+    seen = tmp_path / "argv"
+    monkeypatch.setenv("CLOWNHEAD_GH_BIN", str(fake_gh(tmp_path, f'echo "$@" > {seen}; echo "[]"')))
+
+    pulls.mine()
+
+    assert "--archived=false" in seen.read_text().split()
 
 
 def test_mine_orders_the_newest_first(monkeypatch, tmp_path, fake_gh, a_pull):
@@ -186,6 +196,27 @@ def test_status_of_asks_nothing_without_an_owner_to_ask_about():
     assert pulls.status_of(PullRequest("widgets", 7)) is None
 
 
+@pytest.mark.parametrize(("state", "expected"), [("OPEN", True), ("MERGED", False), ("CLOSED", False)])
+def test_status_of_reads_whether_the_pull_request_is_still_open(
+    monkeypatch, tmp_path, fake_gh, a_pull, state, expected
+):
+    gh_answering(monkeypatch, tmp_path, fake_gh, {"state": state, "statusCheckRollup": []})
+
+    status = pulls.status_of(WIDGETS)
+
+    assert status is not None
+    assert status.is_open is expected
+
+
+def test_status_of_takes_a_missing_state_for_open(monkeypatch, tmp_path, fake_gh, a_pull):
+    gh_answering(monkeypatch, tmp_path, fake_gh, {"statusCheckRollup": []})
+
+    status = pulls.status_of(WIDGETS)
+
+    assert status is not None
+    assert status.is_open
+
+
 def test_statuses_keys_every_answer_by_its_pull_request(monkeypatch, tmp_path, fake_gh, a_pull):
     gh_answering(monkeypatch, tmp_path, fake_gh, {"reviewDecision": "APPROVED", "statusCheckRollup": []})
     listing = [a_pull(7), a_pull(9)]
@@ -240,3 +271,17 @@ def test_ranked_puts_the_most_recently_touched_first_within_a_band(a_pull):
     newer = a_pull(2, updated="2026-08-01T00:00:00Z")
 
     assert [p.reference.number for p in pulls.ranked([older, newer], {})] == [2, 1]
+
+
+def test_still_open_drops_what_github_has_merged_since_it_listed_it(a_pull):
+    merged = a_pull(1)
+    open_one = a_pull(2)
+    found = {merged.reference: Status(state="MERGED"), open_one.reference: Status(state="OPEN")}
+
+    assert [p.reference.number for p in pulls.still_open([merged, open_one], found)] == [2]
+
+
+def test_still_open_keeps_a_pull_request_whose_status_would_not_answer(a_pull):
+    unread = a_pull(1)
+
+    assert pulls.still_open([unread], {}) == [unread]

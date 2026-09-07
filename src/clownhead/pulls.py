@@ -37,7 +37,7 @@ given up on. These calls are the whole content of a view, so they are given time
 MAX_WORKERS = 6
 
 LIST_FIELDS = "number,repository,title,url,isDraft,createdAt,updatedAt"
-STATUS_FIELDS = "reviewDecision,mergeStateStatus,statusCheckRollup"
+STATUS_FIELDS = "state,reviewDecision,mergeStateStatus,statusCheckRollup"
 
 FAILED_CONCLUSIONS = frozenset({"FAILURE", "ERROR", "TIMED_OUT", "CANCELLED", "ACTION_REQUIRED", "STARTUP_FAILURE"})
 RUNNING_STATES = frozenset({"QUEUED", "IN_PROGRESS", "WAITING", "PENDING", "REQUESTED"})
@@ -46,6 +46,9 @@ BLOCKED_MERGE_STATES = frozenset({"DIRTY", "BEHIND", "BLOCKED"})
 CHANGES_REQUESTED = "CHANGES_REQUESTED"
 APPROVED = "APPROVED"
 NONE = "NONE"
+
+OPEN = "OPEN"
+"""The ``state`` of a pull request that has neither merged nor been closed."""
 
 DRAFT_RANK = 10
 
@@ -90,6 +93,10 @@ class Status:
     lists by hand. The one fact the lists do not carry is whether anything ran at all,
     which is what :attr:`ran` is for: green and never-ran are both a pair of empty tuples,
     and they read very differently on a board.
+
+    :attr:`state` is carried because this read is the only live one. The list it came from
+    is an index that lags, so whether the pull request is still open is a thing only the
+    per-pull-request call knows.
     """
 
     failing: tuple[str, ...] = ()
@@ -97,6 +104,12 @@ class Status:
     ran: bool = False
     review: str = NONE
     merge_state: str = "UNKNOWN"
+    state: str = OPEN
+
+    @property
+    def is_open(self) -> bool:
+        """Whether GitHub still has this pull request open, as of this read."""
+        return self.state == OPEN
 
     @property
     def checks(self) -> Checks:
@@ -123,12 +136,25 @@ class Status:
 def mine(author: str = MINE, limit: int = DEFAULT_LIMIT) -> list[Pull]:
     """Every open pull request the author has, newest first, whatever repository it is in.
 
+    Archived repositories are left out. GitHub search spans them by default, and a pull
+    request against a read-only repository is one nobody can merge, review or close — it
+    would sit on the board forever as work that cannot be done.
+
     Raises:
         Unavailable: when ``gh`` could not be run, could not authenticate, or answered
             with something that is not the list it was asked for.
     """
     raw = run_gh(
-        ["search", "prs", f"--author={author}", "--state=open", f"--limit={limit}", "--json", LIST_FIELDS],
+        [
+            "search",
+            "prs",
+            f"--author={author}",
+            "--state=open",
+            "--archived=false",
+            f"--limit={limit}",
+            "--json",
+            LIST_FIELDS,
+        ],
         GH_TIMEOUT,
     )
     try:
@@ -194,6 +220,21 @@ def statuses(pulls: Sequence[Pull]) -> dict[PullRequest, Status]:
     return {pull.reference: status for pull, status in stream_statuses(pulls)}
 
 
+def still_open(pulls: Iterable[Pull], found: Mapping[PullRequest, Status]) -> list[Pull]:
+    """Drop the pull requests GitHub has merged or closed since it listed them.
+
+    ``gh search prs`` answers from an index that lags the repositories behind it, so it can
+    list a pull request that has already merged. The ``gh pr view`` that follows asks the
+    repository itself, which makes its ``state`` the one to believe: something that merged
+    out from under the list leaves the board rather than sitting near the top of it as work
+    waiting on somebody.
+
+    A pull request whose status could not be read stays. Unreadable is not closed, and
+    dropping it would hide open work every time GitHub had a bad second.
+    """
+    return [pull for pull in pulls if (status := found.get(pull.reference)) is None or status.is_open]
+
+
 def ranked(pulls: Iterable[Pull], found: Mapping[PullRequest, Status]) -> list[Pull]:
     """Order pull requests the way the fleet board orders sessions: what wants you, first.
 
@@ -252,6 +293,7 @@ def _status(payload: dict[str, Any]) -> Status:
         ran=bool(rollup),
         review=str(payload.get("reviewDecision") or NONE),
         merge_state=str(payload.get("mergeStateStatus") or "UNKNOWN"),
+        state=str(payload.get("state") or OPEN),
     )
 
 

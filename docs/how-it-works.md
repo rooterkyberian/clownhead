@@ -102,7 +102,15 @@ so over the same corpus the flag costs 15 ms in 54 and turns up one spelling mor
 The one thing clownhead cannot answer from this machine.
 `gh search prs` lists what you have open in one request, whatever repository it lives in;
 `gh pr list` cannot, since it only ever knows the checkout it was run in.
-Then one `gh pr view` per pull request for the review decision, the merge state and the check rollup.
+Then one `gh pr view` per pull request for the review decision, the merge state, the check rollup and whether it is still open.
+
+Archived repositories are excluded from the search.
+GitHub spans them by default, and a pull request nobody can merge, review or close
+would sit on the board forever as work that cannot be done.
+
+Anything the `gh pr view` finds merged or closed leaves the table.
+Search answers from an index that lags the repositories behind it, so it can list a pull request that has already merged;
+the per-pull-request call asks the repository itself, which makes its `state` the one to believe.
 
 Failing to ask is kept apart from having nothing open.
 No `gh`, no auth, no network and a `gh` that never answered all say which,

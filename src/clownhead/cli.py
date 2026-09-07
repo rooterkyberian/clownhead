@@ -427,11 +427,12 @@ def list_pulls(
             raise typer.Exit(code=1) from error
         finally:
             holders = reading.result() if reading is not None else None
-    if not listed:
+    open_now = pulls.still_open(listed, found)
+    if not open_now:
         console.print(f"[dim]no open pull requests for {author}[/]")
         return
-    console.print(f"[dim]{len(listed)} open · {author}[/]")
-    console.print(build_pull_table(pulls.ranked(listed, found), found, holders))
+    console.print(f"[dim]{len(open_now)} open · {author}[/]")
+    console.print(build_pull_table(pulls.ranked(open_now, found), found, holders))
 
 
 def _holders(cwd: Path | None, include_background: bool) -> dict[PullRequest, list[str]]:

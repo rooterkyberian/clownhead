@@ -2604,6 +2604,28 @@ async def test_tui_pull_requests_keep_the_top_of_the_board_under_the_cursor(monk
         assert "acme/widgets#1" in pull_details(app)
 
 
+async def test_tui_pull_requests_drop_one_that_merged_since_github_listed_it(monkeypatch, tmp_path, a_pull):
+    """The search index lags, so the per-pull-request read is the one the board believes."""
+    monkeypatch.setenv("CLAUDE_CONFIG_DIR", str(tmp_path))
+    merged, still_open = a_pull(1), a_pull(2)
+    monkeypatch.setattr(tui_module.pulls, "mine", lambda author, limit: [merged, still_open])
+    monkeypatch.setattr(
+        tui_module.pulls,
+        "stream_statuses",
+        lambda listed: [(merged, PullStatus(state="MERGED")), (still_open, PullStatus(ran=True))],
+    )
+    app = build_app()
+
+    async with app.run_test() as pilot:
+        await settle(app, pilot)
+        await pilot.press("p")
+        await settle(app, pilot)
+
+        assert pulls_table(app).row_count == 1
+        assert "acme/widgets#2" in str(pulls_table(app).get_row_at(0))
+        assert "1 open" in pulls_bar(app)
+
+
 async def test_tui_pull_requests_follow_the_row_its_reader_moved_to(monkeypatch, tmp_path, a_pull):
     monkeypatch.setenv("CLAUDE_CONFIG_DIR", str(tmp_path))
     listing = [a_pull(1), a_pull(2), a_pull(3)]

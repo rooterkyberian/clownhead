@@ -9,6 +9,7 @@ import clownhead
 from clownhead import attention, cli, discovery
 from clownhead import terminal as terminal_module
 from clownhead.models import Session, Status
+from clownhead.pulls import Status as PullStatus
 from clownhead.resume import Launch
 from clownhead.terminal import ITerm2Terminal, Terminal
 from clownhead.worktrees import Candidate, Worktree
@@ -727,6 +728,22 @@ def test_prs_skips_the_transcripts_when_told_to(monkeypatch, github):
 
     assert result.exit_code == 0
     assert asked == []
+
+
+def test_prs_leaves_out_one_that_merged_since_github_listed_it(monkeypatch, live_fleet, a_pull):
+    merged, open_now = a_pull(1), a_pull(2)
+    monkeypatch.setattr(cli.pulls, "mine", lambda author, limit: [merged, open_now])
+    monkeypatch.setattr(
+        cli.pulls,
+        "statuses",
+        lambda listed: {merged.reference: PullStatus(state="MERGED"), open_now.reference: PullStatus(ran=True)},
+    )
+
+    result = runner.invoke(cli.app, ["prs", "--no-sessions"])
+
+    assert "1 open · @me" in result.stdout
+    assert "acme/widgets#2" in result.stdout
+    assert "acme/widgets#1" not in result.stdout
 
 
 def test_prs_says_github_could_not_be_asked_rather_than_printing_nothing(monkeypatch, live_fleet):
