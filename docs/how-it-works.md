@@ -112,6 +112,14 @@ Anything the `gh pr view` finds merged or closed leaves the table.
 Search answers from an index that lags the repositories behind it, so it can list a pull request that has already merged;
 the per-pull-request call asks the repository itself, which makes its `state` the one to believe.
 
+`r` takes a pull request up in one step.
+The board can already do it in two — `enter` points the board at the pull request and `enter` again gets into a session —
+and the sheet asks the same two questions as one, where the pull request is what you are looking at.
+Both answers are the board's to carry out:
+resuming a session and starting one each hand this terminal to `claude`, which only the app itself can do,
+and focusing a live one is the signal `f` already sends.
+So the sheet's answer leaves with the screen and the board acts on it.
+
 Failing to ask is kept apart from having nothing open.
 No `gh`, no auth, no network and a `gh` that never answered all say which,
 because a board that showed the same empty table for each would be lying most of the time.

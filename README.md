@@ -58,7 +58,8 @@ A row that has sat on `shell` for half an hour is usually a command nobody is wa
   asking which when it named more than one.
 - `/` filters by name, status, path, or session id —
   or by pull request or issue, below.
-- `p` opens the pull requests you have open on GitHub, below.
+- `p` opens the pull requests you have open on GitHub, below,
+  where `/` filters them and `r` takes one up in a session.
 - `n` starts a new session for the pull request or issue being filtered on.
 - `s` sends the session a message:
   it joins the queue and is read at the end of whatever turn that session is on,
@@ -167,10 +168,22 @@ then what is approved and green and waiting on somebody to press merge,
 then what is still out for review.
 Drafts sink below all of it.
 
+Archived repositories are left out,
+and a pull request that merged since GitHub listed it drops off as its status arrives.
+
+`r` asks which session to take a pull request up in:
+one of the sessions that named it,
+or a new one started for it.
+A live session is focused where it already runs;
+one that has ended is resumed here, which ends the board;
+and a new one goes through the same sheet `n` opens, worktree and all.
+
 `enter` leaves the list and points the board at the sessions that worked on that pull request,
 ended ones folded in,
 which is the same place pasting its URL into `/` arrives at.
-`o` opens it on GitHub and `y` copies its URL.
+`/` filters the list itself, on the words it shows:
+the repository, the title, the name of a check that went red, `approved`, `changes`, `draft`.
+`o` opens the pull request on GitHub and `y` copies its URL.
 
 This is the one view that asks somebody else,
 so it needs `gh` and says which of no `gh`, no auth and no network it ran into

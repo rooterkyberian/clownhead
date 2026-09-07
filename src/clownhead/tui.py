@@ -8,7 +8,7 @@ without a live fleet.
 
 from __future__ import annotations
 
-from collections.abc import Callable, Iterable, Mapping, Sequence
+from collections.abc import Callable, Iterable, Iterator, Mapping, Sequence
 from dataclasses import dataclass
 from datetime import UTC, datetime, timedelta
 from functools import partial
@@ -45,6 +45,7 @@ from clownhead.render import (
     describe,
     describe_pull,
     format_duration,
+    review_of,
     shorten_path,
     truncate,
 )
@@ -140,6 +141,39 @@ def matches(session: Session, needle: str) -> bool:
     lowered = needle.lower()
     fields = (session.label, session.reason, str(session.cwd), session.short_id)
     return any(lowered in field.lower() for field in fields)
+
+
+def matches_pull(pull: Pull, status: PullStatus | None, needle: str) -> bool:
+    """Whether a pull request matches a filter string, case-insensitively."""
+    if not needle:
+        return True
+    lowered = needle.lower()
+    return any(lowered in field.lower() for field in _pull_fields(pull, status))
+
+
+def _pull_fields(pull: Pull, status: PullStatus | None) -> Iterator[str]:
+    """Everything about a pull request the filter box will match against.
+
+    The words the board itself prints, so that what a reader can see is what they can type:
+    `approved`, `changes`, `draft`, `failing`. The names of the checks come with them, which
+    is the search worth having on a board of forty — one red job across six repositories is
+    a morning's work, and `/deploy` is how you get the six rows onto one screen.
+
+    A status that has yet to arrive contributes nothing rather than blocking the match: the
+    reference and the title are already there, and a filter that answered differently for
+    the first few seconds would be a filter you had to retype.
+    """
+    yield str(pull.reference)
+    yield pull.title
+    yield pull.url
+    if pull.is_draft:
+        yield "draft"
+    if status is None:
+        return
+    yield status.checks.value
+    yield review_of(status)
+    yield from status.failing
+    yield from status.running
 
 
 class FleetTable(DataTable[Any]):
@@ -669,17 +703,108 @@ class SettingsScreen(ModalScreen[Settings | None]):
 
 
 @dataclass(frozen=True)
+class WorkChoice:
+    """Which way into a pull request was chosen: one of its sessions, or a fresh one."""
+
+    session: Session | None
+    """The session to get into, or ``None`` to start one for the pull request."""
+
+
+@dataclass(frozen=True)
 class Worked:
     """A pull request the board is being pointed at, and what is already known about it.
 
     ``sessions`` is ``None`` where the transcripts were never read, which is the difference
     between handing the board an answer and handing it an empty one — the board would take
     the second as fact and show nothing.
+
+    ``go_to`` and ``start_new`` are what `r` asked for, and at most one of them is ever set.
+    `enter` sets neither: it points the board at the pull request and leaves what to do
+    about it to the keys the board already has.
     """
 
     reference: PullRequest
     sessions: list[str] | None
     read: list[Session]
+    go_to: Session | None = None
+    start_new: bool = False
+
+
+class WorkChoiceScreen(ModalScreen[WorkChoice | None]):
+    """Which session to take a pull request up in, offered from the pull request board.
+
+    The board can already do this in two steps — `enter` points it at the pull request and
+    `enter` again gets into a session — and this is the same two answers asked as one
+    question, at the point where the pull request is what you are looking at.
+
+    Starting a new session is always on the list, last. It is the answer whenever the
+    sessions above it are somebody's finished work rather than the thread you want to pick
+    up, and it is the only answer when a pull request has no sessions on this machine at
+    all, which is the normal state of one opened from the web.
+    """
+
+    CSS = """
+    WorkChoiceScreen {
+        align: center middle;
+    }
+    #sheet {
+        width: 78;
+        max-height: 80%;
+        height: auto;
+        padding: 1 2;
+        border: round $panel;
+        background: $surface;
+    }
+    #choices {
+        height: auto;
+        max-height: 12;
+        margin: 1 0;
+    }
+    """
+
+    BINDINGS = [Binding("escape", "cancel", "cancel")]
+
+    START_NEW = "start a new session for it"
+
+    def __init__(self, reference: PullRequest, sessions: Sequence[Session]) -> None:
+        super().__init__()
+        self._reference = reference
+        self._sessions = list(sessions)
+
+    def compose(self) -> ComposeResult:
+        """Offer the sessions that named this pull request, and starting one as the last."""
+        with Vertical(id="sheet"):
+            yield Static(f"[bold]Take up {escape(str(self._reference))}[/]")
+            yield OptionList(*self._options(), id="choices")
+            yield Static("[dim]enter to go · esc to cancel[/]")
+
+    def on_mount(self) -> None:
+        """Put the cursor on the first session, or on starting one where there are none."""
+        self.query_one("#choices", OptionList).focus()
+
+    def on_option_list_option_selected(self, event: OptionList.OptionSelected) -> None:
+        """Answer the sheet with the chosen session, or with starting one."""
+        event.stop()
+        chosen = self._sessions[event.option_index] if event.option_index < len(self._sessions) else None
+        self.dismiss(WorkChoice(chosen))
+
+    def action_cancel(self) -> None:
+        """Leave without going anywhere."""
+        self.dismiss(None)
+
+    def _options(self) -> list[str]:
+        """One line per session, saying what each would cost to go to, then starting one.
+
+        A live session is focused where it already runs and the board stays up; an ended one
+        is resumed here, which ends the board. That is the whole difference between the two
+        and it is worth saying on the line, since the second is not undoable by pressing
+        escape.
+        """
+        lines = [
+            escape(f"{session.label} · {session.reason} · {'resume here' if session.is_finished else 'focus it'}")
+            for session in self._sessions
+        ]
+        return [*lines, self.START_NEW]
 
 
 class PullChoiceScreen(ModalScreen[PullRequest | None]):
@@ -777,11 +902,22 @@ class PullsScreen(ModalScreen[Worked | None]):
         padding: 0 1;
         border-top: solid $panel;
     }
+    #pull-filter {
+        display: none;
+        border: none;
+        height: 1;
+        padding: 0 1;
+    }
+    #pull-filter:focus {
+        border: none;
+    }
     """
 
     BINDINGS = [
         Binding("enter", "sessions", "sessions"),
+        Binding("r", "resume", "take it up"),
         Binding("o", "open", "open on github"),
+        Binding("slash", "filter", "filter"),
         Binding("y", "copy", "copy url"),
         Binding("escape", "back", "back"),
         Binding("q", "back", "back", show=False),
@@ -797,7 +933,9 @@ class PullsScreen(ModalScreen[Worked | None]):
         self._statuses: dict[PullRequest, PullStatus] = {}
         self._holders: dict[PullRequest, list[str]] | None = None
         self._sessions: dict[str, Session] = {}
+        self._open: list[Pull] = []
         self._visible: list[Pull] = []
+        self._needle = ""
         self._failure: str | None = None
         self._listing = True
         self._enriching = False
@@ -807,6 +945,7 @@ class PullsScreen(ModalScreen[Worked | None]):
         yield Static(id="pulls-bar")
         yield DataTable[Any](id="pulls", cursor_type="row", zebra_stripes=True)
         yield Static(id="pull-details")
+        yield Input(placeholder="filter by repo, title, check name, review or draft", id="pull-filter")
         yield Footer()
 
     def on_mount(self) -> None:
@@ -855,6 +994,54 @@ class PullsScreen(ModalScreen[Worked | None]):
         found = None if self._holders is None else self._holders.get(pull.reference, [])
         self.dismiss(Worked(pull.reference, found, list(self._sessions.values())))
 
+    def action_resume(self) -> None:
+        """Ask which session to take the selected pull request up in, and leave doing it.
+
+        The sheet waits for the transcripts. The sessions on it are the whole content of
+        the question, and one offered before they had been read would be a list of nothing
+        with `start a new session` under it — which is a different answer, given confidently.
+        """
+        pull = self.selected
+        if pull is None:
+            self.notify("nothing selected", severity="warning")
+            return
+        if self._holders is None:
+            self.notify("reading the transcripts…", severity="warning")
+            return
+        self.app.push_screen(
+            WorkChoiceScreen(pull.reference, self._worked_on(pull) or []),
+            partial(self._taking_up, pull),
+        )
+
+    def _taking_up(self, pull: Pull, choice: WorkChoice | None) -> None:
+        """Leave for the fleet with what the sheet chose, or stay if it chose nothing."""
+        if choice is None:
+            return
+        found = None if self._holders is None else self._holders.get(pull.reference, [])
+        self.dismiss(
+            Worked(
+                pull.reference,
+                found,
+                list(self._sessions.values()),
+                go_to=choice.session,
+                start_new=choice.session is None,
+            )
+        )
+
+    def _worked_on(self, pull: Pull) -> list[Session] | None:
+        """The sessions on this machine that named this pull request.
+
+        ``None`` where the transcripts have yet to be read, which the detail pane says out
+        loud and `r` waits for. An empty list is the answer that no session here named it.
+        """
+        if self._holders is None:
+            return None
+        return [
+            self._sessions[session_id]
+            for session_id in self._holders.get(pull.reference, ())
+            if session_id in self._sessions
+        ]
+
     def action_open(self) -> None:
         """Open the selected pull request on GitHub."""
         pull = self.selected
@@ -887,9 +1074,38 @@ class PullsScreen(ModalScreen[Worked | None]):
         self._fetch()
         self._scan()
 
+    def action_filter(self) -> None:
+        """Reveal the filter box and type into it."""
+        box = self.query_one("#pull-filter", Input)
+        box.display = True
+        box.focus()
+
     def action_back(self) -> None:
-        """Leave the pull requests and go back to the fleet."""
+        """Drop the filter if there is one, and otherwise go back to the fleet.
+
+        Escape reads as *undo the last narrowing* on a screen that has one, which is why it
+        does not leave while a filter is up. Somebody who typed a needle and found nothing
+        wants the forty rows back, and pressing escape twice is how they say so.
+        """
+        box = self.query_one("#pull-filter", Input)
+        if box.display:
+            box.value = ""
+            box.display = False
+            self.query_one("#pulls", DataTable).focus()
+            return
         self.dismiss(None)
+
+    def on_input_changed(self, event: Input.Changed) -> None:
+        """Re-filter the table as the needle is typed."""
+        if event.input.id != "pull-filter":
+            return
+        self._needle = event.value
+        self._draw()
+
+    def on_input_submitted(self, event: Input.Submitted) -> None:
+        """Keep the filter but return to the table."""
+        if event.input.id == "pull-filter":
+            self.query_one("#pulls", DataTable).focus()
 
     @work(thread=True, group="pulls")
     def _fetch(self) -> None:
@@ -964,7 +1180,8 @@ class PullsScreen(ModalScreen[Worked | None]):
         """
         table = self.query_one("#pulls", DataTable)
         previous = None if table.cursor_row <= 0 else self.selected
-        self._visible = pulls.ranked(pulls.still_open(self._pulls, self._statuses), self._statuses)
+        self._open = pulls.still_open(self._pulls, self._statuses)
+        self._visible = pulls.ranked(self._matching(), self._statuses)
 
         table.clear()
         for row in build_pull_rows(self._visible, self._statuses, self._holders):
@@ -977,31 +1194,28 @@ class PullsScreen(ModalScreen[Worked | None]):
         self.query_one("#pulls-bar", Static).update(self._summary())
         self._draw_details()
 
+    def _matching(self) -> list[Pull]:
+        """Whichever of the open pull requests the filter box lets through."""
+        return [pull for pull in self._open if matches_pull(pull, self._statuses.get(pull.reference), self._needle)]
+
     def _draw_details(self) -> None:
         pane = self.query_one("#pull-details", Static)
         pull = self.selected
         if pull is None:
             pane.update("[dim]no pull request selected[/]")
             return
-        holding = (
-            None
-            if self._holders is None
-            else [
-                self._sessions[session_id]
-                for session_id in self._holders.get(pull.reference, ())
-                if session_id in self._sessions
-            ]
-        )
-        pane.update(describe_pull(pull, self._statuses.get(pull.reference), holding))
+        pane.update(describe_pull(pull, self._statuses.get(pull.reference), self._worked_on(pull)))
 
     def _summary(self) -> str:
         if self._failure:
             return f"[bold red]github could not be asked[/] {escape(self._failure)}"
         if self._listing:
             return "[dim]asking github what you have open…[/]"
-        if not self._visible:
+        if not self._open:
             return f"[dim]no open pull requests for {escape(self._author)}[/]"
-        parts = [f"{len(self._visible)} open"]
+        total = len(self._open)
+        scope = f"{len(self._visible)} of {total}" if self._needle else str(total)
+        parts = [f"{scope} open"]
         if self._enriching:
             parts.append(f"[dim]reading status {len(self._statuses)}/{len(self._pulls)}…[/]")
         if self._holders is None:
@@ -1407,6 +1621,10 @@ class FleetApp(App[None]):
         if session is None:
             self.notify("nothing selected", severity="warning")
             return
+        self._focus(session)
+
+    def _focus(self, session: Session) -> None:
+        """Send one session's terminal the attention signal and say how far it got."""
         result = attention.focus(session, self._terminal, foreground=self._settings.foreground)
         reached = result.delivered and not result.tab_note
         severity: SeverityLevel = "information" if reached else "warning"
@@ -1426,11 +1644,7 @@ class FleetApp(App[None]):
         if self._target is None:
             self.notify("paste a pull request or issue url first", severity="warning")
             return
-        if self._starting:
-            return
-        self._starting = True
-        self.notify(f"finding a repository for {self._target}…")
-        self._resolve_start(self._target, list(self._sessions), self._named.get(self._target, set()))
+        self._start_for(self._target, self._sessions)
 
     @work(thread=True, group="start")
     def _resolve_start(self, reference: Reference, sessions: list[Session], named: set[str]) -> None:
@@ -1477,7 +1691,13 @@ class FleetApp(App[None]):
         self.push_screen(PullsScreen(self._loader), self._pull_chosen)
 
     def _pull_chosen(self, worked: Worked | None) -> None:
-        """Point the board at the chosen pull request, keeping the answer that came with it."""
+        """Point the board at the chosen pull request, keeping the answer that came with it.
+
+        The board is pointed at it whichever way the pull request screen was left, including
+        the ways that go somewhere else immediately: focusing a session leaves the board up,
+        and it should be showing the pull request that sent you there. Resuming and starting
+        both end the board, and what it was showing on the way out stops mattering.
+        """
         if worked is None:
             return
         if worked.sessions is not None:
@@ -1492,6 +1712,40 @@ class FleetApp(App[None]):
             self.start_reload()
         self._retarget(worked.reference)
         self._draw()
+        self._take_up(worked)
+
+    def _take_up(self, worked: Worked) -> None:
+        """Do what `r` on the pull request screen asked for, now that the board is back.
+
+        Here rather than on the screen that asked, because both answers end in the board's
+        own hands: resuming a session and starting one each hand this terminal over, which
+        only :meth:`FleetApp.exit` can do, and focusing one is the signal `f` already sends.
+        """
+        if worked.start_new:
+            self._start_for(worked.reference, worked.read)
+            return
+        if worked.go_to is None:
+            return
+        if not worked.go_to.is_finished:
+            self._focus(worked.go_to)
+            return
+        archive.restore(worked.go_to.session_id)
+        self._launch = resume_plan(worked.go_to)
+        self.exit()
+
+    def _start_for(self, reference: Reference, sessions: Sequence[Session]) -> None:
+        """Resolve where to start a session for a reference, and open the sheet when it answers.
+
+        The sessions come from whoever asked rather than from the board. The pull request
+        screen has just read every transcript on the machine, the ones that have ended
+        included, and those are the checkouts the work was done in — where the board itself
+        may still be a reload away from having folded them in.
+        """
+        if self._starting:
+            return
+        self._starting = True
+        self.notify(f"finding a repository for {reference}…")
+        self._resolve_start(reference, list(sessions), self._named.get(reference, set()))
 
     def action_open_pull_request(self) -> None:
         """Open what the selected session was working on, in the browser.

@@ -4,11 +4,12 @@ from pathlib import Path
 import pytest
 from rich.console import Console
 from rich.markup import render as render_markup
-from textual.widgets import DataTable, Input, Select, Static, Switch
+from textual.widgets import DataTable, Input, OptionList, Select, Static, Switch
 
 from clownhead import archive
 from clownhead import settings as settings_store
 from clownhead import tui as tui_module
+from clownhead.attention import SignalResult
 from clownhead.discovery import Message, Process
 from clownhead.issues import Issue, Tracker
 from clownhead.models import Session, Status
@@ -2415,6 +2416,129 @@ async def test_tui_arriving_from_the_pull_requests_folds_the_ended_sessions_in(m
         assert app._show_closed
 
 
+FOCUS_RESULT = SignalResult(label="payments-api-7c", tty=Path("/dev/ttys004"), delivered=True, detail="focused")
+
+
+def choice_sheet(app: FleetApp) -> OptionList:
+    return app.screen.query_one("#choices", OptionList)
+
+
+def sheet_lines(app: FleetApp) -> list[str]:
+    options = choice_sheet(app)
+    return [render_markup(str(options.get_option_at_index(i).prompt)).plain for i in range(options.option_count)]
+
+
+async def take_up(app: FleetApp, pilot) -> None:
+    """Open the pull requests and ask what to take the first one up in."""
+    await settle(app, pilot)
+    await pilot.press("p")
+    await settle(app, pilot)
+    await pilot.press("r")
+    await settle(app, pilot)
+
+
+async def test_tui_r_offers_the_sessions_that_named_the_pull_request(monkeypatch, tmp_path, github):
+    monkeypatch.setenv("CLAUDE_CONFIG_DIR", str(tmp_path))
+    transcript(tmp_path, "4e020900-df7c", "https://github.com/acme/widgets/pull/42 is ready")
+    app = build_app()
+
+    async with app.run_test() as pilot:
+        await take_up(app, pilot)
+
+        assert isinstance(app.screen, tui_module.WorkChoiceScreen)
+        assert sheet_lines(app) == ["payments-api-7c · input needed · focus it", "start a new session for it"]
+
+
+async def test_tui_r_offers_starting_one_where_no_session_named_it(monkeypatch, tmp_path, github):
+    """The normal state of a pull request opened from the web, and starting one is the answer."""
+    monkeypatch.setenv("CLAUDE_CONFIG_DIR", str(tmp_path))
+    app = build_app()
+
+    async with app.run_test() as pilot:
+        await take_up(app, pilot)
+
+        assert sheet_lines(app) == ["start a new session for it"]
+
+
+async def test_tui_taking_up_a_live_session_focuses_its_terminal(monkeypatch, tmp_path, github):
+    monkeypatch.setenv("CLAUDE_CONFIG_DIR", str(tmp_path))
+    transcript(tmp_path, "4e020900-df7c", "https://github.com/acme/widgets/pull/42 is ready")
+    focused: list[str] = []
+    monkeypatch.setattr(
+        tui_module.attention,
+        "focus",
+        lambda session, terminal, foreground: focused.append(session.session_id) or FOCUS_RESULT,
+    )
+    app = build_app()
+
+    async with app.run_test() as pilot:
+        await take_up(app, pilot)
+        await pilot.press("enter")
+        await settle(app, pilot)
+
+        assert focused == ["4e020900-df7c"]
+        assert app.launch is None
+        assert app.query_one("#filter", Input).value == "https://github.com/acme/widgets/pull/42"
+
+
+async def test_tui_taking_up_an_ended_session_leaves_the_board_to_resume_it(monkeypatch, tmp_path, github):
+    monkeypatch.setenv("CLAUDE_CONFIG_DIR", str(tmp_path))
+    ended = closed_session()
+    transcript(tmp_path, ended.session_id, "https://github.com/acme/widgets/pull/42", cwd="/tmp/invoice-parser")
+    app = build_app(sessions=[ended], settings=Settings(paint_tabs=False))
+
+    async with app.run_test() as pilot:
+        await take_up(app, pilot)
+        await pilot.press("enter")
+        await pilot.pause()
+
+    assert app.launch is not None
+    assert app.launch.argv == ("claude", "--resume", "9a1b2c3d-eeee")
+
+
+async def test_tui_taking_up_a_pull_request_with_a_new_session_asks_where(monkeypatch, tmp_path, github):
+    monkeypatch.setenv("CLAUDE_CONFIG_DIR", str(tmp_path))
+    resolved(monkeypatch, [Path("/tmp/widgets")])
+    app = build_app()
+
+    async with app.run_test() as pilot:
+        await take_up(app, pilot)
+        await pilot.press("enter")
+        await settle(app, pilot)
+
+        assert isinstance(app.screen, tui_module.StartScreen)
+        assert "https://github.com/acme/widgets/pull/42" in str(app.screen.query_one("#command", Static).content)
+
+
+async def test_tui_r_waits_for_the_transcripts_before_it_offers_anything(monkeypatch, tmp_path, github):
+    """A list of no sessions read before the transcripts were is a confident wrong answer."""
+    monkeypatch.setenv("CLAUDE_CONFIG_DIR", str(tmp_path))
+    app = build_app()
+
+    async with app.run_test() as pilot:
+        await settle(app, pilot)
+        await pilot.press("p")
+        await pilot.pause()
+        app.screen._holders = None
+        app.screen.action_resume()
+        await pilot.pause()
+
+        assert not isinstance(app.screen, tui_module.WorkChoiceScreen)
+
+
+async def test_tui_escape_on_the_take_up_sheet_stays_on_the_pull_requests(monkeypatch, tmp_path, github):
+    monkeypatch.setenv("CLAUDE_CONFIG_DIR", str(tmp_path))
+    app = build_app()
+
+    async with app.run_test() as pilot:
+        await take_up(app, pilot)
+        await pilot.press("escape")
+        await settle(app, pilot)
+
+        assert pulls_table(app).row_count == 1
+        assert app.launch is None
+
+
 async def test_tui_escape_leaves_the_pull_requests_without_filtering_anything(monkeypatch, tmp_path, github):
     monkeypatch.setenv("CLAUDE_CONFIG_DIR", str(tmp_path))
     app = build_app()
@@ -2602,6 +2726,134 @@ async def test_tui_pull_requests_keep_the_top_of_the_board_under_the_cursor(monk
 
         assert "acme/widgets#1" in str(pulls_table(app).get_row_at(0))
         assert "acme/widgets#1" in pull_details(app)
+
+
+def pull_filter(app: FleetApp) -> Input:
+    return app.screen.query_one("#pull-filter", Input)
+
+
+def three_pulls(monkeypatch, a_pull) -> None:
+    """A pull request board worth filtering: one red, one approved, one draft."""
+    red = a_pull(1, repo="widgets", title="Fix the parser")
+    approved = a_pull(2, repo="gadgets", title="Add a knob")
+    draft = a_pull(3, repo="sprockets", title="Spike the thing", is_draft=True)
+    monkeypatch.setattr(tui_module.pulls, "mine", lambda author, limit: [red, approved, draft])
+    monkeypatch.setattr(
+        tui_module.pulls,
+        "stream_statuses",
+        lambda listed: [
+            (red, PullStatus(failing=("deploy",))),
+            (approved, PullStatus(ran=True, review="APPROVED")),
+            (draft, PullStatus(ran=True)),
+        ],
+    )
+
+
+async def open_filtered(app: FleetApp, pilot, needle: str) -> None:
+    """Open the pull requests, press `/`, and type a needle into the box."""
+    await settle(app, pilot)
+    await pilot.press("p")
+    await settle(app, pilot)
+    await pilot.press("slash")
+    pull_filter(app).value = needle
+    await settle(app, pilot)
+
+
+@pytest.mark.parametrize(
+    ("needle", "expected"),
+    [
+        ("gadgets", ["acme/gadgets#2"]),
+        ("parser", ["acme/widgets#1"]),
+        ("deploy", ["acme/widgets#1"]),
+        ("approved", ["acme/gadgets#2"]),
+        ("draft", ["acme/sprockets#3"]),
+        ("failing", ["acme/widgets#1"]),
+        ("ACME", ["acme/widgets#1", "acme/gadgets#2", "acme/sprockets#3"]),
+    ],
+)
+async def test_tui_pull_requests_filter_on_what_the_board_shows(monkeypatch, tmp_path, a_pull, needle, expected):
+    """Repo, title, the name of a red check, the review word and draft are all typeable."""
+    monkeypatch.setenv("CLAUDE_CONFIG_DIR", str(tmp_path))
+    three_pulls(monkeypatch, a_pull)
+    app = build_app()
+
+    async with app.run_test() as pilot:
+        await open_filtered(app, pilot, needle)
+
+        assert [str(pull.reference) for pull in app.screen._visible] == expected
+        assert pulls_table(app).row_count == len(expected)
+
+
+async def test_tui_pull_requests_say_how_much_the_filter_left(monkeypatch, tmp_path, a_pull):
+    monkeypatch.setenv("CLAUDE_CONFIG_DIR", str(tmp_path))
+    three_pulls(monkeypatch, a_pull)
+    app = build_app()
+
+    async with app.run_test() as pilot:
+        await open_filtered(app, pilot, "gadgets")
+
+        assert "1 of 3 open" in pulls_bar(app)
+
+
+async def test_tui_pull_requests_keep_the_bar_plain_with_no_filter(monkeypatch, tmp_path, a_pull):
+    monkeypatch.setenv("CLAUDE_CONFIG_DIR", str(tmp_path))
+    three_pulls(monkeypatch, a_pull)
+    app = build_app()
+
+    async with app.run_test() as pilot:
+        await settle(app, pilot)
+        await pilot.press("p")
+        await settle(app, pilot)
+
+        assert "3 open" in pulls_bar(app)
+        assert "of" not in pulls_bar(app)
+
+
+async def test_tui_pull_requests_filter_that_matches_nothing_says_so_by_the_count(monkeypatch, tmp_path, a_pull):
+    """An empty table under a filter is a needle nobody matched, and the bar keeps the total."""
+    monkeypatch.setenv("CLAUDE_CONFIG_DIR", str(tmp_path))
+    three_pulls(monkeypatch, a_pull)
+    app = build_app()
+
+    async with app.run_test() as pilot:
+        await open_filtered(app, pilot, "nothing here")
+
+        assert pulls_table(app).row_count == 0
+        assert "0 of 3 open" in pulls_bar(app)
+
+
+async def test_tui_escape_drops_the_pull_request_filter_before_leaving(monkeypatch, tmp_path, a_pull):
+    monkeypatch.setenv("CLAUDE_CONFIG_DIR", str(tmp_path))
+    three_pulls(monkeypatch, a_pull)
+    app = build_app()
+
+    async with app.run_test() as pilot:
+        await open_filtered(app, pilot, "gadgets")
+        await pilot.press("escape")
+        await settle(app, pilot)
+
+        assert pulls_table(app).row_count == 3
+        assert not pull_filter(app).display
+
+        await pilot.press("escape")
+        await settle(app, pilot)
+
+        assert table_of(app).row_count == 2
+
+
+async def test_tui_pull_request_filter_matches_before_the_statuses_land(monkeypatch, tmp_path, a_pull):
+    """The list arrives seconds before the checks do, and the box works in between."""
+    monkeypatch.setenv("CLAUDE_CONFIG_DIR", str(tmp_path))
+    listing = [a_pull(1, repo="widgets"), a_pull(2, repo="gadgets")]
+    monkeypatch.setattr(tui_module.pulls, "mine", lambda author, limit: listing)
+    monkeypatch.setattr(tui_module.pulls, "stream_statuses", lambda listed: [])
+    app = build_app()
+
+    async with app.run_test() as pilot:
+        await open_filtered(app, pilot, "gadgets")
+
+        assert pulls_table(app).row_count == 1
+        assert "acme/gadgets#2" in str(pulls_table(app).get_row_at(0))
 
 
 async def test_tui_pull_requests_drop_one_that_merged_since_github_listed_it(monkeypatch, tmp_path, a_pull):
