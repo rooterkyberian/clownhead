@@ -87,3 +87,69 @@ def test_repos_for_answers_nothing_for_an_empty_fleet(monkeypatch):
     remotes(monkeypatch, {})
 
     assert repos_for(ISSUE, [], set()) == []
+
+
+def clone(root: Path, name: str) -> Path:
+    """A directory that exists, since a checkout is only offered where one is on disk."""
+    directory = root / name
+    directory.mkdir(parents=True)
+    return directory
+
+
+def remotes_at(monkeypatch, mapping: dict[Path, str]) -> None:
+    """The same stub as :func:`remotes`, for tests whose paths are real directories."""
+    remotes(monkeypatch, {str(path): url for path, url in mapping.items()})
+
+
+def test_repos_for_offers_a_clone_no_session_has_ever_run_in(monkeypatch, tmp_path):
+    """The normal state of a pull request opened from the web: checked out, never worked in."""
+    worked_in = clone(tmp_path, "other")
+    never_used = clone(tmp_path, "widgets")
+    remotes_at(monkeypatch, {worked_in: "git@github.com:acme/other.git", never_used: "git@github.com:acme/widgets.git"})
+
+    assert repos_for(ISSUE, [session("a", str(worked_in))], set()) == [never_used, worked_in]
+
+
+def test_repos_for_looks_for_the_clone_beside_every_repository_the_fleet_knows(monkeypatch, tmp_path):
+    elsewhere = clone(tmp_path / "personal", "toy")
+    found = clone(tmp_path / "work", "widgets")
+    remotes_at(monkeypatch, {elsewhere: "git@github.com:acme/toy.git", found: "git@github.com:acme/widgets.git"})
+    fleet = [session("a", str(elsewhere)), session("b", str(tmp_path / "work" / "other"))]
+
+    assert repos_for(ISSUE, fleet, set())[0] == found
+
+
+def test_repos_for_drops_a_directory_that_only_shares_the_name(monkeypatch, tmp_path):
+    """A name is the reason to ask git, and ``origin`` is the answer that counts."""
+    worked_in = clone(tmp_path, "other")
+    impostor = clone(tmp_path, "widgets")
+    remotes_at(
+        monkeypatch,
+        {worked_in: "git@github.com:acme/other.git", impostor: "git@github.com:someone/widgets.git"},
+    )
+
+    assert repos_for(ISSUE, [session("a", str(worked_in))], set()) == [worked_in]
+
+
+def test_repos_for_keeps_a_worked_in_clone_above_one_it_had_to_go_looking_for(monkeypatch, tmp_path):
+    mirror = clone(tmp_path / "mirror", "widgets")
+    worked_in = clone(tmp_path / "work", "widgets")
+    remotes_at(monkeypatch, {mirror: "git@github.com:acme/widgets.git", worked_in: "git@github.com:acme/widgets.git"})
+    fleet = [session("a", str(worked_in)), session("b", str(tmp_path / "mirror" / "toy"))]
+
+    assert repos_for(ISSUE, fleet, set())[:2] == [worked_in, mirror]
+
+
+def test_repos_for_matches_a_remote_however_it_was_spelled(monkeypatch, tmp_path):
+    worked_in = clone(tmp_path, "other")
+    found = clone(tmp_path, "widgets")
+    remotes_at(monkeypatch, {worked_in: "git@github.com:acme/other.git", found: "git@github.com:Acme/Widgets.git"})
+
+    assert repos_for(ISSUE, [session("a", str(worked_in))], set())[0] == found
+
+
+def test_repos_for_offers_no_clone_where_none_is_checked_out(monkeypatch, tmp_path):
+    worked_in = clone(tmp_path, "other")
+    remotes_at(monkeypatch, {worked_in: "git@github.com:acme/other.git"})
+
+    assert repos_for(ISSUE, [session("a", str(worked_in))], set()) == [worked_in]

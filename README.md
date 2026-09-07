@@ -177,6 +177,10 @@ or a new one started for it.
 A live session is focused where it already runs;
 one that has ended is resumed here, which ends the board;
 and a new one goes through the same sheet `n` opens, worktree and all.
+That sheet leads with the checkout of the pull request's own repository,
+found by name beside the checkouts the fleet already works in
+and confirmed by what its `origin` says,
+so a pull request nothing here has touched still starts in the right place.
 
 `enter` leaves the list and points the board at the sessions that worked on that pull request,
 ended ones folded in,

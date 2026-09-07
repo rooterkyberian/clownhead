@@ -173,6 +173,17 @@ A Jira URL only ever has the second of those,
 and a repository mirrored twice satisfies the first,
 so the choice stays with whoever is reading the list.
 
+The herd is where the search starts rather than where it ends.
+Checkouts sit beside each other — one clone lands in `~/dev/acme/widgets` and the next in `~/dev/acme/gadgets`,
+because that is what `git clone` names a directory —
+so the herd's own repositories say where clones are kept,
+and the reference's repository is looked for by that name in each of those places.
+The name is only the reason to ask git.
+What makes one an answer is `origin` saying it is the repository the reference names,
+so a directory that happens to share the name is dropped.
+It costs one `git` call, and it is what puts a checkout at the top of the list
+for a pull request opened from the web that no session here has ever touched.
+
 `enter` and `n` both end the board and hand the terminal to `claude`.
 The board puts the command down and whoever launched it runs it,
 since a process replaced while a screen is still up would leave the shell wearing a terminal in raw mode.
