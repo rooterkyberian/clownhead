@@ -28,9 +28,10 @@ from pathlib import Path
 
 import re2
 
+from clownhead import harness
 from clownhead.discovery import transcript_paths
 from clownhead.issues import Issue, parse_issue
-from clownhead.models import Session
+from clownhead.models import Harness, Session
 from clownhead.scan import NAME_BYTES, Mention, mapped, mention
 
 PULL_REQUEST_PATTERN = r"github\.com/(?P<owner>[\w.-]+)/(?P<repo>[\w.-]+)/pull/(?P<number>\d+)"
@@ -198,8 +199,20 @@ def sessions_mentioning(
     return {
         session.session_id
         for session in sessions
-        if any(mentions(path, wanted) for path in transcript_paths(session.session_id, root))
+        if any(mentions(path, wanted) for path in transcripts_of(session, root))
     }
+
+
+def transcripts_of(session: Session, root: Path | None = None) -> list[Path]:
+    """Every file holding what a session said, whichever agent wrote them.
+
+    Claude Code's are found from the session id under a root that tests move, and
+    Codex names its own in the thread. ``root`` therefore answers for Claude Code only,
+    which is the only harness whose paths are derived rather than given.
+    """
+    if root is not None and session.harness is Harness.CLAUDE:
+        return transcript_paths(session.session_id, root)
+    return harness.transcript_paths(session)
 
 
 def mentions(path: Path, wanted: Mention) -> bool:
@@ -207,7 +220,7 @@ def mentions(path: Path, wanted: Mention) -> bool:
     return any(wanted.found_in(buffer) for buffer in mapped(path))
 
 
-def pulls_mentioned(session_id: str, root: Path | None = None) -> list[PullRequest]:
+def pulls_mentioned(session: Session, root: Path | None = None) -> list[PullRequest]:
     """The pull requests one session named, the most recently named first.
 
     The inverse of :func:`sessions_mentioning`, and the cheaper half of it: one transcript
@@ -221,7 +234,7 @@ def pulls_mentioned(session_id: str, root: Path | None = None) -> list[PullReque
     newest last, so the main thread's own mentions come after a subagent's.
     """
     latest: dict[PullRequest, tuple[int, int]] = {}
-    for order, path in enumerate(sorted(transcript_paths(session_id, root), key=_read_order)):
+    for order, path in enumerate(sorted(transcripts_of(session, root), key=_read_order)):
         for reference, offset in _pulls_in(path).items():
             ranking = (order, offset)
             latest[reference] = max(ranking, latest.get(reference, ranking))
@@ -239,7 +252,7 @@ def pulls_by_session(sessions: Iterable[Session], root: Path | None = None) -> d
     everything downstream — a session read and found to name nothing is not the same as one
     nobody has read, and only the caller holding this map can still tell them apart.
     """
-    return {session.session_id: pulls_mentioned(session.session_id, root) for session in sessions}
+    return {session.session_id: pulls_mentioned(session, root) for session in sessions}
 
 
 def sessions_by_pull(sessions: Iterable[Session], root: Path | None = None) -> dict[PullRequest, list[str]]:

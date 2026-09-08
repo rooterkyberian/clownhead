@@ -12,8 +12,9 @@ from collections.abc import Mapping
 from pathlib import Path
 from typing import Any
 
-from clownhead.discovery import Process, is_claude, messaging_socket, owning_shell, process_table
-from clownhead.models import Session
+from clownhead import codex
+from clownhead.discovery import is_claude, messaging_socket, owning_shell, process_table
+from clownhead.models import Harness, Process, Session
 
 SLASH_COMMAND = re.compile(r"^/[A-Za-z][\w:.-]*(\s|$)")
 """A first word that reads as a slash command rather than a path: ``/compact``, never ``/tmp/repo``."""
@@ -140,6 +141,9 @@ def rename(session: Session, name: str, registry: Path | None = None) -> None:
         raise ValueError("a session name cannot be blank")
     if session.is_finished:
         raise LookupError(f"{session.label} has ended and cannot be renamed")
+    if session.harness is Harness.CODEX:
+        codex.rename(session.session_id, label)
+        return
     path = messaging_socket(session.session_id, registry)
     if path is None:
         raise LookupError(f"{session.label} is not listening for control messages")
@@ -191,6 +195,9 @@ def send_message(
         raise ValueError("a slash command has to be typed into the session, which a message cannot do")
     if session.is_finished:
         raise LookupError(f"{session.label} has ended and cannot be sent to")
+    if session.harness is Harness.CODEX:
+        codex.send_message(session.session_id, message)
+        return
     _owned_process(session, processes, "send to")
     path = messaging_socket(session.session_id, registry)
     if path is None:
@@ -199,14 +206,19 @@ def send_message(
 
 
 def _owned_process(session: Session, processes: Mapping[int, Process] | None, what: str) -> int:
-    """The session's process id, once the table agrees the session still owns it."""
+    """The session's process id, once the table agrees the session still owns it.
+
+    The command has to be the session's own agent and not merely some agent: a recycled
+    process id belonging to the other harness would otherwise pass this check.
+    """
     if session.pid is None:
         raise LookupError(f"{session.label} has no process to {what}")
     table = processes if processes is not None else process_table()
     process = table.get(session.pid)
     if process is None:
         raise LookupError(f"pid {session.pid} is gone")
-    if not is_claude(process.command):
+    owns = codex.is_codex if session.harness is Harness.CODEX else is_claude
+    if not owns(process.command):
         raise LookupError(f"pid {session.pid} is no longer {session.label}")
     return session.pid
 

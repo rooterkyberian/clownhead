@@ -6,7 +6,7 @@ import pytest
 from typer.testing import CliRunner
 
 import clownhead
-from clownhead import attention, cli, discovery
+from clownhead import attention, cli, discovery, harness
 from clownhead import terminal as terminal_module
 from clownhead.models import Session, Status
 from clownhead.pulls import Status as PullStatus
@@ -53,7 +53,7 @@ def fleet() -> list[Session]:
 
 @pytest.fixture
 def live_fleet(monkeypatch):
-    monkeypatch.setattr(discovery, "list_sessions", lambda *a, **k: fleet())
+    monkeypatch.setattr(harness, "list_sessions", lambda *a, **k: fleet())
 
 
 class SilentTerminal(ITerm2Terminal):
@@ -86,7 +86,7 @@ def run_and_quit(kwargs, include_closed: bool) -> None:
 def test_tui_command_scopes_the_loader(live_fleet, monkeypatch):
     seen: dict[str, object] = {}
     monkeypatch.setattr(cli.tui, "run", lambda **kwargs: run_and_quit(kwargs, False))
-    monkeypatch.setattr(discovery, "list_sessions", lambda cwd=None, **k: seen.setdefault("cwd", cwd) and [])
+    monkeypatch.setattr(harness, "list_sessions", lambda cwd=None, **k: seen.setdefault("cwd", cwd) and [])
 
     result = runner.invoke(cli.app, ["tui", "--cwd", "/tmp/payments-api", "--interval", "1"])
 
@@ -98,7 +98,7 @@ def test_tui_command_passes_the_closed_flag_through(live_fleet, monkeypatch):
     seen: dict[str, object] = {}
     monkeypatch.setattr(cli.tui, "run", lambda **kwargs: run_and_quit(kwargs, kwargs["include_closed"]))
     monkeypatch.setattr(
-        discovery,
+        harness,
         "list_sessions",
         lambda cwd=None, **kwargs: seen.update(kwargs) or [],
     )
@@ -128,7 +128,7 @@ def test_ls_lists_the_fleet(live_fleet):
 
 def test_ls_asks_for_closed_sessions(monkeypatch):
     seen: dict[str, object] = {}
-    monkeypatch.setattr(discovery, "list_sessions", lambda cwd=None, **kwargs: seen.update(kwargs) or fleet())
+    monkeypatch.setattr(harness, "list_sessions", lambda cwd=None, **kwargs: seen.update(kwargs) or fleet())
 
     result = runner.invoke(cli.app, ["ls", "--closed"])
 
@@ -138,7 +138,7 @@ def test_ls_asks_for_closed_sessions(monkeypatch):
 
 def test_ls_leaves_closed_sessions_out_by_default(monkeypatch):
     seen: dict[str, object] = {}
-    monkeypatch.setattr(discovery, "list_sessions", lambda cwd=None, **kwargs: seen.update(kwargs) or fleet())
+    monkeypatch.setattr(harness, "list_sessions", lambda cwd=None, **kwargs: seen.update(kwargs) or fleet())
 
     runner.invoke(cli.app, ["ls"])
 
@@ -226,7 +226,7 @@ def test_ls_by_pull_request_keeps_the_sessions_that_named_it(live_fleet, tmp_pat
 @pytest.mark.parametrize(("flags", "expected"), [([], False), (["--closed"], True)])
 def test_ls_by_pull_request_searches_only_what_was_asked_for(monkeypatch, flags, expected):
     seen: dict[str, object] = {}
-    monkeypatch.setattr(discovery, "list_sessions", lambda cwd=None, **kwargs: seen.update(kwargs) or fleet())
+    monkeypatch.setattr(harness, "list_sessions", lambda cwd=None, **kwargs: seen.update(kwargs) or fleet())
 
     runner.invoke(cli.app, ["ls", "--pr", "acme/widgets#42", *flags])
 
@@ -559,7 +559,7 @@ def test_worktrees_cleanup_passes_the_age_it_was_given(monkeypatch, live_fleet):
 
 def test_worktrees_cleanup_reads_the_closed_sessions_too(monkeypatch, live_fleet):
     seen = {}
-    monkeypatch.setattr(discovery, "list_sessions", lambda cwd=None, **kwargs: seen.update(kwargs) or fleet())
+    monkeypatch.setattr(harness, "list_sessions", lambda cwd=None, **kwargs: seen.update(kwargs) or fleet())
     monkeypatch.setattr(cli.worktrees, "survey", lambda *a, **k: [])
 
     result = runner.invoke(cli.app, ["worktrees-cleanup"])
@@ -621,7 +621,7 @@ def test_open_names_the_worktree_for_the_issue_alone_when_gh_says_nothing(live_f
 
 def test_open_searches_the_sessions_that_have_ended_too(monkeypatch):
     seen: dict[str, object] = {}
-    monkeypatch.setattr(discovery, "list_sessions", lambda cwd=None, **kwargs: seen.update(kwargs) or fleet())
+    monkeypatch.setattr(harness, "list_sessions", lambda cwd=None, **kwargs: seen.update(kwargs) or fleet())
 
     runner.invoke(cli.app, ["open", ISSUE_URL, "--print"])
 
@@ -713,7 +713,7 @@ def test_prs_counts_the_sessions_that_worked_on_each(live_fleet, tmp_path, githu
 
 def test_prs_reads_the_sessions_that_have_ended_too(monkeypatch, github):
     seen: dict[str, object] = {}
-    monkeypatch.setattr(discovery, "list_sessions", lambda cwd=None, **kwargs: seen.update(kwargs) or fleet())
+    monkeypatch.setattr(harness, "list_sessions", lambda cwd=None, **kwargs: seen.update(kwargs) or fleet())
 
     runner.invoke(cli.app, ["prs"])
 
@@ -796,3 +796,28 @@ def test_ls_reads_no_transcripts_unless_the_prs_column_was_asked_for(live_fleet,
 
     runner.invoke(cli.app, ["ls", "--columns", "name,prs"])
     assert asked == ["read"]
+
+
+def test_doctor_reports_each_harness_and_where_it_reads_from(live_fleet):
+    result = runner.invoke(cli.app, ["doctor"])
+
+    assert "claude" in result.stdout
+    assert "codex" in result.stdout
+
+
+def test_doctor_says_when_an_agent_is_not_on_the_machine(live_fleet, no_codex):
+    result = runner.invoke(cli.app, ["doctor"])
+
+    assert "not installed" in result.stdout
+
+
+def test_doctor_says_how_to_start_a_codex_daemon_that_is_missing(live_fleet, monkeypatch, tmp_path):
+    binary = tmp_path / "codex"
+    binary.write_text("#!/bin/sh\n")
+    binary.chmod(0o755)
+    monkeypatch.setenv("CLOWNHEAD_CODEX_BIN", str(binary))
+    monkeypatch.setenv("COLUMNS", "200")
+
+    result = runner.invoke(cli.app, ["doctor"])
+
+    assert "app-server daemon start" in result.stdout

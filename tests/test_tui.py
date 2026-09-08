@@ -4,20 +4,22 @@ from pathlib import Path
 import pytest
 from rich.console import Console
 from rich.markup import render as render_markup
-from textual.widgets import DataTable, Input, OptionList, Select, Static, Switch
+from textual.coordinate import Coordinate
+from textual.widgets import DataTable, Input, OptionList, Select, SelectionList, Static, Switch
 
-from clownhead import archive
+from clownhead import archive, harness
 from clownhead import settings as settings_store
 from clownhead import tui as tui_module
 from clownhead.attention import SignalResult
-from clownhead.discovery import Message, Process
 from clownhead.issues import Issue, Tracker
-from clownhead.models import Session, Status
+from clownhead.models import Column, Message, Process, Session, Status
 from clownhead.pulls import Status as PullStatus
 from clownhead.settings import ResumeIn, Settings
 from clownhead.terminal import ITerm2Terminal
 from clownhead.tui import FleetApp, PullChoiceScreen, config_dir_notice, matches
 from clownhead.worktrees import Candidate, Worktree
+
+BOARD = (Column.STATUS, Column.NAME, Column.QUIET, Column.AGE)
 
 OWN_TTY = Path("/dev/ttys009")
 CLEARED = "\033]6;1;bg;*;default\a"
@@ -632,7 +634,7 @@ async def test_tui_hides_the_process_columns_by_default():
 
 
 async def test_tui_shows_the_owning_process_id_when_settings_ask():
-    app = build_app(settings=Settings(show_pid=True, show_tty=True))
+    app = build_app(settings=Settings(columns=BOARD + (Column.PID, Column.TTY, Column.WHERE)))
 
     async with app.run_test() as pilot:
         await settle(app, pilot)
@@ -666,14 +668,14 @@ def history_of(app: FleetApp) -> str:
 async def test_tui_right_arrow_opens_the_conversation_beside_the_fleet(monkeypatch):
     asked: list[tuple[str, int]] = []
 
-    def history(session_id: str, limit: int) -> list[Message]:
-        asked.append((session_id, limit))
+    def history(session: Session, *, limit: int) -> list[Message]:
+        asked.append((session.session_id, limit))
         return [
             Message(role="user", text="show history in detail view"),
             Message(role="assistant", text="Enter opens it beside the fleet."),
         ]
 
-    monkeypatch.setattr(tui_module, "recent_messages", history)
+    monkeypatch.setattr(harness, "recent_messages", history)
     app = build_app(settings=Settings(history_turns=12))
 
     async with app.run_test() as pilot:
@@ -698,7 +700,7 @@ def history_panel(app: FleetApp) -> tui_module.HistoryPanel:
 
 
 async def test_tui_history_opens_on_the_newest_turn(monkeypatch):
-    monkeypatch.setattr(tui_module, "recent_messages", lambda session_id, limit: long_history())
+    monkeypatch.setattr(harness, "recent_messages", lambda session, *, limit: long_history())
     app = build_app()
 
     async with app.run_test() as pilot:
@@ -711,7 +713,7 @@ async def test_tui_history_opens_on_the_newest_turn(monkeypatch):
 
 
 async def test_tui_arrows_scroll_the_open_conversation_instead_of_the_fleet(monkeypatch):
-    monkeypatch.setattr(tui_module, "recent_messages", lambda session_id, limit: long_history())
+    monkeypatch.setattr(harness, "recent_messages", lambda session, *, limit: long_history())
     app = build_app()
 
     async with app.run_test() as pilot:
@@ -731,7 +733,7 @@ async def test_tui_arrows_scroll_the_open_conversation_instead_of_the_fleet(monk
 
 
 async def test_tui_closing_the_conversation_hands_the_arrows_back(monkeypatch):
-    monkeypatch.setattr(tui_module, "recent_messages", lambda session_id, limit: long_history())
+    monkeypatch.setattr(harness, "recent_messages", lambda session, *, limit: long_history())
     app = build_app()
 
     async with app.run_test() as pilot:
@@ -747,7 +749,7 @@ async def test_tui_closing_the_conversation_hands_the_arrows_back(monkeypatch):
 
 
 async def test_tui_clicking_a_row_reads_it_and_leaves_its_terminal_alone(monkeypatch):
-    monkeypatch.setattr(tui_module, "recent_messages", lambda session_id, limit: [])
+    monkeypatch.setattr(harness, "recent_messages", lambda session, *, limit: [])
     terminal = SilentTerminal()
     app = build_app(terminal=terminal, settings=Settings(paint_tabs=False))
 
@@ -761,7 +763,7 @@ async def test_tui_clicking_a_row_reads_it_and_leaves_its_terminal_alone(monkeyp
 
 
 async def test_tui_clicking_the_selected_row_still_does_not_focus_it(monkeypatch):
-    monkeypatch.setattr(tui_module, "recent_messages", lambda session_id, limit: [])
+    monkeypatch.setattr(harness, "recent_messages", lambda session, *, limit: [])
     terminal = SilentTerminal()
     app = build_app(terminal=terminal, settings=Settings(paint_tabs=False))
 
@@ -775,7 +777,7 @@ async def test_tui_clicking_the_selected_row_still_does_not_focus_it(monkeypatch
 
 
 async def test_tui_clicking_moves_the_cursor_to_that_row(monkeypatch):
-    monkeypatch.setattr(tui_module, "recent_messages", lambda session_id, limit: [])
+    monkeypatch.setattr(harness, "recent_messages", lambda session, *, limit: [])
     app = build_app()
 
     async with app.run_test() as pilot:
@@ -790,7 +792,7 @@ async def test_tui_clicking_moves_the_cursor_to_that_row(monkeypatch):
 
 @pytest.mark.parametrize("key", ["left", "escape"])
 async def test_tui_closes_the_conversation(monkeypatch, key):
-    monkeypatch.setattr(tui_module, "recent_messages", lambda session_id, limit: [])
+    monkeypatch.setattr(harness, "recent_messages", lambda session, *, limit: [])
     app = build_app()
 
     async with app.run_test() as pilot:
@@ -845,7 +847,7 @@ async def test_tui_enter_on_an_archived_session_takes_it_back_out_of_the_archive
 
 
 async def test_tui_clicking_a_row_reads_it_rather_than_going_to_it(monkeypatch):
-    monkeypatch.setattr(tui_module, "recent_messages", lambda session_id, limit: [])
+    monkeypatch.setattr(harness, "recent_messages", lambda session, *, limit: [])
     terminal = SilentTerminal()
     app = build_app(terminal=terminal, settings=Settings(paint_tabs=False))
 
@@ -871,10 +873,10 @@ async def test_tui_arrow_keys_leave_the_filter_alone():
 
 
 async def test_tui_history_survives_a_transcript_that_cannot_be_read(monkeypatch):
-    def explode(session_id: str, limit: int) -> list[Message]:
+    def explode(session: Session, *, limit: int) -> list[Message]:
         raise OSError("transcript gone")
 
-    monkeypatch.setattr(tui_module, "recent_messages", explode)
+    monkeypatch.setattr(harness, "recent_messages", explode)
     app = build_app()
 
     async with app.run_test() as pilot:
@@ -1727,7 +1729,7 @@ async def test_a_worktree_command_run_from_the_palette_still_knows_the_selected_
 
 
 async def test_tui_worktree_column_appears_when_the_setting_is_on():
-    app = build_app(sessions=worktree_fleet(), settings=Settings(show_worktree=True))
+    app = build_app(sessions=worktree_fleet(), settings=Settings(columns=BOARD + (Column.WORKTREE, Column.WHERE)))
 
     async with app.run_test() as pilot:
         await settle(app, pilot)
@@ -2286,13 +2288,13 @@ async def test_tui_settings_screen_edits_and_saves(monkeypatch):
         await pilot.press("comma")
         await pilot.pause()
 
-        app.screen.query_one("#show_pid", Switch).toggle()
+        app.screen.query_one("#columns", SelectionList).select(Column.PID)
         await pilot.pause()
         await pilot.press("escape")
         await pilot.pause()
 
         assert "PID" in headers_of(app)
-        assert settings_store.load().show_pid is True
+        assert settings_store.load().columns == (Column.PID,)
 
 
 async def test_tui_settings_typing_does_not_filter_the_fleet():
@@ -2983,7 +2985,7 @@ async def test_tui_pull_requests_follow_the_row_its_reader_moved_to(monkeypatch,
 async def test_tui_shows_the_prs_column_when_it_is_switched_on(monkeypatch, tmp_path):
     monkeypatch.setenv("CLAUDE_CONFIG_DIR", str(tmp_path))
     transcript(tmp_path, "4e020900-df7c", "https://github.com/acme/widgets/pull/42 is ready")
-    app = build_app(settings=Settings(show_prs=True))
+    app = build_app(settings=Settings(columns=BOARD + (Column.PRS, Column.WHERE)))
 
     async with app.run_test() as pilot:
         await settle(app, pilot)
@@ -2998,7 +3000,7 @@ async def test_tui_prs_column_reads_every_visible_row_not_just_the_selected_one(
     monkeypatch.setenv("CLAUDE_CONFIG_DIR", str(tmp_path))
     transcript(tmp_path, "4e020900-df7c", "https://github.com/acme/widgets/pull/42")
     transcript(tmp_path, "cef6830d-aaaa", "https://github.com/acme/gadgets/pull/9", cwd="/tmp/web-platform")
-    app = build_app(settings=Settings(show_prs=True))
+    app = build_app(settings=Settings(columns=BOARD + (Column.PRS, Column.WHERE)))
 
     async with app.run_test() as pilot:
         await settle(app, pilot)
@@ -3011,7 +3013,7 @@ async def test_tui_prs_column_reads_every_visible_row_not_just_the_selected_one(
 async def test_tui_prs_column_says_a_session_named_nothing(monkeypatch, tmp_path):
     monkeypatch.setenv("CLAUDE_CONFIG_DIR", str(tmp_path))
     transcript(tmp_path, "4e020900-df7c", "just talking")
-    app = build_app(settings=Settings(show_prs=True))
+    app = build_app(settings=Settings(columns=BOARD + (Column.PRS, Column.WHERE)))
 
     async with app.run_test() as pilot:
         await settle(app, pilot)
@@ -3025,7 +3027,7 @@ async def test_tui_leaves_the_transcripts_alone_when_the_column_is_off(monkeypat
     monkeypatch.setenv("CLAUDE_CONFIG_DIR", str(tmp_path))
     transcript(tmp_path, "4e020900-df7c", "https://github.com/acme/widgets/pull/42")
     transcript(tmp_path, "cef6830d-aaaa", "https://github.com/acme/gadgets/pull/9", cwd="/tmp/web-platform")
-    app = build_app(settings=Settings(show_prs=False))
+    app = build_app(settings=Settings(columns=BOARD + (Column.WHERE,)))
 
     async with app.run_test() as pilot:
         await settle(app, pilot)
@@ -3043,9 +3045,281 @@ async def test_tui_switching_the_prs_column_on_rebuilds_the_table(monkeypatch, t
         await settle(app, pilot)
         assert "PRS" not in headers_of(app)
 
-        app._settings_changed(Settings(show_prs=True))
+        app._settings_changed(Settings(columns=BOARD + (Column.PRS, Column.WHERE)))
         await settle(app, pilot)
         await settle(app, pilot)
 
         assert "PRS" in headers_of(app)
         assert "widgets#42" in str(table_of(app).get_row_at(0))
+
+
+@pytest.fixture
+def codex_installed(monkeypatch, tmp_path):
+    """A machine with both agents on it, which is when the start sheet offers a choice."""
+    binary = tmp_path / "codex"
+    binary.write_text("#!/bin/sh\n")
+    binary.chmod(0o755)
+    monkeypatch.setenv("CLOWNHEAD_CODEX_BIN", str(binary))
+    return binary
+
+
+async def test_tui_start_offers_one_agent_when_that_is_all_there_is(monkeypatch, unknown_trust):
+    resolved(monkeypatch, [Path("/tmp/widgets")])
+    app = build_app(target=ISSUE)
+
+    async with app.run_test() as pilot:
+        await settle(app, pilot)
+        await pilot.press("n")
+        await settle(app, pilot)
+
+        assert "h for agent" not in str(app.screen.query_one("#keys", Static).content)
+
+
+async def test_tui_start_names_the_agent_when_the_machine_has_two(monkeypatch, unknown_trust, codex_installed):
+    resolved(monkeypatch, [Path("/tmp/widgets")])
+    app = build_app(target=ISSUE)
+
+    async with app.run_test() as pilot:
+        await settle(app, pilot)
+        await pilot.press("n")
+        await settle(app, pilot)
+
+        assert "h for agent (claude)" in str(app.screen.query_one("#keys", Static).content)
+
+
+async def test_tui_start_swaps_the_agent_and_the_command_with_it(monkeypatch, unknown_trust, codex_installed):
+    resolved(monkeypatch, [Path("/tmp/widgets")])
+    app = build_app(target=ISSUE)
+
+    async with app.run_test() as pilot:
+        await settle(app, pilot)
+        await pilot.press("n")
+        await settle(app, pilot)
+        await pilot.press("h")
+        await pilot.pause()
+
+        command = str(app.screen.query_one("#command", Static).content)
+        assert "--sandbox read-only" in command
+        assert "h for agent (codex)" in str(app.screen.query_one("#keys", Static).content)
+
+
+async def test_tui_start_under_codex_gets_a_worktree_a_new_checkout_would_deny_claude(
+    monkeypatch, unknown_trust, codex_installed
+):
+    """Trust is Claude Code's own refusal, and clownhead makes Codex's worktree with git."""
+    resolved(monkeypatch, [Path("/tmp/widgets")])
+    trusting(unknown_trust, Path("/tmp/elsewhere"))
+    app = build_app(target=ISSUE)
+
+    async with app.run_test() as pilot:
+        await settle(app, pilot)
+        await pilot.press("n")
+        await settle(app, pilot)
+        assert "has not been run here" in str(app.screen.query_one("#trust", Static).content)
+
+        await pilot.press("h")
+        await pilot.pause()
+
+        assert str(app.screen.query_one("#trust", Static).content) == ""
+        assert "worktrees/issue-2-open-a-session" in str(app.screen.query_one("#command", Static).content)
+
+
+async def test_tui_start_under_codex_makes_the_worktree_before_handing_over(
+    monkeypatch, unknown_trust, codex_installed
+):
+    made: list[tuple] = []
+    resolved(monkeypatch, [Path("/tmp/widgets")])
+    monkeypatch.setattr(tui_module, "create_worktree", lambda repo, name: made.append((repo, name)))
+    app = build_app(target=ISSUE)
+
+    async with app.run_test() as pilot:
+        await settle(app, pilot)
+        await pilot.press("n")
+        await settle(app, pilot)
+        await pilot.press("h")
+        await pilot.pause()
+        await pilot.press("enter")
+        await pilot.pause()
+
+    assert made == [(Path("/tmp/widgets"), "issue-2-open-a-session")]
+    assert app.launch is not None
+    assert app.launch.argv[0].endswith("codex")
+
+
+async def test_tui_start_says_so_when_git_refuses_the_worktree(monkeypatch, unknown_trust, codex_installed):
+    def refuse(repo, name):
+        raise LookupError("not a repository")
+
+    resolved(monkeypatch, [Path("/tmp/widgets")])
+    monkeypatch.setattr(tui_module, "create_worktree", refuse)
+    app = build_app(target=ISSUE)
+
+    async with app.run_test() as pilot:
+        await settle(app, pilot)
+        await pilot.press("n")
+        await settle(app, pilot)
+        await pilot.press("h")
+        await pilot.pause()
+        await pilot.press("enter")
+        await pilot.pause()
+
+        assert app.launch is None
+        assert any("not a repository" in str(note.message) for note in app._notifications)
+
+
+async def test_tui_leaves_out_the_harness_column_on_a_one_agent_machine():
+    app = build_app()
+
+    async with app.run_test() as pilot:
+        await settle(app, pilot)
+
+        assert "HARNESS" not in app.columns
+
+
+async def test_tui_names_the_agent_per_row_when_the_machine_has_two(codex_installed):
+    app = build_app()
+
+    async with app.run_test() as pilot:
+        await settle(app, pilot)
+
+        assert app.columns[:2] == ("STATUS", "HARNESS")
+        table = app.query_one("#fleet", DataTable)
+        assert str(table.get_cell_at(Coordinate(0, 1))) == "claude"
+
+
+async def test_tui_drops_the_harness_column_when_it_is_switched_off(codex_installed):
+    app = build_app(settings=Settings(columns=BOARD + (Column.WHERE,)))
+
+    async with app.run_test() as pilot:
+        await settle(app, pilot)
+
+        assert "HARNESS" not in app.columns
+
+
+def listing_of(app: FleetApp) -> SelectionList:
+    return app.screen.query_one("#columns", SelectionList)
+
+
+def order_of(app: FleetApp) -> list[str]:
+    listing = listing_of(app)
+    return [str(listing.get_option_at_index(i).value) for i in range(listing.option_count)]
+
+
+async def open_settings(app: FleetApp, pilot) -> None:
+    await settle(app, pilot)
+    await pilot.press("comma")
+    await pilot.pause()
+
+
+async def test_tui_settings_lists_every_column_there_is():
+    app = build_app()
+
+    async with app.run_test() as pilot:
+        await open_settings(app, pilot)
+
+        assert order_of(app) == [column.value for column in Column]
+
+
+async def test_tui_settings_lists_the_chosen_columns_first_in_their_own_order():
+    """One list answers both questions: which columns are on, and what order they draw in."""
+    app = build_app(settings=Settings(columns=(Column.WHERE, Column.STATUS)))
+
+    async with app.run_test() as pilot:
+        await open_settings(app, pilot)
+
+        assert order_of(app)[:2] == ["where", "status"]
+        assert set(listing_of(app).selected) == {Column.WHERE, Column.STATUS}
+
+
+async def test_tui_settings_saves_the_columns_in_the_order_the_list_shows_them():
+    app = build_app(settings=Settings(columns=(Column.WHERE, Column.STATUS)))
+
+    async with app.run_test() as pilot:
+        await open_settings(app, pilot)
+        listing_of(app).select(Column.NAME)
+        await pilot.pause()
+
+        assert app.screen._settings.columns == (Column.WHERE, Column.STATUS, Column.NAME)
+
+
+async def test_tui_settings_moves_a_column_later_in_the_board():
+    app = build_app(settings=Settings(columns=(Column.STATUS, Column.NAME)))
+
+    async with app.run_test() as pilot:
+        await open_settings(app, pilot)
+        listing_of(app).highlighted = 0
+        await pilot.press("J")
+        await pilot.pause()
+
+        assert order_of(app)[:2] == ["name", "status"]
+        assert app.screen._settings.columns == (Column.NAME, Column.STATUS)
+
+
+async def test_tui_settings_moves_a_column_earlier_in_the_board():
+    app = build_app(settings=Settings(columns=(Column.STATUS, Column.NAME)))
+
+    async with app.run_test() as pilot:
+        await open_settings(app, pilot)
+        listing_of(app).highlighted = 1
+        await pilot.press("K")
+        await pilot.pause()
+
+        assert app.screen._settings.columns == (Column.NAME, Column.STATUS)
+
+
+async def test_tui_settings_keeps_the_cursor_on_the_column_it_moved():
+    """Holding J walks one column down the list rather than shuffling it under a fixed cursor."""
+    app = build_app(settings=Settings(columns=(Column.STATUS, Column.NAME, Column.AGE)))
+
+    async with app.run_test() as pilot:
+        await open_settings(app, pilot)
+        listing_of(app).highlighted = 0
+        await pilot.press("J")
+        await pilot.pause()
+        await pilot.press("J")
+        await pilot.pause()
+
+        assert order_of(app)[:3] == ["name", "age", "status"]
+
+
+async def test_tui_settings_refuses_to_move_a_column_off_either_end():
+    app = build_app()
+
+    async with app.run_test() as pilot:
+        await open_settings(app, pilot)
+        before = order_of(app)
+        listing_of(app).highlighted = 0
+        await pilot.press("K")
+        await pilot.pause()
+        listing_of(app).highlighted = len(before) - 1
+        await pilot.press("J")
+        await pilot.pause()
+
+        assert order_of(app) == before
+
+
+async def test_tui_settings_reordering_keeps_what_was_picked():
+    app = build_app(settings=Settings(columns=(Column.STATUS, Column.NAME)))
+
+    async with app.run_test() as pilot:
+        await open_settings(app, pilot)
+        listing_of(app).highlighted = 0
+        await pilot.press("J")
+        await pilot.pause()
+
+        assert set(listing_of(app).selected) == {Column.STATUS, Column.NAME}
+
+
+async def test_tui_settings_picking_nothing_hands_the_choice_back(monkeypatch):
+    """An empty selection is nothing said, which is the automatic columns and not a bare board."""
+    app = build_app(settings=Settings(columns=(Column.STATUS,)))
+
+    async with app.run_test() as pilot:
+        await open_settings(app, pilot)
+        listing_of(app).deselect(Column.STATUS)
+        await pilot.pause()
+        await pilot.press("escape")
+        await pilot.pause()
+
+        assert settings_store.load().columns is None
+        assert headers_of(app) == ["STATUS", "NAME", "QUIET", "AGE", "WHERE"]

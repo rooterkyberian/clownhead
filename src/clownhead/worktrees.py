@@ -25,8 +25,9 @@ from dataclasses import dataclass
 from datetime import UTC, datetime, timedelta
 from pathlib import Path
 
-from clownhead.discovery import Process, is_claude, process_table
-from clownhead.models import Session, split_worktree
+from clownhead.discovery import is_agent, process_table
+from clownhead.models import Process, Session, split_worktree
+from clownhead.resume import worktree_path
 
 GIT_BINARY_VAR = "CLOWNHEAD_GIT_BIN"
 GIT_TIMEOUT = 20.0
@@ -148,6 +149,32 @@ def survey(
             )
         )
     return candidates
+
+
+def create(repo: Path, name: str) -> Path:
+    """Make a worktree of ``repo`` called ``name``, and hand back where it is.
+
+    Claude Code makes its own through ``--worktree``, and Codex has no equivalent, so this
+    is what stands in for it. Same layout either way, since the board reads the worktree
+    name out of the path.
+
+    A name already checked out somewhere is attached to rather than refused, matching what
+    ``--worktree`` does with one: starting a second session on a ticket should land in the
+    work the first one left, and a directory that is already there is the answer.
+
+    The branch is created only where there is not one already, so a second session on a
+    ticket continues the branch rather than failing on it.
+
+    Raises:
+        LookupError: git refused, or the repository is not one.
+    """
+    path = worktree_path(repo, name)
+    if path.is_dir():
+        return path
+    existing = _git_ok(repo, "show-ref", "--verify", "--quiet", f"refs/heads/{name}")
+    branch = ("-B", name) if not existing else ()
+    _git(repo, "worktree", "add", *branch, str(path), *(() if not existing else (name,)))
+    return path
 
 
 def remove(worktree: Worktree, processes: Mapping[int, Process] | None = None, *, branch: bool = False) -> None:
@@ -433,7 +460,7 @@ def _squashed_into(worktree: Worktree, target: str) -> bool:
 
 def _is_live_session(pid: int, processes: Mapping[int, Process]) -> bool:
     process = processes.get(pid)
-    return process is not None and is_claude(process.command)
+    return process is not None and is_agent(process.command)
 
 
 def _admin_mtime(worktree: Worktree) -> datetime | None:

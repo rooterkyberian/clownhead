@@ -2,8 +2,9 @@
 
 [![PyPI](https://img.shields.io/pypi/v/clownhead)](https://pypi.org/project/clownhead/)
 
-A status board for the Claude Code sessions already running on your machine:
+A status board for the coding-agent sessions already running on your machine:
 which are busy, which are idle, and which one is blocked waiting on you.
+Claude Code and Codex, on one board.
 
 ![A herd of Claude Code sessions, one waiting on you](https://github.com/rooterkyberian/clownhead/raw/main/docs/demo.gif)
 
@@ -20,6 +21,12 @@ which is ahead of the last release.
 ### Requirements
 
 - Claude Code 2.1.227 or newer on `PATH`.
+- Codex is optional.
+  With `codex` on `PATH` and its app-server running, its sessions appear alongside Claude Code's
+  and a `HARNESS` column says which is which.
+  `codex app-server daemon bootstrap` keeps that daemon up;
+  `clownhead doctor` says so when it is not.
+  See [Harness support](https://rooterkyberian.github.io/clownhead/features/) for what each agent can answer.
 - macOS or Linux.
   Developed on macOS with iTerm2;
   CI runs the suite on both.
@@ -231,9 +238,12 @@ so the same data pipes into a script.
 | `clownhead --version` | The installed version, which a problem report asks for. |
 
 `--columns` names what `ls` shows and the order to show it in:
-`status`, `name`, `quiet`, `age`, `pid`, `tty`, `worktree`, `prs`, `where`, `resume`.
+`status`, `harness`, `name`, `quiet`, `age`, `pid`, `tty`, `worktree`, `prs`, `where`, `resume`.
 Everything but `pid`, `tty`, `worktree` and `prs` is on by default,
-`resume` included.
+`resume` included, and `harness` only where the machine has two agents.
+The overseer's settings sheet writes the same selection
+(`space` picks a column, `J` and `K` move it),
+so a board and a script can be told the same thing in the same words.
 A listing you are reading in order to get back into something should hand you the command that does it:
 
 ```bash

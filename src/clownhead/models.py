@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+from dataclasses import dataclass
 from datetime import UTC, datetime, timedelta
 from enum import StrEnum
 from pathlib import Path
@@ -52,6 +53,42 @@ class Kind(StrEnum):
         return cls.INTERACTIVE
 
 
+class Column(StrEnum):
+    """A column of the board, named as ``--columns`` and the settings sheet spell it.
+
+    Here rather than beside the table it draws, because a column selection is a setting
+    somebody saved and :mod:`clownhead.settings` cannot import the renderer.
+    """
+
+    STATUS = "status"
+    HARNESS = "harness"
+    NAME = "name"
+    QUIET = "quiet"
+    AGE = "age"
+    PID = "pid"
+    TTY = "tty"
+    WORKTREE = "worktree"
+    PRS = "prs"
+    WHERE = "where"
+    RESUME = "resume"
+
+
+class Harness(StrEnum):
+    """Which coding agent a session belongs to.
+
+    The board shows one fleet made of several, so every session says which CLI answered
+    for it. Claude Code is the default because it is what clownhead was built on and what
+    every session model constructed without the field means.
+    """
+
+    CLAUDE = "claude"
+    CODEX = "codex"
+
+    @classmethod
+    def _missing_(cls, value: object) -> Harness:
+        return cls.CLAUDE
+
+
 ATTENTION_STATES = frozenset({Status.WAITING, Status.BLOCKED, Status.FAILED})
 FINISHED_STATES = frozenset({Status.COMPLETED, Status.CLOSED, Status.ARCHIVED})
 CLOSED_STATES = frozenset({Status.CLOSED, Status.ARCHIVED})
@@ -66,6 +103,30 @@ def split_worktree(cwd: Path) -> tuple[Path, str | None]:
     return (Path(repo), name) if marker else (cwd, None)
 
 
+@dataclass(frozen=True)
+class Process:
+    """One row of the process table."""
+
+    pid: int
+    ppid: int
+    tty: Path | None
+    command: str
+
+
+@dataclass(frozen=True)
+class Message:
+    """One thing said in a session, by the human or by the agent.
+
+    A turn nothing dated carries no time rather than a guessed one. Claude Code stamps
+    every transcript line, so its messages are dated; the Codex app-server hands out items
+    without a moment attached, so its messages are not.
+    """
+
+    role: str
+    text: str
+    at: datetime | None = None
+
+
 def epoch_millis_to_datetime(value: Any) -> datetime | None:
     """A Claude Code timestamp as a datetime, and ``None`` where it was not one.
 
@@ -77,18 +138,34 @@ def epoch_millis_to_datetime(value: Any) -> datetime | None:
     return None
 
 
-class Session(BaseModel):
-    """A single Claude Code session as reported by ``claude agents --json``.
+def epoch_seconds_to_datetime(value: Any) -> datetime | None:
+    """A Codex timestamp as a datetime, and ``None`` where it was not one.
 
-    Interactive entries carry ``status``/``waitingFor`` while background entries carry
-    ``state``; both are normalised onto :attr:`status`. :attr:`tty` and :attr:`app` are
-    not in the payload at all — they are discovered from the process table.
+    The app-server counts in whole seconds where Claude Code counts in milliseconds. Both
+    leave out the moments they have nothing to say about, so both are optional.
+    """
+    if isinstance(value, int | float):
+        return datetime.fromtimestamp(value, tz=UTC)
+    return None
+
+
+class Session(BaseModel):
+    """A single session on the board, whichever harness answered for it.
+
+    The validator below reads the Claude Code shape, where interactive entries carry
+    ``status``/``waitingFor`` and background entries carry ``state``, both normalised onto
+    :attr:`status`. Codex sessions are built field by field in :mod:`clownhead.codex`,
+    which the validator passes through untouched.
+
+    :attr:`tty` and :attr:`app` are in no payload at all: they are discovered from the
+    process table.
     """
 
     model_config = ConfigDict(populate_by_name=True)
 
     session_id: str
     cwd: Path
+    harness: Harness = Harness.CLAUDE
     kind: Kind = Kind.INTERACTIVE
     pid: int | None = None
     name: str | None = None
@@ -98,6 +175,10 @@ class Session(BaseModel):
     updated_at: datetime | None = None
     tty: Path | None = None
     app: Path | None = None
+    transcript: Path | None = None
+    """Where the conversation is on disk, for a harness that names the file rather than
+    deriving it. Codex hands out the rollout path with the thread; Claude Code's transcripts
+    are found from the session id, so this stays unset for them."""
 
     @model_validator(mode="before")
     @classmethod

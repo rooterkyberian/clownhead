@@ -1,6 +1,6 @@
 site_name: clownhead
 site_url: https://rooterkyberian.github.io/clownhead/
-site_description: A status board for the Claude Code sessions already running on your machine.
+site_description: A status board for the Claude Code and Codex sessions already running on your machine.
 site_author: Maciej Urbański
 copyright: MIT licensed
 
@@ -55,6 +55,7 @@ nav:
   - Home: index.md
   - Guide: guide.md
   - How it works: how-it-works.md
+  - Harness support: features.md
   - Alternatives: alternatives.md
   - cctop: cctop.md
 

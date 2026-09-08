@@ -489,3 +489,45 @@ def test_remote_of_says_nothing_for_a_repository_without_one(repo):
 
 def test_remote_of_says_nothing_where_there_is_no_repository(tmp_path):
     assert worktrees.remote_of(tmp_path / "nowhere") is None
+
+
+def test_create_makes_a_worktree_where_the_board_looks_for_one(repo):
+    """Codex has no `--worktree`, so clownhead makes the checkout Claude Code would have."""
+    path = worktrees.create(repo, "search-index")
+
+    assert path == repo / ".claude" / "worktrees" / "search-index"
+    assert path.is_dir()
+    assert (path / "README").read_text() == "start\n"
+
+
+def test_create_puts_the_new_worktree_on_a_branch_of_its_own(repo):
+    worktrees.create(repo, "search-index")
+
+    assert "search-index" in git(repo, "branch", "--list")
+
+
+def test_create_attaches_to_a_worktree_that_is_already_there(repo):
+    first = worktrees.create(repo, "search-index")
+    (first / "work.txt").write_text("half done\n")
+
+    second = worktrees.create(repo, "search-index")
+
+    assert second == first
+    assert (second / "work.txt").read_text() == "half done\n"
+
+
+def test_create_continues_a_branch_that_already_exists(repo):
+    """A second session on one ticket should land on the work the first one left."""
+    git(repo, "branch", "search-index")
+
+    path = worktrees.create(repo, "search-index")
+
+    assert path.is_dir()
+    assert "search-index" in git(path, "branch", "--show-current")
+
+
+def test_create_reports_a_directory_that_is_not_a_repository(tmp_path):
+    (tmp_path / "loose").mkdir()
+
+    with pytest.raises(LookupError):
+        worktrees.create(tmp_path / "loose", "search-index")

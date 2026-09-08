@@ -169,7 +169,7 @@ Ranked by what each would add to clownhead against what it would cost.
 
 ## Left alone
 
-- Other harnesses. clownhead is built on `claude agents --json`. Codex and opencode would mean a second discovery mechanism, and a second copy of every assumption underneath it.
+- opencode. A third harness would mean a third discovery mechanism, and a third copy of every assumption underneath it. Codex was worth that price and is being built; see [Harness support](features.md) for what it can and cannot answer.
 - Hook-based capture. The detail is real and so is the price: an entry in every session's configuration, and a blind spot for anything already running. clownhead took that trade the other way on purpose, and [Alternatives](alternatives.md) says so.
 - Themes, the draggable panel, the menubar icon. A TUI inherits the terminal's colours and the terminal's window management.
 - Stream Deck. `ls --json` covers this and everything shaped like it.

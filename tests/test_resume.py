@@ -1,8 +1,17 @@
 from pathlib import Path
 
+import pytest
+
 from clownhead.discovery import CONFIG_DIR_VAR
-from clownhead.models import Session
-from clownhead.resume import Launch, resume_argv, resume_plan, resume_shell_command, start_plan
+from clownhead.models import Harness, Session
+from clownhead.resume import (
+    Launch,
+    resume_argv,
+    resume_plan,
+    resume_shell_command,
+    start_plan,
+    worktree_path,
+)
 
 
 def session(cwd: Path, session_id: str = "a-b") -> Session:
@@ -145,3 +154,64 @@ def test_start_plan_leaves_the_worktree_out_where_claude_has_not_been_run(tmp_pa
 
     assert "--worktree" not in plan.argv
     assert plan.argv == ("claude", "--permission-mode", "plan", "--name", "issue-2", "https://example.invalid/2")
+
+
+@pytest.fixture(autouse=True)
+def codex_on_path(monkeypatch) -> None:
+    """Spell the Codex binary plainly, which the suite otherwise points at nothing."""
+    monkeypatch.delenv("CLOWNHEAD_CODEX_BIN", raising=False)
+
+
+def codex_session(cwd: Path, session_id: str = "01a080d8") -> Session:
+    return Session(session_id=session_id, cwd=cwd, harness=Harness.CODEX)
+
+
+def test_a_codex_session_resumes_through_its_own_cli(tmp_path):
+    assert resume_argv(codex_session(tmp_path)) == ["codex", "resume", "01a080d8"]
+
+
+def test_a_codex_session_forks_through_its_own_cli(tmp_path):
+    plan = resume_plan(codex_session(tmp_path), fork=True)
+
+    assert plan.argv == ("codex", "fork", "01a080d8")
+
+
+def test_a_codex_worktree_session_resumes_in_the_worktree_itself(tmp_path):
+    """`codex resume` has no `--worktree`, so there is no rebuilding one from the repository."""
+    cwd = worktree(tmp_path)
+
+    plan = resume_plan(codex_session(cwd))
+
+    assert plan.directory == cwd
+    assert "--worktree" not in plan.argv
+
+
+def test_a_codex_command_carries_the_codex_home_it_was_listed_from(tmp_path, monkeypatch):
+    monkeypatch.setenv("CODEX_HOME", str(tmp_path / "elsewhere"))
+
+    command = resume_shell_command(codex_session(tmp_path))
+
+    assert f"CODEX_HOME={tmp_path / 'elsewhere'}" in command
+
+
+def test_a_codex_command_leaves_the_default_home_unsaid(tmp_path, monkeypatch):
+    monkeypatch.delenv("CODEX_HOME", raising=False)
+
+    assert "CODEX_HOME" not in resume_shell_command(codex_session(tmp_path))
+
+
+def test_starting_under_codex_works_in_the_worktree_and_asks_for_no_edits(tmp_path):
+    plan = start_plan(tmp_path, name="issue-2", prompt="https://example/2", harness=Harness.CODEX)
+
+    assert plan.directory == tmp_path / ".claude" / "worktrees" / "issue-2"
+    assert plan.argv == ("codex", "--sandbox", "read-only", "https://example/2")
+
+
+def test_starting_under_codex_without_a_worktree_works_in_the_checkout(tmp_path):
+    plan = start_plan(tmp_path, name="issue-2", prompt="https://example/2", worktree=False, harness=Harness.CODEX)
+
+    assert plan.directory == tmp_path
+
+
+def test_worktree_path_is_the_one_layout_both_agents_share(tmp_path):
+    assert worktree_path(tmp_path, "issue-2") == tmp_path / ".claude" / "worktrees" / "issue-2"

@@ -7,6 +7,13 @@ and for whoever has to fix it.
 
 ## Discovery
 
+Two agents answer for the fleet, and each is asked in its own way.
+`clownhead.harness` holds one class per agent, concatenates what they return and sorts the result as one board.
+An agent that is not installed is left out; one that is installed but cannot be reached right now is skipped, and `clownhead doctor` says why.
+[Harness support](features.md) is the ledger of what each can answer.
+
+### Claude Code
+
 `claude agents --json` is the source of truth for what is live.
 Each entry is enriched with the controlling TTY from `ps`, and with the last heartbeat and the published status from the session registry under the Claude Code config directory.
 
@@ -15,6 +22,26 @@ A sandboxed shell can run the CLI but not list that directory,
 in which case `claude agents --json` silently degrades to background agents only and still exits zero.
 clownhead checks for that case and refuses,
 instead of reporting an empty herd.
+
+### Codex
+
+Codex has no equivalent command.
+Its app-server daemon holds every session loaded on the machine and answers JSON-RPC on a Unix socket under the Codex home directory.
+The socket speaks WebSocket rather than raw bytes: newline-delimited JSON onto it is closed without a reply, and an `Upgrade: websocket` request is answered `101 Switching Protocols`.
+`clownhead.websocket` is the client half of that, about eighty lines of stdlib.
+
+Discovery takes two calls.
+`thread/list` reads a persisted index that a running session has not been written into yet, so a listing of the newest threads can start below a session opened minutes ago.
+Live sessions therefore come from `thread/loaded/list` and one `thread/read` each, and everything that has ended comes from `thread/list`.
+That is the same split as Claude Code's, where the CLI answers for what is live and the transcripts answer for what has ended.
+
+The daemon has to be running, which `codex app-server daemon bootstrap` arranges.
+Without it clownhead lists no Codex sessions and says so, rather than showing a board that looks merely quiet.
+
+The app-server names no process, so a pid is found by joining `ps` to `lsof`: which processes are Codex, and which directory each is sitting in.
+The pairing is taken only where one session and one process share a directory.
+Three threads and one terminal in one checkout is ordinary once an editor is also running Codex there, and the directory cannot say which of the three the terminal holds.
+Terminating and signalling act on a pid, so the wrong one costs somebody else's session, and no answer is the better one.
 
 ## Statuses
 

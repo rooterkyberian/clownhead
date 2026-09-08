@@ -34,6 +34,15 @@ body:
     validations:
       required: true
 
+  - type: input
+    id: codex-version
+    attributes:
+      label: Codex version
+      description: Output of `codex --version`. Leave blank if the problem has nothing to do with Codex.
+      placeholder: codex-cli 0.153.4
+    validations:
+      required: false
+
   - type: textarea
     id: doctor
     attributes:

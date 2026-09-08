@@ -16,19 +16,18 @@ from rich.table import Table
 from rich.text import Text
 from typer.core import TyperGroup
 
-from clownhead import __version__, attention, checkouts, discovery, issues, pulls, search, tui, worktrees
+from clownhead import __version__, attention, checkouts, discovery, harness, issues, pulls, search, tui, worktrees
 from clownhead import settings as settings_store
 from clownhead.issues import Unavailable
-from clownhead.models import Session
+from clownhead.models import Column, Session
 from clownhead.render import (
     NARROW_WIDTH,
-    Column,
     build_pull_table,
     build_table,
-    default_columns,
     format_duration,
     parse_columns,
     parse_duration,
+    resolve_columns,
 )
 from clownhead.resume import Launch, start_plan
 from clownhead.search import PullRequest, Reference
@@ -147,7 +146,7 @@ def _require_discovery() -> None:
 
 def _load(cwd: Path | None, include_background: bool, include_closed: bool = False) -> list[Session]:
     _require_discovery()
-    return discovery.list_sessions(cwd, interactive_only=not include_background, include_closed=include_closed)
+    return harness.list_sessions(cwd, interactive_only=not include_background, include_closed=include_closed)
 
 
 def _reference(text: str) -> Reference:
@@ -202,18 +201,15 @@ def _search_note(reference: Reference, matched: int, searched: int, include_clos
 def _columns(selection: str | None) -> tuple[Column, ...]:
     """Resolve the ``--columns`` selection, or the usual columns when there was none.
 
-    An unnamed selection answers to the saved column settings, which is what the overseer's
-    switches write to — one place to say you always want them, whichever view is being
-    read.
+    An unnamed selection answers to the saved one, which the overseer's settings sheet
+    writes in this same grammar — one place to say which columns you want and in what
+    order, whichever view is being read.
     """
     if selection is None:
-        settings = settings_store.load()
-        return default_columns(
+        return resolve_columns(
             console.width,
-            settings.show_pid,
-            settings.show_tty,
-            settings.show_worktree,
-            settings.show_prs,
+            settings_store.load().columns,
+            show_harness=len(harness.installed()) > 1,
         )
     try:
         return parse_columns(selection)
@@ -269,7 +265,7 @@ def launch_tui(
     _require_discovery()
     _run_launch(
         tui.run(
-            loader=lambda closed: discovery.list_sessions(
+            loader=lambda closed: harness.list_sessions(
                 cwd, interactive_only=not include_background, include_closed=closed
             ),
             interval=interval,
@@ -344,7 +340,7 @@ def open_reference(
     _require_discovery()
     _run_launch(
         tui.run(
-            loader=lambda closed: discovery.list_sessions(
+            loader=lambda closed: harness.list_sessions(
                 cwd, interactive_only=not include_background, include_closed=closed
             ),
             include_closed=True,
@@ -626,9 +622,10 @@ def doctor() -> None:
     terminal = detect_terminal()
     reachable = discovery.peer_discovery_available()
 
-    console.print(f"claude binary       {discovery.claude_binary()}")
     console.print(f"config dir          {_config_dir_line()}")
     console.print(f"peer discovery      {'[green]ok[/]' if reachable else '[bold red]blocked (sandboxed?)[/]'}")
+    for found in harness.HARNESSES.values():
+        console.print(f"{found.label:<19} {_harness_line(found)}")
     console.print(f"terminal            {terminal.name} (this shell)")
     if reachable:
         owners = sorted({attention.terminal_of(session).name for session in _load(None, include_background=False)})
@@ -641,6 +638,20 @@ def doctor() -> None:
         f"foreground={terminal.supports_foreground} "
         f"tab_focus={terminal.supports_tab_focus}"
     )
+
+
+def _harness_line(found: harness.Harness) -> str:
+    """One doctor line per harness: where it is, or why the board has nothing from it.
+
+    A harness that is not installed says so and stops. One that is installed but cannot be
+    reached is the case worth spelling out, since its sessions are missing from the board
+    and nothing else on the screen would say why.
+    """
+    if not found.installed():
+        return "[dim]not installed[/]"
+    reason = found.unavailable_reason()
+    where = f"{found.binary()} in {found.config_dir()}"
+    return f"[green]ok[/] {where}" if reason is None else f"[bold red]{reason}[/] ({where})"
 
 
 def main() -> None:

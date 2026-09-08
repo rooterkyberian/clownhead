@@ -16,7 +16,6 @@ import re
 from collections.abc import Iterable, Mapping, Sequence
 from dataclasses import dataclass
 from datetime import UTC, datetime, timedelta
-from enum import StrEnum
 from pathlib import Path
 
 from rich.console import Group, JustifyMethod, RenderableType
@@ -24,8 +23,7 @@ from rich.markup import escape
 from rich.table import Table
 from rich.text import Text
 
-from clownhead.discovery import Message
-from clownhead.models import Session, Status, split_worktree
+from clownhead.models import Column, Message, Session, Status, split_worktree
 from clownhead.pulls import APPROVED, CHANGES_REQUESTED, Checks, Pull
 from clownhead.pulls import NONE as NO_REVIEW
 from clownhead.pulls import Status as PullStatus
@@ -45,7 +43,7 @@ STATUS_STYLES: dict[Status, str] = {
     Status.UNKNOWN: "dim",
 }
 
-SPEAKERS = {"user": "you", "assistant": "claude"}
+SPEAKERS = {"user": "you", "assistant": "agent"}
 SPEAKER_STYLES = {"user": "bold", "assistant": "bold cyan"}
 YOUR_TURN_BACKGROUND = "on grey19"
 
@@ -72,21 +70,6 @@ requests: a row printing ``0`` or ``-`` while the transcripts are still being re
 asserting something nobody had looked up."""
 
 DURATION_UNITS = {"s": 1, "m": 60, "h": 3600, "d": 86400}
-
-
-class Column(StrEnum):
-    """A column of the fleet table, named as ``--columns`` spells it."""
-
-    STATUS = "status"
-    NAME = "name"
-    QUIET = "quiet"
-    AGE = "age"
-    PID = "pid"
-    TTY = "tty"
-    WORKTREE = "worktree"
-    PRS = "prs"
-    WHERE = "where"
-    RESUME = "resume"
 
 
 FLEXIBLE: dict[Column, tuple[int, int | None]] = {
@@ -169,6 +152,7 @@ class Row:
 
     status: str
     style: str
+    harness: str
     name: str
     quiet: str
     age: str
@@ -196,6 +180,7 @@ def build_rows(
         Row(
             status=session.reason,
             style=STATUS_STYLES.get(session.status, ""),
+            harness=session.harness.value,
             name=session.label,
             quiet=format_duration(session.quiet_for(moment)),
             age=format_duration(session.age(moment)),
@@ -305,7 +290,11 @@ def describe(
     )
 
 
-def conversation(messages: Iterable[Message], now: datetime | None = None) -> RenderableType:
+def conversation(
+    messages: Iterable[Message],
+    now: datetime | None = None,
+    speaker: str | None = None,
+) -> RenderableType:
     """Render a session's recent turns, newest last, as a stack of renderables.
 
     A transcript will sooner or later contain anything at all, so every turn is escaped
@@ -317,11 +306,11 @@ def conversation(messages: Iterable[Message], now: datetime | None = None) -> Re
     the same thing again.
     """
     moment = now or datetime.now(tz=UTC)
-    turns = [_turn(message, moment) for message in messages]
+    turns = [_turn(message, moment, speaker) for message in messages]
     return Group(*turns) if turns else Text.from_markup("[dim]nothing said yet[/]")
 
 
-def _turn(message: Message, moment: datetime) -> Text:
+def _turn(message: Message, moment: datetime, agent: str | None = None) -> Text:
     """Render one turn, with your own words laid on a background of their own.
 
     What you asked for is what a reader scans back through, and in a column of stacked
@@ -332,14 +321,15 @@ def _turn(message: Message, moment: datetime) -> Text:
     console width, so the tint reaches the edge of the panel and the turn reads as one
     block instead of a smear that stops wherever the sentence happened to end.
     """
-    markup = f"{_attribution(message, moment)}\n{_spoken(message.text)}"
+    markup = f"{_attribution(message, moment, agent)}\n{_spoken(message.text)}"
     if message.role != "user":
         return Text.from_markup(markup)
     return Text.from_markup(markup, style=YOUR_TURN_BACKGROUND, justify="left")
 
 
-def _attribution(message: Message, moment: datetime) -> str:
-    speaker = SPEAKERS.get(message.role, message.role)
+def _attribution(message: Message, moment: datetime, agent: str | None = None) -> str:
+    named = agent if agent is not None and message.role == "assistant" else None
+    speaker = named or SPEAKERS.get(message.role, message.role)
     style = SPEAKER_STYLES.get(message.role, "bold")
     if message.at is None:
         return f"[{style}]{speaker}[/]"
@@ -373,34 +363,71 @@ def parse_columns(selection: str) -> tuple[Column, ...]:
     return tuple(Column(name) for name in names)
 
 
-def default_columns(
-    width: int,
-    show_pid: bool = False,
-    show_tty: bool = False,
-    show_worktree: bool = False,
-    show_prs: bool = False,
-) -> tuple[Column, ...]:
-    """The columns to show when none were asked for.
+def column_order(saved: Sequence[Column] | None) -> list[Column]:
+    """Every column there is, in the order a chooser should list them.
 
-    PID, TTY, WORKTREE and PRS are off unless asked for: the first two matter when a
-    session needs killing or signalling, the third only in a repository that uses worktrees
-    at all, where ``where`` already says ``repo ⇢ worktree``, and the last costs a read of
-    every transcript the board is showing — cheap enough to offer, not cheap enough to
-    charge everybody for. Below :data:`NARROW_WIDTH` the
-    timing and resume columns go too; losing whole columns reads better than truncating the
-    start of every cell, and a resume command cut to fit is worse than absent — it looks
-    copyable and is not. A selection made by hand is never thinned this way, since dropping
-    a column somebody named would answer a narrow terminal by ignoring them.
+    The chosen ones first, in the order they were chosen, and everything else after in the
+    order they are declared. That way one list answers both questions a column sheet asks:
+    which columns are on, and what order the board draws them in. An unchosen column has no
+    place of its own to keep, so it waits below where it can be found.
     """
+    chosen = [column for column in (saved or ()) if column in set(Column)]
+    return chosen + [column for column in Column if column not in set(chosen)]
+
+
+def resolve_columns(
+    width: int,
+    saved: Sequence[Column] | None,
+    *,
+    show_harness: bool = False,
+) -> tuple[Column, ...]:
+    """The columns a view draws: the saved selection where there is one, else the defaults.
+
+    A saved selection is taken as written, including its order and including a width it
+    will not fit. Somebody who named their columns has answered this question already, and
+    a narrow terminal is not grounds to answer it again for them.
+
+    ``show_harness`` is a fact about the machine rather than a preference, so it steers the
+    default and leaves a hand-made selection alone: a board told to show the column shows
+    it, whatever is installed.
+    """
+    if saved:
+        return tuple(saved)
+    return default_columns(width, show_harness)
+
+
+def default_columns(width: int, show_harness: bool = False) -> tuple[Column, ...]:
+    """The columns to show when nobody has said which.
+
+    PID, TTY, WORKTREE and PRS are left out: the first two matter when a session needs
+    killing or signalling, the third only in a repository that uses worktrees at all, where
+    ``where`` already says ``repo ⇢ worktree``, and the last costs a read of every
+    transcript the board is showing. Each is a column to ask for rather than one to charge
+    everybody for, and asking is what a saved selection is.
+
+    HARNESS is on where the machine has more than one agent installed and off where it has
+    one, because a column reading ``claude`` on every row of every board answers a question
+    nobody on that machine can ask. That is the one part of this a preference cannot settle,
+    since it is a fact about the machine rather than a taste.
+
+    Below :data:`NARROW_WIDTH` the timing and resume columns go too. Losing whole columns
+    reads better than truncating the start of every cell, and a resume command cut to fit
+    is worse than absent, since it looks copyable and is not. A selection made by hand is
+    never thinned this way: dropping a column somebody named would answer a narrow terminal
+    by ignoring them.
+    """
+    harness = (Column.HARNESS,) * show_harness
     if width < NARROW_WIDTH:
-        return (Column.STATUS, Column.NAME, Column.WHERE)
-    optional = (
-        (Column.PID,) * show_pid
-        + (Column.TTY,) * show_tty
-        + (Column.WORKTREE,) * show_worktree
-        + (Column.PRS,) * show_prs
+        return (Column.STATUS, *harness, Column.NAME, Column.WHERE)
+    return (
+        Column.STATUS,
+        *harness,
+        Column.NAME,
+        Column.QUIET,
+        Column.AGE,
+        Column.WHERE,
+        Column.RESUME,
     )
-    return (Column.STATUS, Column.NAME, Column.QUIET, Column.AGE, *optional, Column.WHERE, Column.RESUME)
 
 
 def build_table(
@@ -424,6 +451,19 @@ def build_table(
     for row in rows:
         table.add_row(*(_cell(row, column, widths[column]) for column in chosen))
     return table
+
+
+def cell_of(row: Row, column: Column) -> Text | str:
+    """One cell for a table that sizes itself, which is the overseer's rather than ``ls``'s.
+
+    Nothing is truncated here. The fleet board scrolls sideways and lets its own table
+    decide what fits, where :func:`_cell` is fitting text into a width computed up front.
+    Status keeps its colour, which is the one cell whose style says something the text does
+    not repeat.
+    """
+    if column is Column.STATUS:
+        return Text(row.status, style=row.style)
+    return str(getattr(row, column.value))
 
 
 def _cell(row: Row, column: Column, width: int) -> str:

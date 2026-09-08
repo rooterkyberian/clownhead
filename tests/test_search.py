@@ -5,7 +5,7 @@ import pytest
 
 from clownhead import search
 from clownhead.issues import Issue, Tracker
-from clownhead.models import Session
+from clownhead.models import Harness, Session
 from clownhead.search import PullRequest, mentions, parse_pull_request, parse_reference, sessions_mentioning
 
 
@@ -106,6 +106,16 @@ def test_mentions_reports_no_match_for_an_empty_transcript(tmp_path):
     assert mentions(path, PullRequest("widgets", 42).mention_pattern()) is False
 
 
+def a_codex_session(session_id: str, rollout: Path | None) -> Session:
+    """A Codex session, which names its own rollout file rather than deriving one."""
+    return Session(session_id=session_id, cwd=Path("/tmp/repo"), harness=Harness.CODEX, transcript=rollout)
+
+
+def a_claude_session(session_id: str) -> Session:
+    """A Claude Code session, which is what a transcript root answers for."""
+    return Session(session_id=session_id, cwd=Path("/tmp/repo"))
+
+
 def transcript(root: Path, session_id: str, said: str, cwd: str = "/tmp/one") -> Path:
     project = root / cwd.replace("/", "-")
     project.mkdir(parents=True, exist_ok=True)
@@ -191,7 +201,7 @@ def test_pulls_mentioned_reads_every_pull_request_a_transcript_names(tmp_path):
         "based on https://github.com/acme/widgets/pull/7, follows https://github.com/acme/gadgets/pull/9",
     )
 
-    assert set(search.pulls_mentioned("one", tmp_path)) == {
+    assert set(search.pulls_mentioned(a_claude_session("one"), tmp_path)) == {
         PullRequest("widgets", 7, "acme"),
         PullRequest("gadgets", 9, "acme"),
     }
@@ -202,52 +212,52 @@ def test_pulls_mentioned_leads_with_the_one_named_last(tmp_path):
         tmp_path, "one", "opened https://github.com/acme/widgets/pull/7 then https://github.com/acme/gadgets/pull/9"
     )
 
-    assert search.pulls_mentioned("one", tmp_path)[0] == PullRequest("gadgets", 9, "acme")
+    assert search.pulls_mentioned(a_claude_session("one"), tmp_path)[0] == PullRequest("gadgets", 9, "acme")
 
 
 def test_pulls_mentioned_names_each_pull_request_once_however_often_it_came_up(tmp_path):
     url = "https://github.com/acme/widgets/pull/7"
     transcript(tmp_path, "one", " ".join([url] * 40))
 
-    assert search.pulls_mentioned("one", tmp_path) == [PullRequest("widgets", 7, "acme")]
+    assert search.pulls_mentioned(a_claude_session("one"), tmp_path) == [PullRequest("widgets", 7, "acme")]
 
 
 def test_pulls_mentioned_reads_one_spelled_two_ways_as_one_pull_request(tmp_path):
     transcript(tmp_path, "one", "https://github.com/Acme/Widgets/pull/7 is https://github.com/acme/widgets/pull/7")
 
-    assert len(search.pulls_mentioned("one", tmp_path)) == 1
+    assert len(search.pulls_mentioned(a_claude_session("one"), tmp_path)) == 1
 
 
 def test_pulls_mentioned_refuses_the_shorthand_it_cannot_anchor(tmp_path):
     transcript(tmp_path, "one", "widgets#7 and PLAT-4471#3 and a diff hunk @@ -7,3 +7,3 @@")
 
-    assert search.pulls_mentioned("one", tmp_path) == []
+    assert search.pulls_mentioned(a_claude_session("one"), tmp_path) == []
 
 
 def test_pulls_mentioned_does_not_read_an_issue_as_a_pull_request(tmp_path):
     transcript(tmp_path, "one", "https://github.com/acme/widgets/issues/7")
 
-    assert search.pulls_mentioned("one", tmp_path) == []
+    assert search.pulls_mentioned(a_claude_session("one"), tmp_path) == []
 
 
 def test_pulls_mentioned_takes_the_whole_number(tmp_path):
     transcript(tmp_path, "one", "https://github.com/acme/widgets/pull/3090/files")
 
-    assert search.pulls_mentioned("one", tmp_path) == [PullRequest("widgets", 3090, "acme")]
+    assert search.pulls_mentioned(a_claude_session("one"), tmp_path) == [PullRequest("widgets", 3090, "acme")]
 
 
 def test_pulls_mentioned_reads_a_subagent_transcript_too(tmp_path):
     transcript(tmp_path, "one", "nothing here")
     subagent_transcript(tmp_path, "one", "https://github.com/acme/widgets/pull/7")
 
-    assert search.pulls_mentioned("one", tmp_path) == [PullRequest("widgets", 7, "acme")]
+    assert search.pulls_mentioned(a_claude_session("one"), tmp_path) == [PullRequest("widgets", 7, "acme")]
 
 
 def test_pulls_mentioned_says_nothing_about_an_empty_transcript(tmp_path):
     path = transcript(tmp_path, "one", "https://github.com/acme/widgets/pull/7")
     path.write_bytes(b"")
 
-    assert search.pulls_mentioned("one", tmp_path) == []
+    assert search.pulls_mentioned(a_claude_session("one"), tmp_path) == []
 
 
 def test_pulls_mentioned_survives_a_transcript_it_cannot_read(tmp_path):
@@ -255,13 +265,13 @@ def test_pulls_mentioned_survives_a_transcript_it_cannot_read(tmp_path):
     path.chmod(0o000)
 
     try:
-        assert search.pulls_mentioned("one", tmp_path) == []
+        assert search.pulls_mentioned(a_claude_session("one"), tmp_path) == []
     finally:
         path.chmod(0o644)
 
 
 def test_pulls_mentioned_says_nothing_about_a_session_with_no_transcript(tmp_path):
-    assert search.pulls_mentioned("nowhere", tmp_path) == []
+    assert search.pulls_mentioned(a_claude_session("nowhere"), tmp_path) == []
 
 
 def test_sessions_by_pull_leaves_out_the_sessions_that_named_nothing(tmp_path):
@@ -324,3 +334,29 @@ def test_pulls_by_session_keeps_a_session_that_named_nothing(tmp_path):
     found = search.pulls_by_session([session("one"), session("two", "/tmp/two")], tmp_path)
 
     assert found == {"one": [PullRequest("widgets", 7, "acme")], "two": []}
+
+
+def test_pulls_mentioned_reads_a_codex_rollout_file(tmp_path):
+    """Codex writes one file per thread and says where it is, so nothing is derived."""
+    rollout = tmp_path / "rollout-2026-09-08T13-47-33-01a080d8.jsonl"
+    said = "picking up https://github.com/acme/widgets/pull/7"
+    rollout.write_text(json.dumps({"type": "event_msg", "text": said}))
+
+    found = search.pulls_mentioned(a_codex_session("01a080d8", rollout))
+
+    assert found == [PullRequest("widgets", 7, "acme")]
+
+
+def test_pulls_mentioned_says_nothing_about_a_codex_session_with_no_rollout_yet():
+    assert search.pulls_mentioned(a_codex_session("01a080d8", None)) == []
+
+
+def test_sessions_mentioning_covers_both_harnesses_at_once(tmp_path):
+    rollout = tmp_path / "rollout.jsonl"
+    rollout.write_text("working on acme/widgets#7")
+    transcript(tmp_path, "one", said="also acme/widgets#7")
+    fleet = [a_claude_session("one"), a_codex_session("two", rollout)]
+
+    named = sessions_mentioning(PullRequest("widgets", 7, "acme"), fleet, tmp_path)
+
+    assert named == {"one", "two"}

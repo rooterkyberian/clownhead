@@ -13,6 +13,7 @@ from pathlib import Path
 
 from pydantic import BaseModel, Field, ValidationError
 
+from clownhead.models import Column
 from clownhead.state import state_dir
 
 MIN_INTERVAL = 1.0
@@ -36,10 +37,18 @@ class Settings(BaseModel):
     """What the overseer remembers about how you like it."""
 
     interval: float = Field(default=5.0, ge=MIN_INTERVAL, le=MAX_INTERVAL)
-    show_pid: bool = False
-    show_tty: bool = False
-    show_worktree: bool = False
-    show_prs: bool = False
+    columns: tuple[Column, ...] | None = None
+    """Which columns to show and in what order, or ``None`` for whichever the view picks.
+
+    One ordered list rather than a switch per column, because the order is half the answer:
+    a board read left to right puts what you are looking for first, and a fixed order with
+    five opt-in columns could say which to show and never where. It is the same selection
+    ``--columns`` takes on the command line, so a board and a script can be told the same
+    thing in the same words.
+
+    ``None`` is the default and means *decide for me*: the fleet table picks by terminal
+    width, and leaves out the harness column on a machine running one agent.
+    """
     show_closed: bool = False
     foreground: bool = True
     paint_tabs: bool = True

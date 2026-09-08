@@ -8,10 +8,15 @@ import clownhead
 from clownhead import attention
 from clownhead import discovery as discovery_module
 from clownhead.discovery import CONFIG_DIR_VAR
-from clownhead.models import Status
+from clownhead.models import Session, Status
 from clownhead.render import build_rows, describe, worktree_cell
 from clownhead.resume import resume_shell_command
 from tools import demo as demo_module
+
+
+def a_session(session_id: str) -> Session:
+    """The demo session with that id, which is all the conversation reader looks at."""
+    return Session(session_id=session_id, cwd=Path("/tmp/demo"))
 
 
 @pytest.fixture
@@ -100,7 +105,7 @@ def test_the_demo_never_paints_a_tab_it_was_not_given(loader):
 
 def test_the_stalled_session_stopped_on_a_question(loader):
     """What `→` is for: the turn that explains why the board says it is waiting on you."""
-    turns = demo_module.fabricated_conversation(demo_module.PAYMENTS_SESSION, limit=20)
+    turns = demo_module.fabricated_conversation(a_session(demo_module.PAYMENTS_SESSION), limit=20)
 
     assert [turn.role for turn in turns] == ["user", "assistant", "user", "assistant"]
     assert turns[-1].text.endswith("I would rather ask than pick.")
@@ -108,14 +113,14 @@ def test_the_stalled_session_stopped_on_a_question(loader):
 
 
 def test_a_conversation_is_cut_to_the_turns_asked_for(loader):
-    turns = demo_module.fabricated_conversation(demo_module.PAYMENTS_SESSION, limit=2)
+    turns = demo_module.fabricated_conversation(a_session(demo_module.PAYMENTS_SESSION), limit=2)
 
     assert len(turns) == 2
     assert turns[-1].role == "assistant"
 
 
 def test_a_session_with_nothing_to_show_says_nothing(loader):
-    assert demo_module.fabricated_conversation(demo_module.NOTIFICATIONS_SESSION, limit=20) == []
+    assert demo_module.fabricated_conversation(a_session(demo_module.NOTIFICATIONS_SESSION), limit=20) == []
 
 
 def test_every_conversation_belongs_to_a_session_on_the_board(loader):

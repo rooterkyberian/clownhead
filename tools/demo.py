@@ -36,8 +36,8 @@ from typing import Annotated
 import typer
 
 from clownhead import tui
-from clownhead.discovery import CONFIG_DIR_VAR, Message, sort_key
-from clownhead.models import Session, Status
+from clownhead.discovery import CONFIG_DIR_VAR, sort_key
+from clownhead.models import Message, Session, Status
 from clownhead.settings import Settings
 
 DEMO_HOME = Path("/tmp/clownhead-demo")  # noqa: S108
@@ -159,7 +159,7 @@ def fabricated_fleet() -> Callable[[bool], list[Session]]:
     return _fleet
 
 
-def fabricated_conversation(session_id: str, /, *, limit: int) -> list[Message]:
+def fabricated_conversation(session: Session, /, *, limit: int) -> list[Message]:
     """The turns a demo session has to show, oldest first.
 
     Only the two sessions worth opening have anything to say. The rest answer as a session
@@ -167,7 +167,7 @@ def fabricated_conversation(session_id: str, /, *, limit: int) -> list[Message]:
     nothing, which the panel says plainly.
     """
     now = datetime.now(tz=UTC)
-    turns = CONVERSATIONS.get(session_id, ())
+    turns = CONVERSATIONS.get(session.session_id, ())
     return [Message(role=role, text=text, at=now - ago) for role, ago, text in turns][-limit:]
 
 

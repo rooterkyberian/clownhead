@@ -1,16 +1,17 @@
 import json
 
 import pytest
+from pydantic import ValidationError
 
 from clownhead import settings as settings_store
+from clownhead.models import Column
 from clownhead.settings import Settings
 
 
-def test_defaults_hide_the_process_columns_and_raise_on_ping():
+def test_defaults_leave_the_columns_to_the_view_and_raise_on_ping():
     settings = Settings()
 
-    assert settings.show_pid is False
-    assert settings.show_tty is False
+    assert settings.columns is None
     assert settings.show_closed is False
     assert settings.foreground is True
     assert settings.paint_tabs is True
@@ -18,7 +19,7 @@ def test_defaults_hide_the_process_columns_and_raise_on_ping():
 
 
 def test_save_then_load_round_trip():
-    saved = Settings(show_pid=True, interval=12.5, history_turns=40)
+    saved = Settings(columns=(Column.NAME, Column.PID), interval=12.5, history_turns=40)
 
     path = settings_store.save(saved)
 
@@ -55,3 +56,33 @@ def test_interval_is_bounded(interval):
 def test_history_turns_is_bounded():
     with pytest.raises(ValueError):
         Settings(history_turns=0)
+
+
+@pytest.mark.parametrize(
+    "columns",
+    [
+        ("name", "where"),
+        ("status", "harness", "name"),
+        (),
+    ],
+)
+def test_a_saved_column_selection_survives_the_round_trip(columns):
+    saved = Settings(columns=columns or None)
+
+    settings_store.save(saved)
+
+    assert settings_store.load().columns == (tuple(Column(name) for name in columns) or None)
+
+
+def test_a_column_nobody_named_is_refused():
+    with pytest.raises(ValidationError):
+        Settings(columns=("name", "not-a-column"))
+
+
+def test_a_file_naming_a_column_that_no_longer_exists_falls_back_to_defaults():
+    """A selection saved by a later version is unreadable rather than half-applied."""
+    path = settings_store.settings_path()
+    path.parent.mkdir(parents=True)
+    path.write_text(json.dumps({"columns": ["name", "sparkline"]}))
+
+    assert settings_store.load() == Settings()

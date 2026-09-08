@@ -17,7 +17,6 @@ from typing import Any, Protocol
 
 from pydantic import ValidationError
 from rich.markup import escape
-from rich.text import Text
 from textual import events, work
 from textual.app import App, ComposeResult, SystemCommand
 from textual.binding import Binding
@@ -26,14 +25,34 @@ from textual.message import Message as TextualMessage
 from textual.message_pump import MessagePump
 from textual.notifications import SeverityLevel
 from textual.screen import ModalScreen, Screen
-from textual.widgets import DataTable, Footer, Input, Label, OptionList, Select, Static, Switch
+from textual.widgets import (
+    DataTable,
+    Footer,
+    Input,
+    Label,
+    OptionList,
+    Select,
+    SelectionList,
+    Static,
+    Switch,
+)
+from textual.widgets.selection_list import Selection
 
-from clownhead import archive, attention, checkouts, discovery, issues, pulls
+from clownhead import archive, attention, checkouts, harness, issues, pulls
 from clownhead import settings as settings_store
 from clownhead.control import SLASH_COMMAND, close_tab, rename, send_message, shell_of, terminate, wait_for_exit
-from clownhead.discovery import Message, Process, process_table, recent_messages, relocated_config_dir
+from clownhead.discovery import process_table, relocated_config_dir
 from clownhead.issues import Unavailable
-from clownhead.models import CLOSED_STATES, Session, Status, split_worktree
+from clownhead.models import (
+    CLOSED_STATES,
+    Column,
+    Harness,
+    Message,
+    Process,
+    Session,
+    Status,
+    split_worktree,
+)
 from clownhead.panes import open_session, type_into
 from clownhead.pulls import Pull
 from clownhead.pulls import Status as PullStatus
@@ -41,6 +60,8 @@ from clownhead.render import (
     PULL_COLUMNS,
     build_pull_rows,
     build_rows,
+    cell_of,
+    column_order,
     conversation,
     describe,
     describe_pull,
@@ -61,9 +82,11 @@ from clownhead.search import (
 from clownhead.settings import ResumeIn, Settings
 from clownhead.terminal import Terminal, copy_to_pasteboard, open_url
 from clownhead.worktrees import Candidate, survey
+from clownhead.worktrees import create as create_worktree
 from clownhead.worktrees import remove as remove_worktree
 
-BASE_COLUMNS = ("STATUS", "NAME", "QUIET", "AGE")
+BASE_COLUMNS = (Column.STATUS, Column.NAME, Column.QUIET, Column.AGE)
+"""What the board shows before anyone has said otherwise, WHERE closing it off."""
 DEFAULT_INTERVAL = 5.0
 CLOWN = "\N{CLOWN FACE}"
 CONFIG_DIR_CAP = 40
@@ -88,9 +111,13 @@ class Loader(Protocol):
 
 
 class Reader(Protocol):
-    """Fetches the tail of a session's conversation."""
+    """Fetches the tail of a session's conversation.
 
-    def __call__(self, session_id: str, /, *, limit: int) -> list[Message]:
+    Handed the session rather than its id, because where a conversation is kept is a
+    question only the harness it belongs to can answer.
+    """
+
+    def __call__(self, session: Session, /, *, limit: int) -> list[Message]:
         """Read the last few turns of a session, oldest first."""
         ...
 
@@ -496,6 +523,7 @@ class StartChoice:
     repo: Path
     copy: bool = False
     worktree: bool = True
+    agent: Harness = Harness.CLAUDE
 
 
 class StartScreen(ModalScreen[StartChoice | None]):
@@ -547,6 +575,7 @@ class StartScreen(ModalScreen[StartChoice | None]):
     BINDINGS = [
         Binding("enter", "start", "start"),
         Binding("y", "copy", "copy"),
+        Binding("h", "harness", "harness"),
         Binding("escape", "cancel", "cancel"),
     ]
 
@@ -556,6 +585,7 @@ class StartScreen(ModalScreen[StartChoice | None]):
         name: str,
         repos: Sequence[Path],
         trusted: set[Path] | None = None,
+        agents: Sequence[Harness] = (Harness.CLAUDE,),
     ) -> None:
         super().__init__()
         self._reference = reference
@@ -563,6 +593,8 @@ class StartScreen(ModalScreen[StartChoice | None]):
         self._repos = list(repos)
         self._trusted = trusted
         self._index = 0
+        self._agents = list(agents) or [Harness.CLAUDE]
+        self._agent = 0
 
     def compose(self) -> ComposeResult:
         """Show what is about to be run, and where the choice of repository is one."""
@@ -574,7 +606,7 @@ class StartScreen(ModalScreen[StartChoice | None]):
                 yield Static(f"[dim]in[/] {self._entry(self._repos[0])}", id="repos")
             yield Static(self._command_line(), id="command")
             yield Static(self._trust_note(), id="trust")
-            yield Static("[dim]enter to start · y to copy · esc to cancel[/]")
+            yield Static(self._keys(), id="keys")
 
     def on_mount(self) -> None:
         """Put the cursor on the best guess, which is the first one."""
@@ -608,18 +640,44 @@ class StartScreen(ModalScreen[StartChoice | None]):
 
     def action_start(self) -> None:
         """Hand back the chosen repository, to be started in."""
-        self.dismiss(StartChoice(self._chosen(), worktree=self._has_worktree()))
+        self.dismiss(StartChoice(self._chosen(), worktree=self._has_worktree(), agent=self._chosen_agent()))
 
     def action_copy(self) -> None:
         """Hand back the chosen repository, to be copied rather than run."""
-        self.dismiss(StartChoice(self._chosen(), copy=True, worktree=self._has_worktree()))
+        self.dismiss(StartChoice(self._chosen(), copy=True, worktree=self._has_worktree(), agent=self._chosen_agent()))
 
     def action_cancel(self) -> None:
         """Leave without starting anything."""
         self.dismiss(None)
 
+    def action_harness(self) -> None:
+        """Start this one under the other agent instead.
+
+        A key rather than a second list. Which agent picks a ticket up is a preference with
+        two answers on the machines that have two, and one on every other, so it costs a
+        keystroke where it means something and nothing where it does not.
+        """
+        if len(self._agents) < 2:
+            return
+        self._agent = (self._agent + 1) % len(self._agents)
+        for command in self.query("#command").results(Static):
+            command.update(self._command_line())
+        for note in self.query("#trust").results(Static):
+            note.update(self._trust_note())
+        for keys in self.query("#keys").results(Static):
+            keys.update(self._keys())
+
     def _chosen(self) -> Path:
         return self._repos[self._index]
+
+    def _chosen_agent(self) -> Harness:
+        return self._agents[self._agent]
+
+    def _keys(self) -> str:
+        """The footer, naming the agent only where there is another one to swap to."""
+        if len(self._agents) < 2:
+            return "[dim]enter to start · y to copy · esc to cancel[/]"
+        return f"[dim]enter to start · y to copy · h for agent ({self._chosen_agent().value}) · esc to cancel[/]"
 
     def _command_line(self) -> str:
         plan = start_plan(
@@ -627,13 +685,16 @@ class StartScreen(ModalScreen[StartChoice | None]):
             name=self._start_name,
             prompt=self._reference.prompt,
             worktree=self._has_worktree(),
+            harness=self._chosen_agent(),
         )
         return f"[dim]{escape(plan.shell_command)}[/]"
 
     def _entry(self, repo: Path) -> str:
         """One repository as the list shows it, saying which will cost a trust dialog."""
         shown = escape(shorten_path(repo))
-        return shown if self._trusts(repo) else f"{shown}  [dim](new to claude)[/]"
+        if self._chosen_agent() is not Harness.CLAUDE or self._trusts(repo):
+            return shown
+        return f"{shown}  [dim](new to claude)[/]"
 
     def _trust_note(self) -> str:
         """The one line explaining why the chosen repository is getting no worktree."""
@@ -645,7 +706,13 @@ class StartScreen(ModalScreen[StartChoice | None]):
         )
 
     def _has_worktree(self) -> bool:
-        return self._trusts(self._chosen())
+        """Whether this start gets a worktree of its own.
+
+        Only Claude Code's own refusal can take one away. It declines to make a worktree in
+        a directory whose trust dialog has not been accepted; clownhead makes Codex's with
+        git, which asks nobody anything.
+        """
+        return self._chosen_agent() is not Harness.CLAUDE or self._trusts(self._chosen())
 
     def _trusts(self, repo: Path) -> bool:
         """Whether Claude Code would make a worktree here without asking anything first.
@@ -669,51 +736,78 @@ class SettingsScreen(ModalScreen[Settings | None]):
         align: center middle;
     }
     #sheet {
-        width: 60;
+        width: 62;
         height: auto;
         padding: 1 2;
         border: round $panel;
         background: $surface;
     }
     .row {
-        height: 3;
+        height: 1;
+        margin-bottom: 1;
     }
     .row Label {
         width: 1fr;
-        padding: 1 0;
+        padding: 0;
+    }
+    .row Switch {
+        height: 1;
+        border: none;
+        padding: 0;
+        background: $panel;
     }
     #sheet Input {
         width: 12;
+        height: 1;
+        border: none;
+        padding: 0 1;
+        background: $panel;
     }
     #resume_in {
         width: 20;
+        height: 1;
+        border: none;
+    }
+    #columns {
+        height: 6;
+        margin-bottom: 1;
+        border: none;
+        background: $panel;
     }
     """
 
     BINDINGS = [
         Binding("escape", "close", "close"),
         Binding("enter", "close", "close"),
+        Binding("J", "move_down", "move column down", show=False),
+        Binding("K", "move_up", "move column up", show=False),
     ]
 
     TOGGLES = (
-        ("show_pid", "PID column"),
-        ("show_tty", "TTY column"),
-        ("show_worktree", "WORKTREE column"),
-        ("show_prs", "PRS column, read from the transcripts"),
         ("show_closed", "closed sessions at startup"),
         ("foreground", "raise the window on focus"),
         ("paint_tabs", "tint session tabs, and the board's own"),
         ("close_tab_on_terminate", "close the tab when a session is terminated"),
     )
 
+    HINTS = {
+        Column.PRS: "read from the transcripts",
+        Column.HARNESS: "which agent",
+        Column.RESUME: "the command that reopens it",
+    }
+    """The three columns whose name does not say what they cost or what they hold."""
+
     def __init__(self, settings: Settings) -> None:
         super().__init__()
         self._settings = settings.model_copy()
+        self._order = column_order(settings.columns)
 
     def compose(self) -> ComposeResult:
-        """Lay out one row per setting."""
+        """The column list first, then one line per setting."""
         with Vertical(id="sheet"):
             yield Static("[bold]settings[/]")
+            yield Label("columns  [dim]space picks · J/K reorders · none for automatic[/]")
+            yield SelectionList[Column](*self._choices(), id="columns")
             for field, label in self.TOGGLES:
                 with Horizontal(classes="row"):
                     yield Label(label)
@@ -737,6 +831,58 @@ class SettingsScreen(ModalScreen[Settings | None]):
     def on_switch_changed(self, event: Switch.Changed) -> None:
         """Apply a flipped switch to the copy being edited."""
         self._settings = self._settings.model_copy(update={str(event.switch.id): event.value})
+
+    def on_selection_list_selected_changed(self, event: SelectionList.SelectedChanged[Column]) -> None:
+        """Apply a picked column to the copy being edited.
+
+        Read back off the list's own order rather than out of the selection, so what is
+        saved is what the sheet is showing top to bottom. Picking nothing means nothing has
+        been said, which is the automatic columns rather than a board with none.
+        """
+        event.stop()
+        self._remember(set(event.selection_list.selected))
+
+    def action_move_down(self) -> None:
+        """Move the column under the cursor one place later in the board."""
+        self._move(1)
+
+    def action_move_up(self) -> None:
+        """Move the column under the cursor one place earlier in the board."""
+        self._move(-1)
+
+    def _move(self, step: int) -> None:
+        """Shift the highlighted column and rebuild the list around it.
+
+        Rebuilding is what a ``SelectionList`` offers: it can be cleared and refilled but
+        not reordered in place. The highlight travels with the column rather than staying
+        at the index, so holding ``J`` walks one column down the list instead of shuffling
+        the whole thing under a fixed cursor.
+        """
+        listing = self.query_one("#columns", SelectionList)
+        index = listing.highlighted
+        if index is None or not 0 <= index + step < len(self._order):
+            return
+        moved = self._order.pop(index)
+        self._order.insert(index + step, moved)
+        chosen = set(listing.selected)
+        listing.clear_options()
+        listing.add_options(self._choices(chosen))
+        listing.highlighted = index + step
+        self._remember(chosen)
+
+    def _choices(self, chosen: set[Column] | None = None) -> list[Selection[Column]]:
+        """Every column in board order, ticked where it is being shown."""
+        picked = self._settings.columns if chosen is None else chosen
+        shown = set(picked or ())
+        return [Selection(self._prompt(column), column, column in shown, id=column.value) for column in self._order]
+
+    def _prompt(self, column: Column) -> str:
+        hint = self.HINTS.get(column)
+        return f"{column.value}  [dim]{hint}[/]" if hint else column.value
+
+    def _remember(self, chosen: set[Column]) -> None:
+        ordered = tuple(column for column in self._order if column in chosen)
+        self._settings = self._settings.model_copy(update={"columns": ordered or None})
 
     def on_select_changed(self, event: Select.Changed) -> None:
         """Apply a picked value to the copy being edited."""
@@ -1410,7 +1556,7 @@ class FleetApp(App[None]):
     ) -> None:
         super().__init__()
         self._loader = loader
-        self._reader: Reader = reader if reader is not None else recent_messages
+        self._reader: Reader = reader if reader is not None else harness.recent_messages
         self._settings = settings if settings is not None else settings_store.load()
         self._interval = interval if interval is not None else self._settings.interval
         self._terminal = terminal
@@ -1596,14 +1742,23 @@ class FleetApp(App[None]):
 
     @property
     def columns(self) -> tuple[str, ...]:
-        """Table headers, with the optional columns only where they were asked for."""
-        optional = (
-            ("PID",) * self._settings.show_pid
-            + ("TTY",) * self._settings.show_tty
-            + ("WORKTREE",) * self._settings.show_worktree
-            + ("PRS",) * self._settings.show_prs
-        )
-        return (*BASE_COLUMNS, *optional, "WHERE")
+        """Table headers, in the order the board is drawing them."""
+        return tuple(column.value.upper() for column in self._columns)
+
+    @property
+    def _columns(self) -> tuple[Column, ...]:
+        """The columns this board draws, saved selection first.
+
+        The default is the board's own rather than :func:`clownhead.render.default_columns`,
+        which ends on the resume command: a table that scrolls has no reason to thin
+        itself for width, and no reason to spend half its width on a command the detail
+        pane below already shows in full.
+        """
+        saved = self._settings.columns
+        if saved:
+            return tuple(saved)
+        harness_column = (Column.HARNESS,) * (len(harness.installed()) > 1)
+        return (BASE_COLUMNS[0], *harness_column, *BASE_COLUMNS[1:], Column.WHERE)
 
     @property
     def launch(self) -> Launch | None:
@@ -1711,7 +1866,7 @@ class FleetApp(App[None]):
         """
         repos = checkouts.repos_for(reference, sessions, named)
         name = issues.slug(reference.base_slug, issues.fetch_title(reference.title_query))
-        hand_back(self, self._ask_start, (reference, name, repos, discovery.trusted_dirs()))
+        hand_back(self, self._ask_start, (reference, name, repos, harness.trusted_dirs()))
 
     def _ask_start(self, resolved: tuple[Reference, str, list[Path], set[Path] | None]) -> None:
         reference, name, repos, trusted = resolved
@@ -1723,8 +1878,9 @@ class FleetApp(App[None]):
                 severity="warning",
             )
             return
+        agents = [found.kind for found in harness.installed()]
         self.push_screen(
-            StartScreen(reference, name, repos, trusted),
+            StartScreen(reference, name, repos, trusted, agents),
             partial(self._start_chosen, reference, name),
         )
 
@@ -1732,7 +1888,11 @@ class FleetApp(App[None]):
         """Run the start command in this terminal, or put it on the clipboard instead."""
         if choice is None:
             return
-        plan = start_plan(choice.repo, name=name, prompt=reference.prompt, worktree=choice.worktree)
+        try:
+            plan = self._start_command(choice, name, reference)
+        except LookupError as error:
+            self.notify(str(error), title=f"start {name}", severity="error")
+            return
         if choice.copy:
             self.copy_to_clipboard(plan.shell_command)
             copy_to_pasteboard(plan.shell_command)
@@ -1740,6 +1900,25 @@ class FleetApp(App[None]):
             return
         self._launch = plan
         self.exit()
+
+    def _start_command(self, choice: StartChoice, name: str, reference: Reference) -> Launch:
+        """The command that starts the session, with the worktree made where one is needed.
+
+        Claude Code makes its own on the way in, so nothing happens here for it. Codex has
+        no such flag, so the checkout is made first and the session started in it.
+
+        Raises:
+            LookupError: git refused to make the worktree.
+        """
+        if choice.agent is not Harness.CLAUDE and choice.worktree:
+            create_worktree(choice.repo, name)
+        return start_plan(
+            choice.repo,
+            name=name,
+            prompt=reference.prompt,
+            worktree=choice.worktree,
+            harness=choice.agent,
+        )
 
     def action_pull_requests(self) -> None:
         """Open the board of pull requests you have open, and come back pointed at one.
@@ -1862,7 +2041,7 @@ class FleetApp(App[None]):
         panel.display = True
         self.query_one("#history-body", Static).update("[dim]reading transcript…[/]")
         panel.focus()
-        self._load_history(session.session_id)
+        self._load_history(session)
 
     def action_close_history(self) -> None:
         """Close the conversation and hand focus back to the fleet."""
@@ -2313,19 +2492,14 @@ class FleetApp(App[None]):
         previous = self.selected_session
         self._visible = self._filtered()
 
-        if self._settings.show_prs:
+        columns = self._columns
+        if Column.PRS in columns:
             self._ensure_pulls(self._visible)
 
         table = self.query_one("#fleet", DataTable)
         table.clear()
         for row in build_rows(self._visible, datetime.now(tz=UTC), self._session_pulls):
-            optional = (
-                ((row.pid,) if self._settings.show_pid else ())
-                + ((row.tty,) if self._settings.show_tty else ())
-                + ((row.worktree,) if self._settings.show_worktree else ())
-                + ((row.prs,) if self._settings.show_prs else ())
-            )
-            table.add_row(Text(row.status, style=row.style), row.name, row.quiet, row.age, *optional, row.where)
+            table.add_row(*(cell_of(row, column) for column in columns))
         if previous is not None:
             restored = next((i for i, s in enumerate(self._visible) if s.session_id == previous.session_id), None)
             if restored is not None:
@@ -2374,16 +2548,17 @@ class FleetApp(App[None]):
         answer changes only when a session says something new, and re-reading it every five
         seconds is an expensive way to learn nothing.
         """
-        pending = [session.session_id for session in sessions if session.session_id not in self._pulls_asked]
+        pending = [session for session in sessions if session.session_id not in self._pulls_asked]
         if not pending:
             return
-        self._pulls_asked.update(pending)
+        self._pulls_asked.update(session.session_id for session in pending)
         self._read_pulls(pending)
 
     @work(thread=True, group="session-pulls")
-    def _read_pulls(self, session_ids: list[str]) -> None:
+    def _read_pulls(self, sessions: list[Session]) -> None:
         """Scan transcripts for pull requests, off the event loop."""
-        hand_back(self, self._pulls_read, {session_id: pulls_mentioned(session_id) for session_id in session_ids})
+        found = {session.session_id: pulls_mentioned(session) for session in sessions}
+        hand_back(self, self._pulls_read, found)
 
     def _pulls_read(self, found: dict[str, list[PullRequest]]) -> None:
         """Fold in what the transcripts named and redraw, since a column may be showing it."""
@@ -2422,13 +2597,7 @@ class FleetApp(App[None]):
     def _settings_changed(self, settings: Settings | None) -> None:
         if settings is None:
             return
-        columns = (settings.show_pid, settings.show_tty, settings.show_worktree, settings.show_prs)
-        rebuild = columns != (
-            self._settings.show_pid,
-            self._settings.show_tty,
-            self._settings.show_worktree,
-            self._settings.show_prs,
-        )
+        rebuild = settings.columns != self._settings.columns
         retime = settings.interval != self._settings.interval
         repaint = settings.paint_tabs != self._settings.paint_tabs
         self._settings = settings
@@ -2445,12 +2614,12 @@ class FleetApp(App[None]):
         self._draw()
 
     @work(thread=True, group="history")
-    def _load_history(self, session_id: str) -> None:
+    def _load_history(self, session: Session) -> None:
         try:
-            messages = self._reader(session_id, limit=self._settings.history_turns)
+            messages = self._reader(session, limit=self._settings.history_turns)
         except Exception:
             messages = []
-        hand_back(self, self._history_loaded, (session_id, messages))
+        hand_back(self, self._history_loaded, (session.session_id, messages))
 
     def _history_loaded(self, loaded: tuple[str, list[Message]]) -> None:
         session_id, messages = loaded
@@ -2458,7 +2627,7 @@ class FleetApp(App[None]):
         session = self.selected_session
         if session is None or session.session_id != session_id:
             return
-        self.query_one("#history-body", Static).update(conversation(messages))
+        self.query_one("#history-body", Static).update(conversation(messages, speaker=session.harness.value))
         panel = self.query_one("#history", HistoryPanel)
         self.call_after_refresh(panel.scroll_end, animate=False)
 

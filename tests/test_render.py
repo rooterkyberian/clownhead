@@ -141,7 +141,8 @@ def test_build_table_renders_a_row_per_session():
     ]
 
     console = Console(width=200, record=True)
-    console.print(build_table(sessions, now=NOW, columns=default_columns(200, show_pid=True, show_tty=True)))
+    columns = (*default_columns(200), Column.PID, Column.TTY)
+    console.print(build_table(sessions, now=NOW, columns=columns))
     output = console.export_text()
 
     assert "input needed" in output
@@ -159,7 +160,8 @@ def test_build_table_shows_the_owning_process_when_asked():
     ]
 
     console = Console(width=200, record=True)
-    console.print(build_table(sessions, now=NOW, columns=default_columns(200, show_pid=True, show_tty=True)))
+    columns = (*default_columns(200), Column.PID, Column.TTY)
+    console.print(build_table(sessions, now=NOW, columns=columns))
     lines = console.export_text().splitlines()
 
     assert "PID" in lines[0]
@@ -214,11 +216,15 @@ def test_default_columns_drop_the_timing_ones_when_narrow():
     assert default_columns(60) == (Column.STATUS, Column.NAME, Column.WHERE)
 
 
-def test_default_columns_add_the_optional_ones_only_when_asked():
+def test_default_columns_leave_out_the_ones_that_have_to_be_asked_for():
     assert default_columns(200) == (Column.STATUS, Column.NAME, Column.QUIET, Column.AGE, Column.WHERE, Column.RESUME)
-    assert Column.PID in default_columns(200, show_pid=True)
-    assert Column.TTY in default_columns(200, show_tty=True)
-    assert Column.WORKTREE in default_columns(200, show_worktree=True)
+    assert not {Column.PID, Column.TTY, Column.WORKTREE, Column.PRS} & set(default_columns(200))
+
+
+def test_default_columns_name_the_agent_only_where_the_machine_has_two():
+    assert Column.HARNESS not in default_columns(200)
+    assert Column.HARNESS in default_columns(200, show_harness=True)
+    assert Column.HARNESS in default_columns(40, show_harness=True)
 
 
 def test_build_table_shows_the_resume_command_when_the_column_is_asked_for():
@@ -393,7 +399,19 @@ def test_conversation_names_both_speakers():
     said = spoken(conversation(messages, now=NOW))
 
     assert "you\nshow history in detail view" in said
-    assert "claude\nEnter opens the conversation beside the fleet." in said
+    assert "agent\nEnter opens the conversation beside the fleet." in said
+
+
+def test_conversation_names_the_harness_when_it_is_told_which_one():
+    messages = [Message(role="assistant", text="done")]
+
+    assert "codex\ndone" in spoken(conversation(messages, now=NOW, speaker="codex"))
+
+
+def test_conversation_leaves_your_own_turns_named_you():
+    messages = [Message(role="user", text="squash them")]
+
+    assert "you\nsquash them" in spoken(conversation(messages, now=NOW, speaker="codex"))
 
 
 def test_conversation_dates_each_turn():
@@ -405,7 +423,7 @@ def test_conversation_dates_each_turn():
     said = spoken(conversation(messages, now=NOW))
 
     assert "you 3h ago" in said
-    assert "claude 4m ago" in said
+    assert "agent 4m ago" in said
 
 
 def test_conversation_leaves_an_undated_turn_undated():
@@ -417,7 +435,7 @@ def test_conversation_leaves_an_undated_turn_undated():
 def test_conversation_reads_a_turn_from_the_future_as_just_said():
     messages = [Message(role="assistant", text="squashed", at=NOW + timedelta(minutes=9))]
 
-    assert "claude 0s ago" in spoken(conversation(messages, now=NOW))
+    assert "agent 0s ago" in spoken(conversation(messages, now=NOW))
 
 
 def test_conversation_spends_no_blank_lines_between_turns():
@@ -426,7 +444,7 @@ def test_conversation_spends_no_blank_lines_between_turns():
         Message(role="assistant", text="squashed"),
     ]
 
-    assert spoken(conversation(messages, now=NOW)) == "you\nsquash them\nclaude\nsquashed"
+    assert spoken(conversation(messages, now=NOW)) == "you\nsquash them\nagent\nsquashed"
 
 
 def test_conversation_lays_your_own_turns_on_a_background_of_their_own():
@@ -687,7 +705,6 @@ def test_prs_cell_never_outgrows_its_cap():
 
 def test_prs_is_off_unless_asked_for():
     assert Column.PRS not in default_columns(200)
-    assert Column.PRS in default_columns(200, show_prs=True)
 
 
 def test_build_table_draws_the_prs_column_when_it_is_named():

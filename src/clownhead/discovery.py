@@ -33,8 +33,8 @@ from typing import Any
 
 from pydantic import ValidationError
 
-from clownhead import archive
-from clownhead.models import Kind, Session, Status, epoch_millis_to_datetime
+from clownhead import archive, codex
+from clownhead.models import Kind, Message, Process, Session, Status, epoch_millis_to_datetime
 
 SOCKET_DIR = Path("/tmp/cc-socks")  # noqa: S108
 CONFIG_DIR_VAR = "CLAUDE_CONFIG_DIR"
@@ -65,29 +65,6 @@ class Rank(IntEnum):
 
 ENDED_RANKS = frozenset({Rank.FINISHED, Rank.ARCHIVED})
 """The ranks that sort newest-first, which is every rank a session that has ended can take."""
-
-
-@dataclass(frozen=True)
-class Process:
-    """One row of the process table."""
-
-    pid: int
-    ppid: int
-    tty: Path | None
-    command: str
-
-
-@dataclass(frozen=True)
-class Message:
-    """One thing said in a session, by the human or by Claude.
-
-    A turn the transcript did not date carries no time rather than a guessed one: the
-    file is append-only, so its age would answer for every turn in it at once.
-    """
-
-    role: str
-    text: str
-    at: datetime | None = None
 
 
 @dataclass(frozen=True)
@@ -308,11 +285,21 @@ def owning_shell(pid: int | None, processes: Mapping[int, Process]) -> Process |
         parent = processes.get(process.ppid)
         if parent is None or parent.tty != process.tty or parent.pid in seen:
             return shell
-        if is_claude(parent.command):
+        if is_agent(parent.command):
             return None
         if is_shell(parent.command):
             shell = parent
         process = parent
+
+
+def is_agent(command: str) -> bool:
+    """Whether a process command line runs either coding agent.
+
+    Asked wherever the question is *is something already working here* rather than *is this
+    Claude Code*: a shell with an agent between it and the session owns that agent's tab
+    and not this one's, whichever agent it happens to be.
+    """
+    return is_claude(command) or codex.is_codex(command)
 
 
 def is_shell(command: str) -> bool:
