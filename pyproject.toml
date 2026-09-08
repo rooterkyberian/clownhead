@@ -4,7 +4,7 @@ build-backend = "uv_build"
 
 [project]
 name = "clownhead"
-version = "0.9.0"
+version = "0.10.0"
 description = "Local sessions monitor and manager for Claude Code and Codex"
 readme = "README.md"
 requires-python = ">=3.12"
