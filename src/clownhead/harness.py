@@ -57,6 +57,10 @@ class Harness:
         """Where it keeps its state."""
         raise NotImplementedError
 
+    def relocated_config_dir(self) -> Path | None:
+        """That directory when it is not the one this agent would have picked itself."""
+        raise NotImplementedError
+
     def list_sessions(self, cwd: Path | None, *, include_closed: bool) -> list[Session]:
         """Every session it knows about."""
         raise NotImplementedError
@@ -111,6 +115,10 @@ class Claude(Harness):
         """The Claude Code config directory, which ``CLAUDE_CONFIG_DIR`` may move."""
         return discovery.config_dir()
 
+    def relocated_config_dir(self) -> Path | None:
+        """The config directory when ``CLAUDE_CONFIG_DIR`` moved it."""
+        return discovery.relocated_config_dir()
+
     def list_sessions(self, cwd: Path | None, *, include_closed: bool) -> list[Session]:
         """Live sessions from the CLI, ended ones from the registry and the transcripts."""
         return discovery.list_sessions(cwd, include_closed=include_closed)
@@ -163,6 +171,10 @@ class Codex(Harness):
     def config_dir(self) -> Path:
         """The Codex home, which ``CODEX_HOME`` may move."""
         return codex.config_dir()
+
+    def relocated_config_dir(self) -> Path | None:
+        """The Codex home when ``CODEX_HOME`` moved it."""
+        return codex.relocated_config_dir()
 
     def list_sessions(self, cwd: Path | None, *, include_closed: bool) -> list[Session]:
         """Live threads from the daemon, ended ones from the persisted index.

@@ -35,7 +35,7 @@ from typing import Annotated
 
 import typer
 
-from clownhead import tui
+from clownhead import codex, tui
 from clownhead.discovery import CONFIG_DIR_VAR, sort_key
 from clownhead.models import Message, Session, Status
 from clownhead.settings import Settings
@@ -148,14 +148,15 @@ async def shot() -> str:
 def fabricated_fleet() -> Callable[[bool], list[Session]]:
     """Build the demo's world and return a loader that reads the fleet living in it.
 
-    ``CLAUDE_CONFIG_DIR`` goes with the shell it was set in: the board names a relocated
-    config directory in its top bar, and the demo opens none at all, so a shell that had
-    one would have the board reporting a directory it never read — and, in a recording,
-    naming somebody's home directory besides.
+    ``CLAUDE_CONFIG_DIR`` and ``CODEX_HOME`` go with the shell they were set in: the board
+    names a relocated config directory in its top bar, and the demo opens none at all, so a
+    shell that had one would have the board reporting a directory it never read — and, in a
+    recording, naming somebody's home directory besides.
     """
     _build_home()
     os.environ["HOME"] = str(DEMO_HOME)
     os.environ.pop(CONFIG_DIR_VAR, None)
+    os.environ.pop(codex.CONFIG_DIR_VAR, None)
     return _fleet
 
 

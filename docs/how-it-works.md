@@ -75,8 +75,11 @@ so the herd is listed and enriched out of one directory.
 Get that wrong and `QUIET` empties out and every `shell` reads `busy`:
 both come from records being looked for somewhere those sessions never wrote one.
 A board watching a relocated directory says so in its top bar,
-since a herd listed out of the wrong one looks exactly like a quiet machine;
-`clownhead doctor` prints the directory it settled on either way.
+since a herd listed out of the wrong one looks exactly like a quiet machine.
+Codex scopes its threads the same way under `CODEX_HOME`,
+so the bar names that directory too,
+each one prefixed with the agent it belongs to once the machine has both agents;
+`clownhead doctor` prints the directory every agent settled on either way.
 
 ## Pull requests
 

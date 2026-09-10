@@ -41,7 +41,7 @@ from textual.widgets.selection_list import Selection
 from clownhead import archive, attention, checkouts, harness, issues, pulls
 from clownhead import settings as settings_store
 from clownhead.control import SLASH_COMMAND, close_tab, rename, send_message, shell_of, terminate, wait_for_exit
-from clownhead.discovery import process_table, relocated_config_dir
+from clownhead.discovery import process_table
 from clownhead.issues import Unavailable
 from clownhead.models import (
     CLOSED_STATES,
@@ -122,17 +122,30 @@ class Reader(Protocol):
         ...
 
 
-def config_dir_notice() -> str:
-    """Name the Claude Code directory the board is reading, unless it is the default one.
+def config_dir_notices() -> list[str]:
+    """Name the config directories the board is reading, leaving out the default ones.
 
-    ``claude agents --json`` lists only the sessions belonging to the config directory it
-    was invoked under, so a board opened from a shell with ``CLAUDE_CONFIG_DIR`` set is
-    watching another fleet than one opened without it — and a board short of the sessions
-    you expected looks exactly like a quiet machine. Empty when there is nothing worth
-    saying, which is the usual case.
+    Every harness scopes its listing to a directory an environment variable may move:
+    ``claude agents --json`` answers for ``CLAUDE_CONFIG_DIR`` and the Codex app-server
+    for ``CODEX_HOME``. A board opened from a shell with either of them set is watching
+    another fleet than one opened without it, and a board short of the sessions you
+    expected looks exactly like a quiet machine. Empty when there is nothing worth saying,
+    which is the usual case.
+
+    Each directory is named by its harness once the machine has both, which is the same
+    condition the harness column appears under: with one agent installed there is only one
+    fleet a directory could belong to.
     """
-    directory = relocated_config_dir()
-    return "" if directory is None else truncate(shorten_path(directory), CONFIG_DIR_CAP)
+    found = harness.installed()
+    named = len(found) > 1
+    notices = []
+    for agent in found:
+        directory = agent.relocated_config_dir()
+        if directory is None:
+            continue
+        shown = truncate(shorten_path(directory), CONFIG_DIR_CAP)
+        notices.append(f"{agent.label} {shown}" if named else shown)
+    return notices
 
 
 def seeded_needle(target: Reference | None) -> str:
@@ -2632,16 +2645,14 @@ class FleetApp(App[None]):
         self.call_after_refresh(panel.scroll_end, animate=False)
 
     def _summary(self) -> str:
-        """What the fleet amounts to, and — where it is not the usual one — where it came from.
+        """What the fleet amounts to, and — where they are not the usual ones — where it came from.
 
-        The config directory rides at the end rather than in a corner of its own so that a
-        bar too narrow for both loses the directory and keeps the count of what is waiting
-        on you, which is the number the board exists to show.
+        The config directories ride at the end rather than in a corner of their own so that
+        a bar too narrow for all of it loses them and keeps the count of what is waiting on
+        you, which is the number the board exists to show.
         """
         parts = self._fleet_counts()
-        notice = config_dir_notice()
-        if notice:
-            parts.append(f"[dim]{notice}[/]")
+        parts.extend(f"[dim]{notice}[/]" for notice in config_dir_notices())
         return " · ".join(parts)
 
     def _fleet_counts(self) -> list[str]:

@@ -5,7 +5,7 @@ from pathlib import Path
 import pytest
 
 import clownhead
-from clownhead import attention
+from clownhead import attention, codex
 from clownhead import discovery as discovery_module
 from clownhead.discovery import CONFIG_DIR_VAR
 from clownhead.models import Session, Status
@@ -95,8 +95,10 @@ def test_the_terminal_is_the_demos_own_bundle(loader):
 
 def test_a_relocated_config_directory_is_left_with_the_shell_that_set_it(demo_home, monkeypatch):
     monkeypatch.setenv(CONFIG_DIR_VAR, "/somewhere/private/.claude")
+    monkeypatch.setenv(codex.CONFIG_DIR_VAR, "/somewhere/private/.codex")
     demo_module.fabricated_fleet()
     assert CONFIG_DIR_VAR not in os.environ
+    assert codex.CONFIG_DIR_VAR not in os.environ
 
 
 def test_the_demo_never_paints_a_tab_it_was_not_given(loader):

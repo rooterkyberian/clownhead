@@ -16,7 +16,7 @@ from clownhead.models import Column, Message, Process, Session, Status
 from clownhead.pulls import Status as PullStatus
 from clownhead.settings import ResumeIn, Settings
 from clownhead.terminal import ITerm2Terminal
-from clownhead.tui import FleetApp, PullChoiceScreen, config_dir_notice, matches
+from clownhead.tui import FleetApp, PullChoiceScreen, config_dir_notices, matches
 from clownhead.worktrees import Candidate, Worktree
 
 BOARD = (Column.STATUS, Column.NAME, Column.QUIET, Column.AGE)
@@ -193,7 +193,7 @@ async def test_tui_wears_a_clown():
 def test_config_dir_notice_names_a_relocated_directory(monkeypatch):
     monkeypatch.setenv("CLAUDE_CONFIG_DIR", "~/.claude-personal")
 
-    assert config_dir_notice() == "~/.claude-personal"
+    assert config_dir_notices() == ["~/.claude-personal"]
 
 
 @pytest.mark.parametrize("override", [None, "", "~/.claude"])
@@ -201,14 +201,34 @@ def test_config_dir_notice_says_nothing_about_the_default_directory(monkeypatch,
     if override is not None:
         monkeypatch.setenv("CLAUDE_CONFIG_DIR", override)
 
-    assert config_dir_notice() == ""
+    assert config_dir_notices() == []
 
 
 def test_config_dir_notice_truncates_a_long_directory(monkeypatch):
     monkeypatch.setenv("CLAUDE_CONFIG_DIR", f"/{'nested/' * 12}claude")
 
-    assert config_dir_notice().endswith("…")
-    assert len(config_dir_notice()) == tui_module.CONFIG_DIR_CAP
+    [notice] = config_dir_notices()
+    assert notice.endswith("…")
+    assert len(notice) == tui_module.CONFIG_DIR_CAP
+
+
+def test_config_dir_notice_names_a_relocated_codex_home(monkeypatch, codex_installed):
+    monkeypatch.setenv("CODEX_HOME", "~/.codex-work")
+
+    assert config_dir_notices() == ["codex ~/.codex-work"]
+
+
+def test_config_dir_notice_says_which_agent_each_directory_belongs_to(monkeypatch, codex_installed):
+    monkeypatch.setenv("CLAUDE_CONFIG_DIR", "~/.claude-personal")
+    monkeypatch.setenv("CODEX_HOME", "~/.codex-work")
+
+    assert config_dir_notices() == ["claude ~/.claude-personal", "codex ~/.codex-work"]
+
+
+def test_config_dir_notice_says_nothing_about_a_codex_that_is_not_installed(monkeypatch):
+    monkeypatch.setenv("CODEX_HOME", "~/.codex-work")
+
+    assert config_dir_notices() == []
 
 
 async def test_tui_names_a_relocated_config_dir_after_the_counts(monkeypatch):
@@ -231,6 +251,17 @@ async def test_tui_names_a_relocated_config_dir_an_empty_fleet_came_out_of(monke
 
         assert "no live sessions" in title_of(app)
         assert "~/.claude-personal" in title_of(app)
+
+
+async def test_tui_names_both_relocated_directories_after_the_counts(monkeypatch, codex_installed):
+    monkeypatch.setenv("CLAUDE_CONFIG_DIR", "~/.claude-personal")
+    monkeypatch.setenv("CODEX_HOME", "~/.codex-work")
+    app = build_app()
+
+    async with app.run_test() as pilot:
+        await settle(app, pilot)
+
+        assert title_of(app).endswith("· [dim]claude ~/.claude-personal[/] · [dim]codex ~/.codex-work[/]")
 
 
 async def test_tui_says_nothing_about_the_default_config_dir():
