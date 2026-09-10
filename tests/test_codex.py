@@ -303,6 +303,72 @@ def test_available_is_true_once_the_app_server_is_listening(codex_server):
     assert codex.available() is True
 
 
+def test_available_is_false_for_a_socket_the_daemon_left_behind(codex_server):
+    codex_server.stop()
+
+    assert codex_server.path.is_socket()
+    assert codex.available() is False
+
+
+def test_ensure_daemon_starts_nothing_while_one_is_answering(codex_server, monkeypatch, tmp_path):
+    monkeypatch.setenv("CLOWNHEAD_CODEX_BIN", str(_recording_codex(tmp_path)))
+
+    assert codex.ensure_daemon() is True
+    assert not (tmp_path / "calls").exists()
+
+
+def test_ensure_daemon_starts_one_carrying_the_codex_home_it_reads(monkeypatch, tmp_path, no_codex):
+    monkeypatch.setenv("CLOWNHEAD_CODEX_BIN", str(_recording_codex(tmp_path)))
+
+    assert codex.ensure_daemon() is False
+    assert (tmp_path / "calls").read_text().split() == ["app-server", "daemon", "start", str(no_codex)]
+
+
+def test_a_daemon_that_would_not_start_is_not_asked_for_twice(monkeypatch, tmp_path, no_codex):
+    monkeypatch.setenv("CLOWNHEAD_CODEX_BIN", str(_recording_codex(tmp_path)))
+
+    assert codex.ensure_daemon() is False
+    assert codex.ensure_daemon() is False
+    assert len((tmp_path / "calls").read_text().splitlines()) == 1
+
+
+def test_ensure_daemon_answers_for_the_one_it_started(monkeypatch, codex_server_to_come):
+    def start() -> None:
+        codex_server_to_come()
+
+    monkeypatch.setattr(codex, "installed", lambda: True)
+    monkeypatch.setattr(codex, "_start_daemon", start)
+
+    assert codex.ensure_daemon() is True
+
+
+def test_a_start_that_refused_is_what_the_board_is_told(monkeypatch, tmp_path, no_codex):
+    binary = tmp_path / "codex"
+    binary.write_text('#!/bin/sh\necho "Error: managed standalone Codex install not found" >&2\nexit 1\n')
+    binary.chmod(0o755)
+    monkeypatch.setenv("CLOWNHEAD_CODEX_BIN", str(binary))
+
+    assert codex.ensure_daemon() is False
+    expected = "codex app-server daemon start failed: Error: managed standalone Codex install not found"
+    assert codex.daemon_failure() == expected
+
+
+def test_nothing_is_said_about_a_daemon_nobody_tried_to_start(no_codex):
+    assert codex.daemon_failure() is None
+
+
+def test_a_listing_starts_a_daemon_when_nothing_answers(monkeypatch, codex_server_to_come):
+    def start() -> None:
+        server = codex_server_to_come()
+        server.answers["thread/loaded/list"] = {"data": [THREAD_ID]}
+        server.answers["thread/read"] = {"thread": a_thread()}
+
+    monkeypatch.setattr(codex, "installed", lambda: True)
+    monkeypatch.setattr(codex, "_start_daemon", start)
+
+    assert [session.session_id for session in codex.list_sessions()] == [THREAD_ID]
+
+
 def test_installed_follows_the_binary_override(monkeypatch, tmp_path):
     monkeypatch.setenv("CLOWNHEAD_CODEX_BIN", str(tmp_path / "absent"))
     assert codex.installed() is False
@@ -403,6 +469,14 @@ def test_a_daemon_that_is_not_running_is_reported_with_how_to_start_one(no_codex
         codex.list_sessions()
 
 
+def test_a_cli_call_carries_the_codex_home_clownhead_reads(monkeypatch, tmp_path, no_codex):
+    monkeypatch.setenv("CLOWNHEAD_CODEX_BIN", str(_recording_codex(tmp_path)))
+
+    codex.send_message(THREAD_ID, "carry on")
+
+    assert (tmp_path / "calls").read_text().split()[-1] == str(no_codex)
+
+
 def test_send_message_queues_through_the_cli(monkeypatch, tmp_path):
     binary = tmp_path / "codex"
     binary.write_text('#!/bin/sh\necho "$@" > ' + str(tmp_path / "argv") + "\n")
@@ -429,3 +503,11 @@ def test_send_message_reports_a_cli_that_is_not_there(monkeypatch, tmp_path):
 
     with pytest.raises(Unavailable, match="codex queue failed"):
         codex.send_message(THREAD_ID, "carry on")
+
+
+def _recording_codex(directory: Path) -> Path:
+    """A stand-in Codex CLI that appends its arguments and Codex home to a ``calls`` file."""
+    binary = directory / "codex"
+    binary.write_text(f'#!/bin/sh\necho "$@ $CODEX_HOME" >> {directory / "calls"}\n')
+    binary.chmod(0o755)
+    return binary

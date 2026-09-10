@@ -11,9 +11,12 @@ listing of the newest threads can start below a session opened minutes ago. Live
 therefore come from ``thread/loaded/list``, one ``thread/read`` each, and everything that
 has ended comes from ``thread/list``.
 
-The daemon has to be running for any of this. ``codex app-server daemon start`` starts it.
-A missing socket is reported rather than being allowed to look like an empty fleet, which
-is the same call :func:`clownhead.discovery.peer_discovery_available` makes for Claude Code.
+The daemon has to be running for any of this, and :func:`ensure_daemon` starts one when
+nothing answers: ``codex app-server daemon start`` returns without doing anything against a
+daemon already running, so the board can ask on every refresh instead of asking the person
+in front of it to run the command. A daemon that cannot be started is reported rather than
+being allowed to look like an empty fleet, which is the same call
+:func:`clownhead.discovery.peer_discovery_available` makes for Claude Code.
 
 I/O and parsing are kept apart, as they are in :mod:`clownhead.discovery`, so the parsing
 half is testable without a daemon to answer.
@@ -23,11 +26,13 @@ from __future__ import annotations
 
 import json
 import os
+import socket
 import subprocess
+import time
 import tomllib
 from collections.abc import Iterable, Iterator, Mapping, Sequence
 from contextlib import contextmanager
-from itertools import count
+from itertools import count, takewhile
 from pathlib import Path
 from typing import Any
 
@@ -43,6 +48,11 @@ CLIENT_NAME = "clownhead"
 CLOSED_PAGE = 200
 PREVIEW_MESSAGES = 3
 START_DAEMON = "codex app-server daemon start"
+DAEMON_ARGS = ("app-server", "daemon", "start")
+START_TIMEOUT = 10.0
+READY_TIMEOUT = 5.0
+READY_POLL = 0.1
+PROBE_TIMEOUT = 0.5
 
 APPROVAL_FLAG = "waitingOnApproval"
 INPUT_FLAG = "waitingOnUserInput"
@@ -58,6 +68,9 @@ WAITING_BY_FLAG = {
     APPROVAL_FLAG: (Status.BLOCKED, "approval"),
     INPUT_FLAG: (Status.WAITING, "input"),
 }
+
+_refused: dict[Path, str] = {}
+"""Why a socket has no daemon, so the board stops asking for one on every refresh."""
 
 
 class Unavailable(RuntimeError):
@@ -225,15 +238,51 @@ def control_socket() -> Path:
 
 
 def available() -> bool:
-    """Whether the daemon socket is there to be dialled.
+    """Whether the daemon is there to be dialled.
 
-    A cheap check callers make before offering Codex at all, so a machine with no daemon
-    gets one clear sentence instead of an error per refresh.
+    A socket file outlives the daemon that made it, so a stat is the wrong question: what
+    *available* means here is that a connection to the socket is accepted.
     """
+    path = control_socket()
     try:
-        return control_socket().is_socket()
+        if not path.is_socket():
+            return False
+        with socket.socket(socket.AF_UNIX, socket.SOCK_STREAM) as probe:
+            probe.settimeout(PROBE_TIMEOUT)
+            probe.connect(str(path))
     except OSError:
         return False
+    return True
+
+
+def ensure_daemon() -> bool:
+    """Whether the app-server answers, starting a daemon first when none does.
+
+    ``codex app-server daemon start`` does nothing to a daemon already running and holds a
+    lock against a second one, so being wrong about the socket costs one process. It is
+    given the Codex home clownhead reads rather than left to inherit one, since the daemon
+    reads that directory once at startup and then holds it for every session it reports.
+
+    A start that failed is not tried again for the same socket: this is asked on every
+    refresh, and a machine that cannot run the daemon would otherwise spawn an attempt per
+    tick. What the attempt said is kept for :func:`daemon_failure`, since the start command
+    refuses outright on a Codex that was not installed by its own installer.
+    """
+    if available():
+        return True
+    path = control_socket()
+    if path in _refused or not installed():
+        return False
+    failure = _start_daemon()
+    if failure is None and _wait_for_daemon():
+        return True
+    _refused[path] = failure or f"`{START_DAEMON}` returned but nothing answered {path}"
+    return False
+
+
+def daemon_failure() -> str | None:
+    """What stopped a daemon from starting here, for whoever has to say why Codex is absent."""
+    return _refused.get(control_socket())
 
 
 def installed() -> bool:
@@ -286,7 +335,7 @@ def session() -> Iterator[Client]:
     """Open a conversation with the daemon, introduce clownhead, and close it afterwards."""
     path = control_socket()
     try:
-        connection = connect(str(path))
+        connection = _dial(path)
     except (OSError, ProtocolError) as error:
         raise Unavailable(f"no Codex app-server at {path}; start one with `{START_DAEMON}`") from error
     try:
@@ -419,11 +468,71 @@ def _decode(line: str) -> dict[str, Any] | None:
     return decoded if isinstance(decoded, dict) else None
 
 
-def _run(arguments: list[str]) -> None:
+def _dial(path: Path) -> Connection:
+    """Connect to the daemon, starting one and trying again if the first attempt failed."""
     try:
-        subprocess.run([codex_binary(), *arguments], capture_output=True, text=True, check=True)  # noqa: S603
-    except (OSError, subprocess.CalledProcessError) as error:
-        raise Unavailable(f"codex {arguments[0]} failed: {error}") from error
+        return connect(str(path))
+    except (OSError, ProtocolError):
+        if not ensure_daemon():
+            raise
+        return connect(str(path))
+
+
+def _start_daemon() -> str | None:
+    """Run the start command, answering with what went wrong, or ``None`` when it returned."""
+    try:
+        _run(DAEMON_ARGS, timeout=START_TIMEOUT)
+    except Unavailable as error:
+        return str(error)
+    return None
+
+
+def _wait_for_daemon() -> bool:
+    """Poll the socket until the daemon that was just started accepts a connection."""
+    deadline = time.monotonic() + READY_TIMEOUT
+    while True:
+        if available():
+            return True
+        if time.monotonic() >= deadline:
+            return False
+        time.sleep(READY_POLL)
+
+
+def _run(arguments: Sequence[str], *, timeout: float | None = None) -> None:
+    try:
+        subprocess.run(  # noqa: S603
+            [codex_binary(), *arguments],
+            capture_output=True,
+            text=True,
+            check=True,
+            timeout=timeout,
+            env=_env(),
+        )
+    except subprocess.CalledProcessError as error:
+        raise Unavailable(f"codex {_command(arguments)} failed: {_first_line(error.stderr) or error}") from error
+    except (OSError, subprocess.SubprocessError) as error:
+        raise Unavailable(f"codex {_command(arguments)} failed: {error}") from error
+
+
+def _command(arguments: Sequence[str]) -> str:
+    """The subcommand being run, spelled the way somebody would type it into a shell."""
+    words = list(takewhile(lambda word: not word.startswith("-"), arguments))
+    return " ".join(words or arguments[:1])
+
+
+def _first_line(output: str | None) -> str:
+    """The first line the CLI printed, which is where it says what it refused and why."""
+    lines = [line.strip() for line in (output or "").splitlines() if line.strip()]
+    return lines[0] if lines else ""
+
+
+def _env() -> dict[str, str]:
+    """The environment a Codex CLI call is given, carrying the home clownhead reads.
+
+    Inheritance would carry a ``CODEX_HOME`` the shell had set, and nothing else: the CLI
+    has to be told about the same directory the rest of this module answers from.
+    """
+    return {**os.environ, CONFIG_DIR_VAR: str(config_dir())}
 
 
 def _version() -> str:

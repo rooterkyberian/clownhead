@@ -35,8 +35,11 @@ Discovery takes two calls.
 Live sessions therefore come from `thread/loaded/list` and one `thread/read` each, and everything that has ended comes from `thread/list`.
 That is the same split as Claude Code's, where the CLI answers for what is live and the transcripts answer for what has ended.
 
-The daemon has to be running, which `codex app-server daemon bootstrap` arranges.
-Without it clownhead lists no Codex sessions and says so, rather than showing a board that looks merely quiet.
+The daemon has to be running, and clownhead starts one itself when the socket answers nothing.
+The start command is a no-op against a daemon already running, and it carries the Codex home clownhead reads, so the daemon it starts and the sessions it lists agree on a directory.
+`codex app-server daemon bootstrap` is the durable form of the same thing, for a machine that should always have one.
+A socket file outlives the daemon that made it, so availability here means a connection to it was accepted.
+A start that fails is reported on the board and attempted once per run, so a machine with no working daemon spends one process on finding that out.
 
 The app-server names no process, so a pid is found by joining `ps` to `lsof`: which processes are Codex, and which directory each is sitting in.
 The pairing is taken only where one session and one process share a directory.

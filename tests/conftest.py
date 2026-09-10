@@ -81,6 +81,17 @@ def no_codex(monkeypatch, tmp_path) -> Path:
     return home
 
 
+@pytest.fixture(autouse=True)
+def no_daemon_wait(monkeypatch) -> None:
+    """Give the suite no patience for a daemon that is never going to answer.
+
+    :func:`clownhead.codex.ensure_daemon` waits seconds for the app-server it started, and
+    every test that starts one starts it synchronously, so the wait is time the suite would
+    only ever spend on a socket that stays absent.
+    """
+    monkeypatch.setattr(codex, "READY_TIMEOUT", 0.0)
+
+
 REAL_TRUST_FILE = discovery.trust_file
 """Captured before :func:`unknown_trust` replaces it, for the tests about where it points."""
 
@@ -249,6 +260,29 @@ def codex_server(monkeypatch, socket_dir) -> Iterator[FakeAppServer]:
     server = FakeAppServer(control / "app-server-control.sock")
     yield server
     server.stop()
+
+
+@pytest.fixture
+def codex_server_to_come(monkeypatch, socket_dir) -> Iterator[Callable[[], FakeAppServer]]:
+    """A Codex home whose app-server starts only when the test says so.
+
+    For the tests about clownhead starting a daemon itself: the socket is absent until the
+    returned callable makes one, which is what the start command does for real.
+    """
+    home = socket_dir / "codex"
+    control = home / "app-server-control"
+    control.mkdir(parents=True)
+    monkeypatch.setenv(codex.CONFIG_DIR_VAR, str(home))
+    started: list[FakeAppServer] = []
+
+    def start() -> FakeAppServer:
+        server = FakeAppServer(control / "app-server-control.sock")
+        started.append(server)
+        return server
+
+    yield start
+    for server in started:
+        server.stop()
 
 
 @pytest.fixture

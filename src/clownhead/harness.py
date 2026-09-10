@@ -153,15 +153,15 @@ class Codex(Harness):
         return codex.installed()
 
     def available(self) -> bool:
-        """Whether the app-server socket is there to be dialled."""
-        return codex.available()
+        """Whether the app-server answers, starting a daemon when none is running."""
+        return codex.ensure_daemon()
 
     def unavailable_reason(self) -> str | None:
         """Whether Codex is missing entirely or merely has no daemon running."""
         if not self.installed():
             return "not installed"
         if not self.available():
-            return f"no app-server running; start one with `{codex.START_DAEMON}`"
+            return codex.daemon_failure() or f"no app-server running; start one with `{codex.START_DAEMON}`"
         return None
 
     def binary(self) -> str:

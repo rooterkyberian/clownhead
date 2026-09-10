@@ -21,10 +21,13 @@ an `Upgrade: websocket` request gets `HTTP/1.1 101 Switching Protocols`,
 after which JSON-RPC travels in text frames.
 `clownhead.websocket` is the client half of that.
 
-The daemon has to be running.
-`codex app-server daemon start` starts it and `codex app-server daemon bootstrap` keeps it started.
-Without it clownhead lists no Codex sessions and `clownhead doctor` says so,
-naming the command that fixes it.
+The daemon has to be running, and clownhead starts one when nothing answers the socket.
+`codex app-server daemon start` is a no-op against a daemon already running,
+and it is given the Codex home clownhead reads,
+since the daemon holds that directory for every session it goes on to report.
+`codex app-server daemon bootstrap` is the durable form, which keeps one running across logins.
+A start that fails is attempted once per clownhead run,
+and `clownhead doctor` names the command to try by hand.
 A machine with no Codex installed loses the `HARNESS` column too,
 since a column reading `claude` on every row answers a question nobody there can ask.
 
