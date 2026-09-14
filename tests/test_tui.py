@@ -3088,7 +3088,7 @@ async def test_tui_switching_the_prs_column_on_rebuilds_the_table(monkeypatch, t
 def codex_installed(monkeypatch, tmp_path):
     """A machine with both agents on it, which is when the start sheet offers a choice."""
     binary = tmp_path / "codex"
-    binary.write_text("#!/bin/sh\n")
+    binary.write_text('#!/bin/sh\necho "codex-cli 0.154.0"\n')
     binary.chmod(0o755)
     monkeypatch.setenv("CLOWNHEAD_CODEX_BIN", str(binary))
     return binary
@@ -3137,7 +3137,7 @@ async def test_tui_start_swaps_the_agent_and_the_command_with_it(monkeypatch, un
 async def test_tui_start_under_codex_gets_a_worktree_a_new_checkout_would_deny_claude(
     monkeypatch, unknown_trust, codex_installed
 ):
-    """Trust is Claude Code's own refusal, and clownhead makes Codex's worktree with git."""
+    """Trust handling is delegated to Codex when it creates its worktree."""
     resolved(monkeypatch, [Path("/tmp/widgets")])
     trusting(unknown_trust, Path("/tmp/elsewhere"))
     app = build_app(target=ISSUE)
@@ -3152,15 +3152,11 @@ async def test_tui_start_under_codex_gets_a_worktree_a_new_checkout_would_deny_c
         await pilot.pause()
 
         assert str(app.screen.query_one("#trust", Static).content) == ""
-        assert "worktrees/issue-2-open-a-session" in str(app.screen.query_one("#command", Static).content)
+        assert "--enable worktrees --worktree" in str(app.screen.query_one("#command", Static).content)
 
 
-async def test_tui_start_under_codex_makes_the_worktree_before_handing_over(
-    monkeypatch, unknown_trust, codex_installed
-):
-    made: list[tuple] = []
+async def test_tui_start_under_codex_delegates_worktree_creation(monkeypatch, unknown_trust, codex_installed):
     resolved(monkeypatch, [Path("/tmp/widgets")])
-    monkeypatch.setattr(tui_module, "create_worktree", lambda repo, name: made.append((repo, name)))
     app = build_app(target=ISSUE)
 
     async with app.run_test() as pilot:
@@ -3172,21 +3168,24 @@ async def test_tui_start_under_codex_makes_the_worktree_before_handing_over(
         await pilot.press("enter")
         await pilot.pause()
 
-    assert made == [(Path("/tmp/widgets"), "issue-2-open-a-session")]
     assert app.launch is not None
     assert app.launch.argv[0].endswith("codex")
+    assert app.launch.directory == Path("/tmp/widgets")
+    assert "--worktree" in app.launch.argv
 
 
-async def test_tui_start_says_so_when_git_refuses_the_worktree(monkeypatch, unknown_trust, codex_installed):
-    def refuse(repo, name):
-        raise LookupError("not a repository")
-
+async def test_tui_start_says_so_when_codex_cannot_make_a_worktree(monkeypatch, unknown_trust, tmp_path):
+    binary = tmp_path / "codex"
+    binary.write_text('#!/bin/sh\necho "codex-cli 0.153.4"\n')
+    binary.chmod(0o755)
+    monkeypatch.setenv("CLOWNHEAD_CODEX_BIN", str(binary))
     resolved(monkeypatch, [Path("/tmp/widgets")])
-    monkeypatch.setattr(tui_module, "create_worktree", refuse)
     app = build_app(target=ISSUE)
+    notices = []
 
     async with app.run_test() as pilot:
         await settle(app, pilot)
+        app.notify = lambda message, **kwargs: notices.append(message)
         await pilot.press("n")
         await settle(app, pilot)
         await pilot.press("h")
@@ -3194,8 +3193,55 @@ async def test_tui_start_says_so_when_git_refuses_the_worktree(monkeypatch, unkn
         await pilot.press("enter")
         await pilot.pause()
 
+    assert app.launch is None
+    assert "0.154.0 or newer" in notices[-1]
+
+
+async def test_handoff_says_so_when_the_session_will_not_answer(monkeypatch, tmp_path, codex_installed):
+    from clownhead.codex import Unavailable
+
+    def refuse(*args, **kwargs):
+        raise Unavailable("no Codex app-server answering")
+
+    original = closed_session().model_copy(update={"cwd": tmp_path})
+    app = build_app(sessions=[original])
+    app._reader = refuse
+    notices = []
+
+    async with app.run_test() as pilot:
+        await settle(app, pilot)
+        app.notify = lambda message, **kwargs: notices.append(message)
+        app.action_resume_in_terminal()
+        await pilot.pause()
+        await pilot.press("h")
+        await pilot.press("enter")
+        await settle(app, pilot)
+
+        assert app.is_running
         assert app.launch is None
-        assert any("not a repository" in str(note.message) for note in app._notifications)
+        assert "no Codex app-server answering" in notices[-1]
+
+
+async def test_copied_handoff_is_announced_without_the_whole_prompt(monkeypatch, tmp_path, codex_installed):
+    copied = []
+    monkeypatch.setattr(tui_module, "copy_to_pasteboard", copied.append)
+    monkeypatch.setattr(harness, "transcript_paths", lambda _: [])
+    original = closed_session().model_copy(update={"cwd": tmp_path})
+    app = build_app(sessions=[original])
+    app._reader = lambda *args, **kwargs: [Message(role="user", text="x" * 5000)]
+    notices = []
+
+    async with app.run_test() as pilot:
+        await settle(app, pilot)
+        app.notify = lambda message, **kwargs: notices.append(message)
+        app.action_copy_resume()
+        await pilot.pause()
+        await pilot.press("h")
+        await pilot.press("enter")
+        await settle(app, pilot)
+
+    assert len(copied[-1]) > tui_module.COMMAND_NOTICE_CAP
+    assert len(notices[-1]) <= tui_module.COMMAND_NOTICE_CAP
 
 
 async def test_tui_leaves_out_the_harness_column_on_a_one_agent_machine():
@@ -3354,3 +3400,109 @@ async def test_tui_settings_picking_nothing_hands_the_choice_back(monkeypatch):
 
         assert settings_store.load().columns is None
         assert headers_of(app) == ["STATUS", "NAME", "QUIET", "AGE", "WHERE"]
+
+
+async def test_resume_harness_choice_defaults_to_original_and_can_fork(monkeypatch, codex_installed):
+    opened = []
+    monkeypatch.setattr(tui_module, "open_session", lambda plan, *args: opened.append(plan) or "in terminal")
+    app = build_app(sessions=[closed_session()])
+    async with app.run_test() as pilot:
+        await settle(app, pilot)
+        await pilot.press("r")
+        await pilot.pause()
+        assert isinstance(app.screen, tui_module.ResumeScreen)
+        assert "Resume in claude" in str(app.screen.query_one("#resume-choice", Static).content)
+        await pilot.press("f", "enter")
+        await settle(app, pilot)
+        assert "--fork-session" in opened[0].argv
+
+
+@pytest.mark.parametrize("route", ["terminal", "here", "copy"])
+async def test_resume_can_continue_in_another_harness(monkeypatch, tmp_path, codex_installed, route):
+    from clownhead.models import Harness
+
+    original = closed_session().model_copy(update={"cwd": tmp_path, "status": Status.ARCHIVED})
+    archive.archive(original.session_id)
+    opened = []
+    copied = []
+    monkeypatch.setattr(tui_module, "open_session", lambda plan, *args: opened.append(plan) or "in terminal")
+    monkeypatch.setattr(tui_module, "copy_to_pasteboard", copied.append)
+    monkeypatch.setattr(harness, "transcript_paths", lambda _: [tmp_path / "transcript.jsonl"])
+    app = build_app(sessions=[original])
+    app._reader = lambda *args, **kwargs: [Message(role="user", text="Continue the retry fix")]
+    async with app.run_test() as pilot:
+        await settle(app, pilot)
+        if route == "terminal":
+            app.action_resume_in_terminal()
+        elif route == "copy":
+            app.action_copy_resume()
+        else:
+            app.action_go()
+        await pilot.pause()
+        await pilot.press("h")
+        assert "new conversation" in str(app.screen.query_one("#resume-choice", Static).content)
+        await pilot.press("enter")
+        await settle(app, pilot)
+        if route == "copy":
+            assert "Continue the retry fix" in copied[-1]
+            assert str(codex_installed) in copied[-1]
+        else:
+            plan = app.launch if route == "here" else opened[0]
+            assert plan is not None
+            assert plan.argv[0] == str(codex_installed)
+            assert plan.directory == tmp_path
+            assert "Continue the retry fix" in plan.argv[-1]
+            assert "--resume" not in plan.argv
+        assert original.harness is Harness.CLAUDE
+        assert original.session_id in archive.load()
+
+
+async def test_live_session_harness_choice_cannot_resume_same_identity(monkeypatch, codex_installed):
+    opened = []
+    monkeypatch.setattr(tui_module, "open_session", lambda plan, *args: opened.append(plan) or "in terminal")
+    app = build_app()
+    async with app.run_test() as pilot:
+        await settle(app, pilot)
+        await pilot.press("r", "f", "enter")
+        await settle(app, pilot)
+        assert "--fork-session" in opened[0].argv
+
+
+async def test_resume_harness_choice_cancel_does_not_launch(monkeypatch, codex_installed):
+    monkeypatch.setattr(tui_module, "open_session", lambda *args: pytest.fail("must not launch"))
+    app = build_app(sessions=[closed_session()])
+    async with app.run_test() as pilot:
+        await settle(app, pilot)
+        await pilot.press("r", "h", "escape")
+        await settle(app, pilot)
+        assert app.launch is None
+
+
+async def test_resume_offers_installed_harness_when_original_is_missing(monkeypatch, tmp_path):
+    from clownhead.models import Harness
+
+    original = closed_session().model_copy(update={"harness": Harness.CODEX, "cwd": tmp_path})
+    monkeypatch.setattr(harness, "installed", lambda: [harness.for_kind(Harness.CLAUDE)])
+    app = build_app(sessions=[original])
+    async with app.run_test() as pilot:
+        await settle(app, pilot)
+        await pilot.press("r")
+        await pilot.pause()
+        assert isinstance(app.screen, tui_module.ResumeScreen)
+        assert "Continue in claude" in str(app.screen.query_one("#resume-choice", Static).content)
+        await pilot.press("escape")
+
+
+async def test_handoff_read_failure_keeps_board_open(monkeypatch, tmp_path, codex_installed):
+    def refuse(*args, **kwargs):
+        raise RuntimeError("source server stopped answering")
+
+    monkeypatch.setattr(tui_module, "open_session", lambda *args: pytest.fail("must not launch"))
+    app = build_app(sessions=[closed_session().model_copy(update={"cwd": tmp_path})])
+    app._reader = refuse
+    async with app.run_test() as pilot:
+        await settle(app, pilot)
+        await pilot.press("r", "h", "enter")
+        await settle(app, pilot)
+        assert app.launch is None
+        assert "source server stopped answering" in notified(app)

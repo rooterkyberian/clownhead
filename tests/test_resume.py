@@ -177,7 +177,7 @@ def test_a_codex_session_forks_through_its_own_cli(tmp_path):
 
 
 def test_a_codex_worktree_session_resumes_in_the_worktree_itself(tmp_path):
-    """`codex resume` has no `--worktree`, so there is no rebuilding one from the repository."""
+    """Resume preserves the recorded directory rather than requesting a new worktree."""
     cwd = worktree(tmp_path)
 
     plan = resume_plan(codex_session(cwd))
@@ -203,8 +203,8 @@ def test_a_codex_command_leaves_the_default_home_unsaid(tmp_path, monkeypatch):
 def test_starting_under_codex_works_in_the_worktree_and_asks_for_no_edits(tmp_path):
     plan = start_plan(tmp_path, name="issue-2", prompt="https://example/2", harness=Harness.CODEX)
 
-    assert plan.directory == tmp_path / ".claude" / "worktrees" / "issue-2"
-    assert plan.argv == ("codex", "--sandbox", "read-only", "https://example/2")
+    assert plan.directory == tmp_path
+    assert plan.argv == ("codex", "--enable", "worktrees", "--worktree", "--sandbox", "read-only", "https://example/2")
 
 
 def test_starting_under_codex_without_a_worktree_works_in_the_checkout(tmp_path):
@@ -213,5 +213,92 @@ def test_starting_under_codex_without_a_worktree_works_in_the_checkout(tmp_path)
     assert plan.directory == tmp_path
 
 
-def test_worktree_path_is_the_one_layout_both_agents_share(tmp_path):
+def test_worktree_path_preserves_the_legacy_layout(tmp_path):
     assert worktree_path(tmp_path, "issue-2") == tmp_path / ".claude" / "worktrees" / "issue-2"
+
+
+def test_codex_resume_quotes_external_worktree_paths_with_spaces(tmp_path):
+    cwd = tmp_path / "Codex Home/worktrees/hash/feature"
+    assert resume_shell_command(codex_session(cwd)).startswith(f"(cd '{cwd}' && ")
+
+
+def test_claude_in_a_codex_checkout_resumes_without_creating_a_different_worktree(tmp_path, monkeypatch):
+    monkeypatch.setenv("CODEX_HOME", str(tmp_path))
+    cwd = tmp_path / "worktrees/hash/feature"
+    cwd.mkdir(parents=True)
+    plan = resume_plan(Session(session_id="a-b", cwd=cwd))
+
+    assert plan.directory == cwd
+    assert "--worktree" not in plan.argv
+
+
+@pytest.mark.parametrize("target", [Harness.CLAUDE, Harness.CODEX])
+def test_handoff_starts_target_in_original_checkout_with_context(tmp_path, monkeypatch, target):
+    from clownhead.models import Message
+    from clownhead.resume import handoff_plan
+
+    source = Harness.CODEX if target is Harness.CLAUDE else Harness.CLAUDE
+    original = Session(session_id="source-id", cwd=tmp_path, harness=source)
+    monkeypatch.setenv("CODEX_HOME", str(tmp_path / "codex-home"))
+    monkeypatch.setenv("CLAUDE_CONFIG_DIR", str(tmp_path / "claude-home"))
+    plan = handoff_plan(original, target, [Message(role="user", text="Fix the retry loop")], [tmp_path / "log.jsonl"])
+
+    assert plan.directory == tmp_path
+    assert plan.argv[0] == target.value
+    assert "resume" not in plan.argv
+    assert "--resume" not in plan.argv
+    assert "--worktree" not in plan.argv
+    assert "Fix the retry loop" in plan.argv[-1]
+    assert str(tmp_path / "log.jsonl") in plan.argv[-1]
+    assert "source-id" in plan.argv[-1]
+    assert dict(plan.env) == {
+        "CODEX_HOME" if target is Harness.CODEX else "CLAUDE_CONFIG_DIR": str(tmp_path / f"{target.value}-home")
+    }
+
+
+def test_handoff_bounds_the_transcripts_it_names(tmp_path):
+    from clownhead.resume import TRANSCRIPT_LIMIT, handoff_plan
+
+    original = Session(session_id="source-id", cwd=tmp_path, harness=Harness.CODEX)
+    transcripts = [tmp_path / f"subagent-{index}.jsonl" for index in range(TRANSCRIPT_LIMIT + 4)]
+
+    prompt = handoff_plan(original, Harness.CLAUDE, [], transcripts).argv[-1]
+
+    assert str(transcripts[0]) in prompt
+    assert str(transcripts[TRANSCRIPT_LIMIT]) not in prompt
+
+
+def test_handoff_into_claude_carries_the_name_the_board_showed(tmp_path):
+    from clownhead.resume import handoff_plan
+
+    original = Session(session_id="source-id", cwd=tmp_path, harness=Harness.CODEX, name="fix-retry-loop")
+
+    argv = handoff_plan(original, Harness.CLAUDE, [], []).argv
+
+    assert "--name" in argv
+    assert argv[argv.index("--name") + 1] == "fix-retry-loop"
+
+
+def test_handoff_into_claude_asks_for_no_name_when_the_session_has_none(tmp_path):
+    from clownhead.resume import handoff_plan
+
+    original = Session(session_id="source-id", cwd=tmp_path, harness=Harness.CODEX)
+
+    assert "--name" not in handoff_plan(original, Harness.CLAUDE, [], []).argv
+
+
+def test_handoff_bounds_context_and_keeps_latest_messages(tmp_path):
+    from clownhead.models import Message
+    from clownhead.resume import handoff_plan
+
+    messages = [Message(role="user", text="old" * 10000), Message(role="assistant", text="latest decision")]
+    plan = handoff_plan(session(tmp_path), Harness.CODEX, messages, [])
+    assert len(plan.argv[-1]) < 13000
+    assert plan.argv[-1].endswith("latest decision")
+
+
+def test_handoff_refuses_a_missing_checkout(tmp_path):
+    from clownhead.resume import handoff_plan
+
+    with pytest.raises(LookupError, match="working directory no longer exists"):
+        handoff_plan(session(tmp_path / "gone"), Harness.CODEX, [], [])

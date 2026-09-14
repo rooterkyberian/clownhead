@@ -56,7 +56,8 @@ where the CLI answers for what is live and the transcripts answer for what has e
 | Relocated config directory | `CLAUDE_CONFIG_DIR` | yes, `CODEX_HOME` |
 | Resume | `claude --resume <id>` | yes, `codex resume <id>` |
 | Fork | `--fork-session` | yes, `codex fork <id>` |
-| Start a session for a PR or issue | `--worktree`, `--name`, plan mode | yes, `-C` into a worktree clownhead makes |
+| Switch harness on resume/fork | New conversation with recent context and transcript references | yes, in the same checkout |
+| Start a session for a PR or issue | `--worktree`, `--name`, plan mode | yes, native `--enable worktrees --worktree` (Codex 0.154.0+) |
 | Send a message to a live session | control socket | yes, `codex queue --thread --message` |
 | Rename | control socket | yes, `thread/name/set` |
 | Terminate, close the tab | SIGTERM and SIGHUP to the pid | **partial**, needs the pid join above |
@@ -92,7 +93,7 @@ clownhead keeps one vocabulary and maps each agent onto it.
 | Transcripts | `<config>/projects/<project>/<id>.jsonl` | `<config>/sessions/YYYY/MM/DD/rollout-<ts>-<uuid>.jsonl` |
 | Live session channel | one socket per process in `/tmp/cc-socks` | one daemon socket in `<config>/app-server-control` |
 | Session index | the `sessions` registry directory | `Thread.path` from `thread/list` |
-| Worktrees | `<repo>/.claude/worktrees/<name>` | the same, made by clownhead |
+| Worktrees | `<repo>/.claude/worktrees/<name>` | `$CODEX_HOME/worktrees/…` (default `~/.codex/worktrees/…`), plus legacy clownhead checkouts |
 
 A Codex rollout file opens with a `session_meta` record naming the thread id and cwd,
 then carries `event_msg` records for turn boundaries and `response_item` records for what was said.

@@ -439,6 +439,18 @@ An iTerm2 tab in the frontmost window.
 Or the clipboard, which is the route that needs nothing to be running
 and the one it falls back to by default.
 
+When both harnesses are installed, resuming or forking first opens a harness choice.
+`h` cycles the installed harnesses, defaulting to the conversation's original one.
+`f` toggles resume/fork for an ended session; a live session always forks.
+This choice also applies to `enter`, pull-request session selection, and copied commands.
+Staying with the original harness uses its native resume/fork command.
+Switching starts a new conversation in the recorded working directory, carrying the
+last 20 messages (at most 12,000 characters) and paths to at most five of the original transcripts,
+since Claude Code answers with one path per subagent a long session delegated to.
+A session that carries a name hands it to the new conversation, so the row it lands on is the one you were looking for.
+The new harness starts in plan/read-only mode, and the source's archive state stays unchanged.
+A missing checkout prevents the handoff rather than moving the work to another directory.
+
 The environment travels with the command in every case.
 A tmux server outlives the shells that talk to it and keeps the one it first started with,
 so `CLAUDE_CONFIG_DIR` reaches the new pane by being passed to tmux on the command that makes it;
@@ -459,8 +471,16 @@ resuming somewhere else would hand the session a working directory full of the w
 ## Worktrees
 
 A session records the worktree as its directory,
-so the `WORKTREE` column is a string split and a stat:
+so the `WORKTREE` column reads the managed layout and checks the directory:
 which worktree, and whether it is still on the disk.
+Codex external worktrees are resolved back to their owning repository through
+`.git` and `commondir`, including sessions inside monorepo subdirectories.
+Both the default `~/.codex` and a relocated `CODEX_HOME` are recognized.
+Missing external checkouts keep their label, but their owner cannot be inferred
+from the opaque path alone; cleanup can still find them from another session
+in the owning repository.
+A directory under that root holding a `.git` directory of its own is a repository rather than a worktree,
+whatever it is filed under, and is left alone.
 Everything else is asked of git,
 in every repository the fleet is checked out in.
 Worktrees come from `git worktree list --porcelain` rather than from the sessions,

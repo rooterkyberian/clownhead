@@ -369,6 +369,36 @@ def test_a_listing_starts_a_daemon_when_nothing_answers(monkeypatch, codex_serve
     assert [session.session_id for session in codex.list_sessions()] == [THREAD_ID]
 
 
+def test_cli_version_is_read_out_of_what_the_binary_prints(monkeypatch, tmp_path):
+    binary = tmp_path / "codex"
+    binary.write_text('#!/bin/sh\necho "WARNING: something"\necho "codex-cli 0.154.0"\n')
+    binary.chmod(0o755)
+    monkeypatch.setenv("CLOWNHEAD_CODEX_BIN", str(binary))
+
+    assert codex.cli_version() == (0, 154, 0)
+    assert codex.supports_worktrees() is True
+
+
+def test_a_codex_too_old_for_worktrees_says_so(monkeypatch, tmp_path):
+    binary = tmp_path / "codex"
+    binary.write_text('#!/bin/sh\necho "codex-cli 0.153.4"\n')
+    binary.chmod(0o755)
+    monkeypatch.setenv("CLOWNHEAD_CODEX_BIN", str(binary))
+
+    assert codex.cli_version() == (0, 153, 4)
+    assert codex.supports_worktrees() is False
+
+
+def test_a_codex_that_will_not_say_its_version_is_not_trusted_with_a_worktree(monkeypatch, tmp_path):
+    binary = tmp_path / "codex"
+    binary.write_text("#!/bin/sh\n")
+    binary.chmod(0o755)
+    monkeypatch.setenv("CLOWNHEAD_CODEX_BIN", str(binary))
+
+    assert codex.cli_version() is None
+    assert codex.supports_worktrees() is False
+
+
 def test_installed_follows_the_binary_override(monkeypatch, tmp_path):
     monkeypatch.setenv("CLOWNHEAD_CODEX_BIN", str(tmp_path / "absent"))
     assert codex.installed() is False

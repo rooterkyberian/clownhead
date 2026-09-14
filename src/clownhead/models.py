@@ -2,9 +2,11 @@
 
 from __future__ import annotations
 
+import os
 from dataclasses import dataclass
 from datetime import UTC, datetime, timedelta
 from enum import StrEnum
+from functools import lru_cache
 from pathlib import Path
 from typing import Any
 
@@ -95,12 +97,94 @@ CLOSED_STATES = frozenset({Status.CLOSED, Status.ARCHIVED})
 """The two states an interactive session that has ended can be in, archived or not."""
 
 WORKTREE_MARKER = "/.claude/worktrees/"
+CODEX_HOME_VAR = "CODEX_HOME"
+CODEX_DEFAULT_HOME = Path.home() / ".codex"
+CODEX_WORKTREES = "worktrees"
+GITDIR_POINTER = "gitdir: "
 
 
 def split_worktree(cwd: Path) -> tuple[Path, str | None]:
-    """The repository a worktree belongs to and its name, or the path and ``None``."""
+    """The repository a worktree belongs to and its name, or the path and ``None``.
+
+    Two layouts answer to this: Claude Code's ``<repo>/.claude/worktrees/<name>``, where the
+    path names the repository itself, and the checkouts Codex manages under its own home,
+    where it does not. See :func:`claude_worktree` and :func:`codex_worktree`.
+    """
+    return claude_worktree(cwd) or codex_worktree(cwd) or (cwd, None)
+
+
+def claude_worktree(cwd: Path) -> tuple[Path, str] | None:
+    """The repository and worktree name a Claude Code worktree path carries, or ``None``.
+
+    The path is answered as it was given, since this is the directory a resume command has
+    to `cd` into and a checkout reached through a symlink should stay spelled the way the
+    session spelled it.
+    """
     repo, marker, name = str(cwd).partition(WORKTREE_MARKER)
-    return (Path(repo), name) if marker else (cwd, None)
+    return (Path(repo), name.split("/", 1)[0]) if marker and name else None
+
+
+def codex_worktree(cwd: Path) -> tuple[Path, str] | None:
+    """The repository and label of a checkout Codex manages, or ``None`` for anything else.
+
+    Codex names its checkouts ``<hash>/<repo>`` under its own home, and the hash says
+    nothing about where the work came from, so the owner is read out of git's own metadata:
+    the ``.git`` file points at the administrative directory, whose ``commondir`` points
+    back at the repository the worktree was made from. That also covers a session sitting
+    deep in a monorepo, since the metadata belongs to the checkout rather than the cwd.
+
+    A checkout that has been removed, or whose metadata will not parse, keeps its label and
+    answers with itself, because the hash is no basis for naming a different repository. A
+    directory holding a ``.git`` *directory* is a repository in its own right, whatever it
+    is filed under, so it is left alone.
+    """
+    for root in _codex_roots():
+        try:
+            parts = cwd.relative_to(root).parts
+        except ValueError:
+            continue
+        if len(parts) < 2:
+            continue
+        checkout = root / parts[0] / parts[1]
+        if (checkout / ".git").is_dir():
+            return None
+        return _owning_repo(checkout) or checkout, "/".join(parts[:2])
+    return None
+
+
+def _codex_roots() -> tuple[Path, ...]:
+    """Where Codex keeps managed worktrees, under the home in force for this process."""
+    return _roots_under(str(Path.home()), os.environ.get(CODEX_HOME_VAR))
+
+
+@lru_cache(maxsize=8)
+def _roots_under(home: str, codex_home: str | None) -> tuple[Path, ...]:
+    """The roots for one pair of homes, resolved once rather than per rendered row."""
+    roots = {Path(home) / CODEX_DEFAULT_HOME.name / CODEX_WORKTREES}
+    if codex_home:
+        roots.add(Path(codex_home).expanduser() / CODEX_WORKTREES)
+    return tuple(roots | {root.resolve() for root in roots})
+
+
+@lru_cache(maxsize=256)
+def _owning_repo(checkout: Path) -> Path | None:
+    """The repository a worktree was made from, read out of the checkout's git metadata.
+
+    Read once per checkout, because the board asks for every Codex row on every redraw and
+    a worktree's metadata is written when it is made and never again. A checkout removed
+    under a running board keeps the repository it belonged to, which is the label anybody
+    reading the row wants; whether the directory is still there is a separate question the
+    row asks for itself.
+    """
+    try:
+        pointer = (checkout / ".git").read_text().strip()
+        if not pointer.startswith(GITDIR_POINTER):
+            return None
+        admin = (checkout / pointer.removeprefix(GITDIR_POINTER)).resolve()
+        common = (admin / (admin / "commondir").read_text().strip()).resolve()
+    except (OSError, ValueError):
+        return None
+    return common.parent if common.name == ".git" else None
 
 
 @dataclass(frozen=True)
@@ -188,12 +272,12 @@ class Session(BaseModel):
         if "session_id" in data:
             return data
         return {
-            "session_id": data.get("sessionId", data.get("id", "")),
-            "cwd": data.get("cwd", "."),
-            "kind": data.get("kind", "interactive"),
+            "session_id": data.get("sessionId") or data.get("id") or "",
+            "cwd": data.get("cwd") or ".",
+            "kind": data.get("kind") or "interactive",
             "pid": data.get("pid"),
             "name": data.get("name"),
-            "status": data.get("status", data.get("state", "unknown")),
+            "status": data.get("status") or data.get("state") or "unknown",
             "waiting_for": data.get("waitingFor"),
             "started_at": epoch_millis_to_datetime(data.get("startedAt")),
             "updated_at": epoch_millis_to_datetime(data.get("updatedAt")),

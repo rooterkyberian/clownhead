@@ -70,7 +70,7 @@ from clownhead.render import (
     shorten_path,
     truncate,
 )
-from clownhead.resume import Launch, resume_plan, resume_shell_command, start_plan
+from clownhead.resume import Launch, handoff_plan, resume_plan, start_plan
 from clownhead.search import (
     PullRequest,
     Reference,
@@ -82,7 +82,6 @@ from clownhead.search import (
 from clownhead.settings import ResumeIn, Settings
 from clownhead.terminal import Terminal, copy_to_pasteboard, open_url
 from clownhead.worktrees import Candidate, survey
-from clownhead.worktrees import create as create_worktree
 from clownhead.worktrees import remove as remove_worktree
 
 BASE_COLUMNS = (Column.STATUS, Column.NAME, Column.QUIET, Column.AGE)
@@ -90,6 +89,8 @@ BASE_COLUMNS = (Column.STATUS, Column.NAME, Column.QUIET, Column.AGE)
 DEFAULT_INTERVAL = 5.0
 CLOWN = "\N{CLOWN FACE}"
 CONFIG_DIR_CAP = 40
+COMMAND_NOTICE_CAP = 160
+HANDOFF_MESSAGES = 20
 CLEANUP_AGE = timedelta(0)
 """No age filter on a cleanup: being merged is the stronger answer, and a worktree whose
 work is already upstream is finished with whether that happened this morning or last month."""
@@ -521,6 +522,84 @@ class PromptScreen(ModalScreen[str | None]):
 
     def action_cancel(self) -> None:
         """Leave without changing anything."""
+        self.dismiss(None)
+
+
+@dataclass(frozen=True)
+class Continuation:
+    """What is about to happen to a conversation, in the words the board uses for it."""
+
+    plan: Launch
+    verb: str
+    restore: bool
+
+
+@dataclass(frozen=True)
+class ResumeChoice:
+    """The harness and conversation identity chosen for resume or fork."""
+
+    agent: Harness
+    fork: bool = False
+
+
+class ResumeScreen(ModalScreen[ResumeChoice | None]):
+    """Choose the agent that continues a conversation."""
+
+    CSS = """
+    ResumeScreen { align: center middle; }
+    ResumeScreen #sheet {
+        width: 78; height: auto; padding: 1 2;
+        border: round $panel; background: $surface;
+    }
+    """
+    BINDINGS = [
+        Binding("h", "harness", "harness"),
+        Binding("f", "fork", "resume/fork"),
+        Binding("enter", "continue_session", "continue"),
+        Binding("escape", "cancel", "cancel"),
+    ]
+
+    def __init__(self, session: Session, agents: Sequence[Harness], fork: bool = False) -> None:
+        super().__init__()
+        self._session = session
+        self._agents = list(agents)
+        self._agent = self._agents.index(session.harness) if session.harness in self._agents else 0
+        self._fork = fork or not session.is_finished
+
+    def compose(self) -> ComposeResult:
+        """Show the selected harness and what continuing will preserve."""
+        with Vertical(id="sheet"):
+            yield Static(f"[bold]Continue {escape(self._session.label)}[/]")
+            yield Static(self._description(), id="resume-choice")
+            yield Static("[dim]h for harness · f for resume/fork · enter to continue · esc to cancel[/]")
+
+    def _description(self) -> str:
+        agent = self._agents[self._agent]
+        if agent is not self._session.harness:
+            return (
+                f"Continue in {agent.value} with a new conversation in the same checkout.\n"
+                "Carry recent messages and references to the original transcripts.\n"
+                "Starts in plan/read-only mode; the original conversation stays intact."
+            )
+        return f"{'Fork' if self._fork else 'Resume'} in {agent.value}."
+
+    def action_harness(self) -> None:
+        """Cycle through installed harnesses."""
+        self._agent = (self._agent + 1) % len(self._agents)
+        self.query_one("#resume-choice", Static).update(self._description())
+
+    def action_fork(self) -> None:
+        """Toggle conversation identity when the original is no longer running."""
+        if self._session.is_finished:
+            self._fork = not self._fork
+            self.query_one("#resume-choice", Static).update(self._description())
+
+    def action_continue_session(self) -> None:
+        """Continue with the displayed choice."""
+        self.dismiss(ResumeChoice(self._agents[self._agent], self._fork))
+
+    def action_cancel(self) -> None:
+        """Leave the conversation untouched."""
         self.dismiss(None)
 
 
@@ -1829,9 +1908,7 @@ class FleetApp(App[None]):
         if not session.is_finished:
             self.action_focus_session()
             return
-        archive.restore(session.session_id)
-        self._launch = resume_plan(session)
-        self.exit()
+        self._choose_resume(session, False, "here")
 
     def action_focus_session(self) -> None:
         """Demand attention from the selected session's terminal and raise its window.
@@ -1915,16 +1992,15 @@ class FleetApp(App[None]):
         self.exit()
 
     def _start_command(self, choice: StartChoice, name: str, reference: Reference) -> Launch:
-        """The command that starts the session, with the worktree made where one is needed.
-
-        Claude Code makes its own on the way in, so nothing happens here for it. Codex has
-        no such flag, so the checkout is made first and the session started in it.
+        """The command that lets the selected agent check the job out for itself.
 
         Raises:
-            LookupError: git refused to make the worktree.
+            LookupError: the agent cannot make a worktree, which is worth saying here
+                rather than in the terminal it would have been handed.
         """
-        if choice.agent is not Harness.CLAUDE and choice.worktree:
-            create_worktree(choice.repo, name)
+        blocker = harness.for_kind(choice.agent).worktree_blocker() if choice.worktree else None
+        if blocker is not None:
+            raise LookupError(blocker)
         return start_plan(
             choice.repo,
             name=name,
@@ -1984,9 +2060,7 @@ class FleetApp(App[None]):
         if not worked.go_to.is_finished:
             self._focus(worked.go_to)
             return
-        archive.restore(worked.go_to.session_id)
-        self._launch = resume_plan(worked.go_to)
-        self.exit()
+        self._choose_resume(worked.go_to, False, "here")
 
     def _start_for(self, reference: Reference, sessions: Sequence[Session]) -> None:
         """Resolve where to start a session for a reference, and open the sheet when it answers.
@@ -2320,10 +2394,7 @@ class FleetApp(App[None]):
         if session is None:
             self.notify("nothing selected", severity="warning")
             return
-        command = resume_shell_command(session)
-        self.copy_to_clipboard(command)
-        copy_to_pasteboard(command)
-        self.notify(command, title=f"resume {session.label}")
+        self._choose_resume(session, not session.is_finished, "copy")
 
     def action_resume_in_terminal(self) -> None:
         """Resume the selected session in a terminal of its own, leaving the board where it is.
@@ -2338,6 +2409,9 @@ class FleetApp(App[None]):
         if session is None:
             self.notify("nothing selected", severity="warning")
             return
+        if any(found.kind is not session.harness for found in harness.installed()):
+            self._choose_resume(session, not session.is_finished, "terminal")
+            return
         if session.is_finished:
             self._resume(session, fork=False)
             return
@@ -2348,30 +2422,84 @@ class FleetApp(App[None]):
         )
         self.push_screen(ConfirmScreen(question), partial(self._fork, session))
 
+    def _choose_resume(self, session: Session, fork: bool, route: str) -> None:
+        agents = [found.kind for found in harness.installed()]
+        if len(agents) > 1 or (agents and session.harness not in agents):
+            self.push_screen(ResumeScreen(session, agents, fork), partial(self._chosen_resume, session, route))
+        else:
+            self._chosen_resume(session, route, ResumeChoice(session.harness, fork))
+
+    def _chosen_resume(self, session: Session, route: str, choice: ResumeChoice | None) -> None:
+        if choice is None:
+            return
+        if choice.agent is not session.harness:
+            self._prepare_handoff(session, route, choice)
+            return
+        verb = "forked" if choice.fork else "resumed"
+        step = Continuation(resume_plan(session, choice.fork), verb, restore=not choice.fork)
+        self._deliver_resume(session, route, step)
+
+    @work(thread=True, group="handoff", exclusive=True)
+    def _prepare_handoff(self, session: Session, route: str, choice: ResumeChoice) -> None:
+        """Read context without blocking the board, then launch on its main thread.
+
+        Anything the read raises is caught, the harnesses' own refusals included: a Codex
+        app-server that stopped answering raises out of ``recent_messages``, and an
+        exception leaving a worker thread takes the whole board down with it.
+        """
+        try:
+            messages = self._reader(session, limit=HANDOFF_MESSAGES)
+            plan = handoff_plan(session, choice.agent, messages, harness.transcript_paths(session))
+        except Exception as error:  # noqa: BLE001
+            hand_back(self, partial(self.notify, severity="error", title="not continued"), str(error))
+            return
+        step = Continuation(plan, f"continued in {choice.agent.value}", restore=False)
+        hand_back(self, partial(self._deliver_resume, session, route), step)
+
+    def _deliver_resume(self, session: Session, route: str, step: Continuation) -> None:
+        """Put the command on the clipboard, run it here, or open it in a terminal."""
+        if route == "copy":
+            command = step.plan.shell_command
+            self.copy_to_clipboard(command)
+            copy_to_pasteboard(command)
+            self.notify(truncate(command, COMMAND_NOTICE_CAP), title=f"{step.verb} {session.label}")
+            return
+        if route == "here":
+            if step.restore:
+                archive.restore(session.session_id)
+            self._launch = step.plan
+            self.exit()
+            return
+        self._open_continued(session, step)
+
     def _fork(self, session: Session, confirmed: bool | None) -> None:
         if not confirmed:
             return
         self._resume(session, fork=True)
 
     def _resume(self, session: Session, fork: bool) -> None:
-        """Open the session somewhere, and take it out of the archive on the way.
+        """Open the session in a terminal of its own."""
+        verb = "forked" if fork else "resumed"
+        self._open_continued(session, Continuation(resume_plan(session, fork), verb, restore=not fork))
+
+    def _open_continued(self, session: Session, step: Continuation) -> None:
+        """Open a continuation somewhere, and take the session out of the archive on the way.
 
         A session being resumed is a session somebody is no longer done with, and the
         listing would work that out for itself on the next reload — but only once the
         resumed session is up, and the clipboard route leaves that for whenever the command
         is pasted. Doing it here is what makes the row change under the cursor that pressed
-        the key. A fork is exempt: it carries an id of its own, and the session it was
-        copied from stays as ended as it was.
+        the key. A fork and a handoff are exempt: each carries an id of its own, and the
+        session it came from stays as ended as it was.
         """
-        what = "forked" if fork else "resumed"
         try:
-            where = open_session(resume_plan(session, fork), self._settings.resume_in, session.label)
+            where = open_session(step.plan, self._settings.resume_in, session.label)
         except (LookupError, OSError) as error:
-            self.notify(str(error), title=f"not {what}", severity="error")
+            self.notify(str(error), title=f"not {step.verb}", severity="error")
             return
-        if not fork:
+        if step.restore:
             archive.restore(session.session_id)
-        self.notify(f"{session.label} {what} {where}")
+        self.notify(f"{session.label} {step.verb} {where}")
         self.start_reload()
 
     def action_filter(self) -> None:

@@ -31,21 +31,33 @@ from __future__ import annotations
 
 import json
 import os
+import re
 import socket
 import subprocess
 import time
 import tomllib
 from collections.abc import Iterable, Iterator, Mapping, Sequence
 from contextlib import contextmanager
+from functools import lru_cache
 from itertools import count, takewhile
 from pathlib import Path
 from typing import Any
 
-from clownhead.models import Harness, Kind, Message, Process, Session, Status, epoch_seconds_to_datetime
+from clownhead.models import (
+    CODEX_DEFAULT_HOME,
+    CODEX_HOME_VAR,
+    Harness,
+    Kind,
+    Message,
+    Process,
+    Session,
+    Status,
+    epoch_seconds_to_datetime,
+)
 from clownhead.websocket import Connection, ProtocolError, connect
 
-CONFIG_DIR_VAR = "CODEX_HOME"
-DEFAULT_CONFIG_DIR = Path.home() / ".codex"
+CONFIG_DIR_VAR = CODEX_HOME_VAR
+DEFAULT_CONFIG_DIR = CODEX_DEFAULT_HOME
 SOCKET_DIR_NAME = "app-server-control"
 SOCKET_NAME = "app-server-control.sock"
 CODEX_COMMAND = "codex"
@@ -58,6 +70,8 @@ START_TIMEOUT = 10.0
 READY_TIMEOUT = 5.0
 READY_POLL = 0.1
 PROBE_TIMEOUT = 0.5
+WORKTREE_VERSION = (0, 154, 0)
+VERSION_PATTERN = re.compile(r"(\d+)\.(\d+)\.(\d+)")
 
 APPROVAL_FLAG = "waitingOnApproval"
 INPUT_FLAG = "waitingOnUserInput"
@@ -296,6 +310,26 @@ def daemon_failure() -> str | None:
     return _refused.get(control_socket())
 
 
+def supports_worktrees() -> bool:
+    """Whether the installed Codex makes its own worktree at launch.
+
+    ``--enable worktrees --worktree`` arrived in 0.154.0. An older CLI refuses the flags and
+    exits before a session exists, in a terminal clownhead has already handed over, so this
+    is asked before the command is built rather than discovered afterwards.
+    """
+    found = cli_version()
+    return found is not None and found >= WORKTREE_VERSION
+
+
+def cli_version() -> tuple[int, int, int] | None:
+    """The version of the Codex CLI, or ``None`` when it will not say.
+
+    Read once per binary: a CLI replaced under a running board keeps the version it
+    answered with until the board is restarted.
+    """
+    return _cli_version(codex_binary())
+
+
 def installed() -> bool:
     """Whether the Codex CLI is on ``PATH`` at all."""
     from shutil import which
@@ -509,6 +543,24 @@ def _dial(path: Path) -> Connection:
         if not ensure_daemon():
             raise
         return connect(str(path))
+
+
+@lru_cache(maxsize=4)
+def _cli_version(binary: str) -> tuple[int, int, int] | None:
+    """Ask one binary for its version, cached against the board asking on every redraw."""
+    try:
+        answered = subprocess.run(  # noqa: S603
+            [binary, "--version"],
+            capture_output=True,
+            text=True,
+            check=True,
+            timeout=START_TIMEOUT,
+            env=_env(),
+        )
+    except (OSError, subprocess.SubprocessError):
+        return None
+    found = VERSION_PATTERN.search(answered.stdout)
+    return (int(found[1]), int(found[2]), int(found[3])) if found else None
 
 
 def _start_daemon() -> str | None:

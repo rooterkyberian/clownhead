@@ -117,7 +117,7 @@ def shorten_path(cwd: Path, home: Path | None = None) -> str:
     root = str(home or Path.home())
     if text.startswith(root):
         text = "~" + text[len(root) :]
-    repo, worktree = split_worktree(Path(text))
+    repo, worktree = split_worktree(cwd)
     return f"{repo.name} ⇢ {worktree}" if worktree else text
 
 
@@ -125,8 +125,9 @@ def worktree_cell(session: Session) -> str:
     """The worktree a session is in, marked when the directory has gone.
 
     Whether the checkout is still on disk is the whole question a herd of worktrees raises,
-    and it is a stat call — cheap enough for a board that redraws every few seconds. Whether
-    it is *finished* with is not: that takes git, and it is what ``worktrees-cleanup``
+    and it is a stat call. Naming it costs a little more for the checkouts Codex manages,
+    whose owning repository is read out of git's metadata and remembered per checkout. What
+    a worktree is *finished* with takes git every time, which is what ``worktrees-cleanup``
     is for.
     """
     _, worktree = split_worktree(session.cwd)

@@ -61,6 +61,14 @@ class Harness:
         """That directory when it is not the one this agent would have picked itself."""
         raise NotImplementedError
 
+    def worktree_blocker(self) -> str | None:
+        """Why it cannot make its own worktree at launch, or ``None`` when it can.
+
+        Both agents check a job out themselves, given a new enough CLI, so the answer is
+        ``None`` for anything that has not said otherwise.
+        """
+        return None
+
     def list_sessions(self, cwd: Path | None, *, include_closed: bool) -> list[Session]:
         """Every session it knows about."""
         raise NotImplementedError
@@ -175,6 +183,20 @@ class Codex(Harness):
     def relocated_config_dir(self) -> Path | None:
         """The Codex home when ``CODEX_HOME`` moved it."""
         return codex.relocated_config_dir()
+
+    def worktree_blocker(self) -> str | None:
+        """Whether the installed Codex is new enough to check a job out for itself.
+
+        Asked before the command is built, because the flags reach a terminal clownhead has
+        already handed over and an older CLI exits there with a message nobody is watching
+        for.
+        """
+        if codex.supports_worktrees():
+            return None
+        wanted = ".".join(str(part) for part in codex.WORKTREE_VERSION)
+        found = codex.cli_version()
+        spelled = ".".join(str(part) for part in found) if found else "this one"
+        return f"codex {wanted} or newer makes its own worktree, and {spelled} does not"
 
     def list_sessions(self, cwd: Path | None, *, include_closed: bool) -> list[Session]:
         """Live threads from the daemon, and the ended ones it and the index remember.

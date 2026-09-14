@@ -1,4 +1,4 @@
-"""The worktrees Claude Code leaves behind, and retiring the ones nothing needs.
+"""The worktrees coding agents leave behind, and retiring the ones nothing needs.
 
 Claude Code checks a job out into ``<repo>/.claude/worktrees/<name>``, locks it while the
 session is in it, and unlocks it on the way out — but never removes the directory. They
@@ -112,7 +112,7 @@ def survey(
     processes: Mapping[int, Process] | None = None,
     only: Path | None = None,
 ) -> list[Candidate]:
-    """Every Claude Code worktree the herd's repositories hold, and what protects each.
+    """Every managed agent worktree the herd's repositories hold, and what protects each.
 
     The worktrees are asked of git rather than derived from the sessions, because the ones
     worth finding are exactly the ones no session remembers any more: a transcript ages out
@@ -140,12 +140,13 @@ def survey(
     for path, worktree in sorted(found.items()):
         inside = [session for session in herd if session.cwd.is_relative_to(path)]
         used = last_used(worktree, inside)
+        merged = is_merged(worktree)
         candidates.append(
             Candidate(
                 worktree=worktree,
                 last_used=used,
-                merged=is_merged(worktree),
-                kept_for=guard_for(worktree, inside, used, older_than, moment, table),
+                merged=merged,
+                kept_for=guard_for(worktree, inside, used, older_than, moment, table, merged),
             )
         )
     return candidates
@@ -154,9 +155,7 @@ def survey(
 def create(repo: Path, name: str) -> Path:
     """Make a worktree of ``repo`` called ``name``, and hand back where it is.
 
-    Claude Code makes its own through ``--worktree``, and Codex has no equivalent, so this
-    is what stands in for it. Same layout either way, since the board reads the worktree
-    name out of the path.
+    This helper retains the legacy Claude Code layout for existing integrations.
 
     A name already checked out somewhere is attached to rather than refused, matching what
     ``--worktree`` does with one: starting a second session on a ticket should land in the
@@ -229,12 +228,15 @@ def remove_branch(worktree: Worktree) -> None:
 def repos_of(sessions: Iterable[Session]) -> set[Path]:
     """The repositories the herd is checked out in, as far as its paths say.
 
-    A session in a worktree names its repository in its own path; one that is not in a
-    worktree is somewhere in the repository already. Both are answered, because a
-    repository whose worktrees have all been abandoned still has ordinary sessions in it,
-    and those are what lead back to the abandoned ones.
+    A Claude Code worktree names its repository in its own path, a Codex one points back at
+    it through git's metadata, and an ordinary session is in the repository already. All
+    three are answered, because a repository whose worktrees have all been abandoned still
+    has ordinary sessions in it, and those are what lead back to the abandoned ones.
+
+    Every path is resolved, so one repository reached both directly and through a symlink
+    counts once rather than being surveyed twice under two spellings.
     """
-    return {split_worktree(session.cwd)[0] for session in sessions}
+    return {split_worktree(session.cwd)[0].resolve() for session in sessions}
 
 
 def remote_of(repo: Path) -> tuple[str, str] | None:
@@ -260,9 +262,9 @@ def parse_remote(url: str) -> tuple[str, str] | None:
 
 
 def worktrees_of(repo: Path) -> list[Worktree]:
-    """Every Claude Code worktree of a repository.
+    """Every managed agent worktree of a repository.
 
-    Only the ones under ``.claude/worktrees``. A repository may well have worktrees
+    Only Claude Code and Codex managed layouts. A repository may well have worktrees
     somebody made by hand, and those are nobody's to tidy but theirs.
     """
     try:
@@ -312,12 +314,16 @@ def guard_for(
     older_than: timedelta,
     now: datetime,
     processes: Mapping[int, Process],
+    merged: bool = False,
 ) -> str | None:
     """Why a worktree is being kept, or ``None`` when nothing is keeping it.
 
     Ordered by how definite each answer is, so what a worktree is held back by is the
     plainest true thing about it rather than whichever check ran first. The cheap
     questions come before the ones that cost a subprocess, which is the same order.
+
+    ``merged`` is the answer :func:`survey` already paid for, since asking again costs
+    about ten git subprocesses per worktree.
     """
     if any(not session.is_finished for session in inside):
         return "a live session is in it"
@@ -335,6 +341,10 @@ def guard_for(
         ahead = unpushed(worktree)
     except LookupError as error:
         return f"git could not say: {error}"
+    if worktree.branch is None and not merged:
+        if default_branch(worktree.repo) is None:
+            return "detached HEAD, and no default branch to compare it with"
+        return "detached HEAD is not merged"
     if ahead:
         return f"{ahead} commit{'' if ahead == 1 else 's'} on no remote"
     return None

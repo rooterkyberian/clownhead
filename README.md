@@ -89,6 +89,11 @@ A row that has sat on `shell` for half an hour is usually a command nobody is wa
   On a session still running it asks whether to fork it,
   which copies the conversation so far into a session with an id of its own
   and leaves the live one alone.
+  When both harnesses are installed, the resume/fork sheet lets you press `h`
+  to choose Claude or Codex and `f` to toggle resume/fork for an ended session.
+  Switching harnesses opens a new conversation in the same checkout with recent
+  messages and transcript references, starting in plan/read-only mode.
+  The same choice is available when resuming here with `enter` or copying a command.
 - `R` renames it.
 - `t` asks whether to send its process SIGTERM, and can close its tab behind it.
   The question comes with `[x] archive session` ticked,
@@ -231,7 +236,7 @@ so the same data pipes into a script.
 | `clownhead open <ref>` | The board filtered to a pull request or issue, ended sessions included, ready to start one for it. What a bare `clownhead <url>` runs. Takes a GitHub pull request or issue URL, a Jira URL, or `owner/repo#123`. `--print` writes the sessions and the start command out instead of opening the board. |
 | `clownhead prs` | What you have open on GitHub, and which sessions here worked on each. `--author` asks about somebody else, `--limit` caps how many to ask for, `--no-sessions` skips the transcript pass. Needs `gh`. |
 | `clownhead ls` | Status board, attention-first. `--cwd` scopes to one tree, `--all` adds background agents, `--closed` adds sessions that have ended, `--pr` keeps only the ones whose transcript names a pull request, `--columns` picks the columns and their order. |
-| `clownhead worktrees-cleanup` | Retire the worktrees Claude Code left behind. `--older-than` sets how long untouched is long enough (default `7d`), `--merged` keeps to the ones already in the default branch, `--branches` deletes those branches too, `--dry-run` shows what would go, `--yes` skips the question. |
+| `clownhead worktrees-cleanup` | Retire the worktrees Claude Code and Codex left behind. `--older-than` sets how long untouched is long enough (default `7d`), `--merged` keeps to the ones already in the default branch, `--branches` deletes those branches too, `--dry-run` shows what would go, `--yes` skips the question. |
 | `clownhead paint` | Colour each session's tab to match its state, for a board you would rather not keep open. `--follow` keeps them in sync, `--reset` clears them. |
 | `clownhead focus [name]` | Bounce the dock, raise the terminal, and notify. With no argument, takes every session that is waiting on you. `--no-foreground` leaves your windows where they are. |
 | `clownhead doctor` | Check discovery, terminal capabilities, and auth. |
@@ -280,3 +285,12 @@ mise install
 mise run check    # lint + typecheck + test
 mise run demo     # re-record docs/demo.gif from docs/demo.tape, which needs vhs
 ```
+
+Codex worktree launches require Codex 0.154.0 or newer. clownhead enables the
+experimental feature for the launch with `--enable worktrees --worktree`;
+no config edit is needed. Codex chooses the managed checkout path and name.
+An older CLI is refused on the board, naming the version it found, since the
+flags would otherwise fail in a terminal clownhead has already handed over.
+Existing Codex sessions resume in their recorded directory, including monorepo
+subdirectories. External checkouts are grouped with their owning repository using
+Git metadata; legacy `.claude/worktrees` checkouts remain supported.

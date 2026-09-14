@@ -46,7 +46,7 @@ def repos_for(reference: Reference, sessions: Iterable[Session], named: set[str]
     known = worktrees.repos_of(sessions)
     repos = sorted(known | _clones_named(wanted, known))
     remotes = {repo: worktrees.remote_of(repo) for repo in repos} if wanted else {}
-    holding = {split_worktree(session.cwd)[0] for session in sessions if session.session_id in named}
+    holding = {split_worktree(session.cwd)[0].resolve() for session in sessions if session.session_id in named}
     return sorted(
         repos,
         key=lambda repo: (

@@ -492,7 +492,7 @@ def test_remote_of_says_nothing_where_there_is_no_repository(tmp_path):
 
 
 def test_create_makes_a_worktree_where_the_board_looks_for_one(repo):
-    """Codex has no `--worktree`, so clownhead makes the checkout Claude Code would have."""
+    """The legacy helper still creates a Claude Code layout checkout."""
     path = worktrees.create(repo, "search-index")
 
     assert path == repo / ".claude" / "worktrees" / "search-index"
@@ -531,3 +531,119 @@ def test_create_reports_a_directory_that_is_not_a_repository(tmp_path):
 
     with pytest.raises(LookupError):
         worktrees.create(tmp_path / "loose", "search-index")
+
+
+@pytest.mark.parametrize("relocated", [False, True])
+def test_codex_external_worktree_resolves_owner_and_protects_nested_live_session(
+    repo, tmp_path, monkeypatch, relocated
+):
+    from clownhead.models import Harness, split_worktree
+    from clownhead.render import shorten_path
+    from clownhead.resume import resume_plan
+
+    home = tmp_path / "home"
+    monkeypatch.setattr(Path, "home", classmethod(lambda cls: home))
+    monkeypatch.delenv("CODEX_HOME", raising=False)
+    codex_home = home / ".codex"
+    if relocated:
+        codex_home = tmp_path / "custom-codex"
+        monkeypatch.setenv("CODEX_HOME", str(codex_home))
+    checkout = codex_home / "worktrees" / "abc123" / "feature"
+    git(repo, "worktree", "add", "-b", "codex-feature", str(checkout))
+    cwd = checkout / "services" / "api"
+    cwd.mkdir(parents=True)
+    active = Session(session_id="codex-test", cwd=cwd, harness=Harness.CODEX, status=Status.BUSY)
+
+    assert split_worktree(cwd) == (repo.resolve(), "abc123/feature")
+    assert shorten_path(cwd) == "repo ⇢ abc123/feature"
+    assert worktrees.repos_of([active]) == {repo.resolve()}
+    entry = next(item for item in worktrees.worktrees_of(repo) if item.path == checkout)
+    assert entry.name == "abc123/feature"
+    assert resume_plan(active).directory == cwd
+    assert "--worktree" not in resume_plan(active).argv
+    surveyed = worktrees.survey([active], processes={}, only=cwd)
+    assert len(surveyed) == 1
+    assert surveyed[0].kept_for == "a live session is in it"
+
+
+def test_missing_codex_worktree_can_be_surveyed_from_owning_repo(tmp_path, monkeypatch):
+    monkeypatch.setenv("CODEX_HOME", str(tmp_path / "codex"))
+    checkout = tmp_path / "codex/worktrees/hash/feature"
+    entries = worktrees.parse_worktrees(f"worktree {checkout}\nHEAD abc\ndetached\n", tmp_path / "repo")
+    assert len(entries) == 1
+    assert entries[0].name == "hash/feature"
+    assert entries[0].repo == tmp_path / "repo"
+
+
+def test_claude_worktree_subdirectory_is_not_part_of_name():
+    from clownhead.models import split_worktree
+
+    assert split_worktree(Path("/repo/.claude/worktrees/feature/services/api")) == (Path("/repo"), "feature")
+
+
+def test_cleanup_keeps_unmerged_detached_codex_commits_without_a_remote(repo, tmp_path, monkeypatch):
+    monkeypatch.setenv("CODEX_HOME", str(tmp_path / "codex"))
+    checkout = tmp_path / "codex/worktrees/hash/detached"
+    git(repo, "worktree", "add", "--detach", str(checkout))
+    commit(checkout, "valuable.txt", "unreferenced work")
+    entry = next(item for item in worktrees.worktrees_of(repo) if item.path == checkout)
+
+    assert worktrees.guard_for(entry, [], None, timedelta(0), NOW, {}) == "detached HEAD is not merged"
+
+
+def test_cleanup_says_when_there_is_no_default_branch_to_compare_against(repo, tmp_path, monkeypatch):
+    monkeypatch.setenv("CODEX_HOME", str(tmp_path / "codex"))
+    checkout = tmp_path / "codex/worktrees/hash/detached"
+    git(repo, "worktree", "add", "--detach", str(checkout))
+    git(repo, "branch", "-m", "main", "trunk")
+    entry = next(item for item in worktrees.worktrees_of(repo) if item.path == checkout)
+
+    assert worktrees.guard_for(entry, [], None, timedelta(0), NOW, {}) == (
+        "detached HEAD, and no default branch to compare it with"
+    )
+
+
+def test_cleanup_trusts_the_merge_answer_it_was_given(repo, tmp_path, monkeypatch):
+    monkeypatch.setenv("CODEX_HOME", str(tmp_path / "codex"))
+    checkout = tmp_path / "codex/worktrees/hash/detached"
+    git(repo, "worktree", "add", "--detach", str(checkout))
+    commit(checkout, "valuable.txt", "unreferenced work")
+    entry = next(item for item in worktrees.worktrees_of(repo) if item.path == checkout)
+
+    assert worktrees.guard_for(entry, [], None, timedelta(0), NOW, {}, merged=True) is None
+
+
+def test_a_repository_of_its_own_under_the_codex_root_is_not_a_worktree(tmp_path, monkeypatch):
+    from clownhead.models import split_worktree
+
+    monkeypatch.setenv("CODEX_HOME", str(tmp_path / "codex"))
+    checkout = tmp_path / "codex/worktrees/hash/standalone"
+    checkout.mkdir(parents=True)
+    git(checkout, "init", "-b", "main")
+
+    assert split_worktree(checkout) == (checkout, None)
+
+
+def test_a_codex_checkout_that_lost_its_metadata_keeps_its_label(tmp_path, monkeypatch):
+    from clownhead.models import split_worktree
+
+    monkeypatch.setenv("CODEX_HOME", str(tmp_path / "codex"))
+    checkout = tmp_path / "codex/worktrees/hash/feature"
+    checkout.mkdir(parents=True)
+    (checkout / ".git").write_text("")
+
+    assert split_worktree(checkout) == (checkout, "hash/feature")
+
+
+def test_codex_home_symlink_recognizes_canonical_session_paths(repo, tmp_path, monkeypatch):
+    from clownhead.models import split_worktree
+
+    actual = tmp_path / "actual-codex"
+    actual.mkdir()
+    alias = tmp_path / "codex-link"
+    alias.symlink_to(actual, target_is_directory=True)
+    monkeypatch.setenv("CODEX_HOME", str(alias))
+    checkout = actual / "worktrees/hash/feature"
+    git(repo, "worktree", "add", "-b", "symlink-feature", str(checkout))
+
+    assert split_worktree(checkout) == (repo.resolve(), "hash/feature")

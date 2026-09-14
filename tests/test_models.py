@@ -53,6 +53,19 @@ def test_unknown_status_does_not_raise():
     assert not session.needs_attention
 
 
+def test_a_null_status_falls_through_to_the_state_beside_it():
+    """A session that has published no heartbeat yet carries the key with nothing in it."""
+    session = Session.model_validate({**INTERACTIVE_PAYLOAD, "status": None, "state": "idle"})
+
+    assert session.status is Status.IDLE
+
+
+def test_a_session_with_neither_status_nor_state_is_unknown():
+    payload = {key: value for key, value in INTERACTIVE_PAYLOAD.items() if key != "status"}
+
+    assert Session.model_validate({**payload, "status": None}).status is Status.UNKNOWN
+
+
 def test_label_falls_back_to_cwd_and_pid():
     session = Session.model_validate({**INTERACTIVE_PAYLOAD, "name": None})
 

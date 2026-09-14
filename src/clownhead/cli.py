@@ -454,7 +454,7 @@ def worktrees_cleanup(
     dry_run: DryRunOption = False,
     assume_yes: YesOption = False,
 ) -> None:
-    """Retire the worktrees Claude Code left behind.
+    """Retire the worktrees Claude Code and Codex left behind.
 
     The worktrees are asked of git, in every repository the fleet is checked out in, so the
     ones nothing remembers any more are reachable — those are the ones that pile up, since
