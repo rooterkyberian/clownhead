@@ -16,12 +16,32 @@ from clownhead.worktrees import Candidate, Worktree
 
 runner = CliRunner()
 
+TERMINAL_WIDTH = 80
+
 
 @pytest.fixture(autouse=True)
 def isolated_state(monkeypatch, tmp_path):
     monkeypatch.setenv("CLOWNHEAD_STATE_DIR", str(tmp_path / "state"))
     monkeypatch.setenv("CLAUDE_CONFIG_DIR", str(tmp_path / "config"))
     monkeypatch.setattr(discovery, "peer_discovery_available", lambda: True)
+
+
+@pytest.fixture(autouse=True)
+def fixed_terminal_width(monkeypatch):
+    """Print at one width, whatever the shell running the suite is.
+
+    Rich reads ``COLUMNS`` once, when a console is built, and :mod:`clownhead.cli` builds
+    its two at import. A shell that exports the variable therefore fixes the width for the
+    whole session, and setting it inside a test moves nothing. A suite that asserts on what
+    fits has to say the width itself, which is what :func:`use_width` is for.
+    """
+    for console in (cli.console, cli.error_console):
+        monkeypatch.setattr(console, "_width", TERMINAL_WIDTH)
+
+
+def use_width(monkeypatch, width: int) -> None:
+    """Print the next table as a terminal that many columns wide would."""
+    monkeypatch.setattr(cli.console, "_width", width)
 
 
 def use_terminal(monkeypatch, terminal: Terminal) -> Terminal:
@@ -164,7 +184,7 @@ def test_ls_columns_select_what_to_show_and_in_what_order(live_fleet):
 
 def test_ls_columns_can_ask_for_the_resume_command(live_fleet, monkeypatch):
     monkeypatch.setenv("CLAUDE_CONFIG_DIR", "/tmp/fleet")
-    monkeypatch.setenv("COLUMNS", "120")
+    use_width(monkeypatch, 120)
 
     result = runner.invoke(cli.app, ["ls", "--columns", "name,resume"])
 
@@ -174,7 +194,7 @@ def test_ls_columns_can_ask_for_the_resume_command(live_fleet, monkeypatch):
 
 
 def test_ls_thins_the_default_columns_on_a_narrow_terminal(live_fleet, monkeypatch):
-    monkeypatch.setenv("COLUMNS", "60")
+    use_width(monkeypatch, 60)
 
     result = runner.invoke(cli.app, ["ls"])
 
@@ -182,7 +202,7 @@ def test_ls_thins_the_default_columns_on_a_narrow_terminal(live_fleet, monkeypat
 
 
 def test_ls_columns_keep_what_a_narrow_terminal_would_have_dropped(live_fleet, monkeypatch):
-    monkeypatch.setenv("COLUMNS", "60")
+    use_width(monkeypatch, 60)
 
     result = runner.invoke(cli.app, ["ls", "--columns", "name,quiet,age,pid,tty"])
 
@@ -816,7 +836,7 @@ def test_doctor_says_how_to_start_a_codex_daemon_that_is_missing(live_fleet, mon
     binary.write_text("#!/bin/sh\n")
     binary.chmod(0o755)
     monkeypatch.setenv("CLOWNHEAD_CODEX_BIN", str(binary))
-    monkeypatch.setenv("COLUMNS", "200")
+    use_width(monkeypatch, 200)
 
     result = runner.invoke(cli.app, ["doctor"])
 
