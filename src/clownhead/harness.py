@@ -177,7 +177,7 @@ class Codex(Harness):
         return codex.relocated_config_dir()
 
     def list_sessions(self, cwd: Path | None, *, include_closed: bool) -> list[Session]:
-        """Live threads from the daemon, ended ones from the persisted index.
+        """Live threads from the daemon, and the ended ones it and the index remember.
 
         The process table is joined on afterwards, since the app-server names no process
         and everything that signals a session needs one.

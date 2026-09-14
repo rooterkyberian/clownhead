@@ -39,7 +39,7 @@ def a_process(pid: int, command: str = "codex", tty: str = "/dev/ttys025") -> Pr
     [
         ({"type": "idle"}, Status.IDLE, None),
         ({"type": "notLoaded"}, Status.CLOSED, None),
-        ({"type": "systemError"}, Status.FAILED, None),
+        ({"type": "systemError"}, Status.CLOSED, None),
         ({"type": "active", "activeFlags": []}, Status.BUSY, None),
         ({"type": "active", "activeFlags": ["waitingOnApproval"]}, Status.BLOCKED, "approval"),
         ({"type": "active", "activeFlags": ["waitingOnUserInput"]}, Status.WAITING, "input"),
@@ -396,6 +396,40 @@ def test_list_sessions_leaves_the_ended_ones_out_until_they_are_asked_for(codex_
 
     assert codex.list_sessions() == []
     assert [session.status for session in codex.list_sessions(include_closed=True)] == [Status.CLOSED]
+
+
+def test_list_sessions_leaves_a_thread_that_died_on_an_error_out_with_them(codex_server):
+    """The daemon keeps such a thread loaded for as long as it runs, whoever has closed it."""
+    codex_server.answers["thread/loaded/list"] = {"data": [THREAD_ID]}
+    codex_server.answers["thread/read"] = {"thread": a_thread(status={"type": "systemError"})}
+    codex_server.answers["thread/list"] = {"data": []}
+
+    assert codex.list_sessions() == []
+
+    sessions = codex.list_sessions(include_closed=True)
+
+    assert [session.status for session in sessions] == [Status.CLOSED]
+    assert sessions[0].needs_attention is False
+
+
+def test_list_sessions_ignores_the_threads_codex_opens_for_its_own_work(codex_server):
+    codex_server.answers["thread/loaded/list"] = {"data": [THREAD_ID, OTHER_ID]}
+    codex_server.answers["thread/read"] = lambda params: {
+        "thread": a_thread(
+            id=params["threadId"],
+            threadSource="system" if params["threadId"] == OTHER_ID else "user",
+        )
+    }
+
+    assert [session.session_id for session in codex.list_sessions()] == [THREAD_ID]
+
+
+def test_list_sessions_keeps_a_thread_the_index_names_no_source_for(codex_server):
+    """``thread/list`` answers with no ``threadSource``, and those are sessions all the same."""
+    codex_server.answers["thread/loaded/list"] = {"data": []}
+    codex_server.answers["thread/list"] = {"data": [a_thread(status={"type": "notLoaded"}, threadSource=None)]}
+
+    assert [session.session_id for session in codex.list_sessions(include_closed=True)] == [THREAD_ID]
 
 
 def test_list_sessions_never_lists_a_live_thread_twice(codex_server):

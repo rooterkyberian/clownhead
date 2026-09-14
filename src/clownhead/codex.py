@@ -11,6 +11,11 @@ listing of the newest threads can start below a session opened minutes ago. Live
 therefore come from ``thread/loaded/list``, one ``thread/read`` each, and everything that
 has ended comes from ``thread/list``.
 
+The live half carries more than live sessions. A thread whose turn died on an expired
+token stays loaded with that error for as long as the daemon runs, and Codex opens threads
+of its own alongside a conversation which are loaded the same way. :func:`list_sessions`
+reads each thread to keep the board to the sessions somebody is having.
+
 The daemon has to be running for any of this, and :func:`ensure_daemon` starts one when
 nothing answers: ``codex app-server daemon start`` returns without doing anything against a
 daemon already running, so the board can ask on every refresh instead of asking the person
@@ -58,11 +63,12 @@ APPROVAL_FLAG = "waitingOnApproval"
 INPUT_FLAG = "waitingOnUserInput"
 USER_ITEM = "userMessage"
 AGENT_ITEM = "agentMessage"
+SYSTEM_SOURCE = "system"
 
 STATUS_BY_TYPE = {
     "idle": Status.IDLE,
     "notLoaded": Status.CLOSED,
-    "systemError": Status.FAILED,
+    "systemError": Status.CLOSED,
 }
 WAITING_BY_FLAG = {
     APPROVAL_FLAG: (Status.BLOCKED, "approval"),
@@ -87,6 +93,10 @@ def list_sessions(cwd: Path | None = None, *, include_closed: bool = False) -> l
     ``cwd`` filters to one directory. Only ``thread/list`` takes that filter itself, so
     the live half is filtered here instead, which costs nothing at fleet sizes a person
     can read.
+
+    A thread that has ended goes behind ``include_closed`` whichever half it came from,
+    since the daemon hands out loaded threads that are over (see :func:`parse_status`).
+    A session among the live ones is one somebody can still be talking to.
     """
     with session() as client:
         live = [_read_thread(client, thread_id) for thread_id in _loaded_ids(client)]
@@ -94,8 +104,9 @@ def list_sessions(cwd: Path | None = None, *, include_closed: bool = False) -> l
         seen = {thread.get("id") for thread in threads}
         if include_closed:
             threads.extend(thread for thread in _listed(client, cwd) if thread.get("id") not in seen)
-    sessions = [parse_thread(thread) for thread in threads]
-    return [found for found in sessions if cwd is None or found.cwd == cwd]
+    sessions = [parse_thread(thread) for thread in threads if _opened_by_a_person(thread)]
+    kept = sessions if include_closed else [found for found in sessions if not found.is_finished]
+    return [found for found in kept if cwd is None or found.cwd == cwd]
 
 
 def attach_processes(sessions: Iterable[Session], processes: Mapping[int, Process]) -> list[Session]:
@@ -369,6 +380,14 @@ def parse_status(payload: Any) -> tuple[Status, str | None]:
     ``active`` covers three of the board's states at once: a turn in flight, a turn
     stopped on an approval, and a turn stopped on a question. The flags tell them apart,
     and an active thread carrying neither flag is working.
+
+    ``systemError`` is a thread whose last turn died, on an expired token, a rate limit or
+    a response stream that dropped. It holds that status until a new turn starts, which is
+    what resuming it does, so it reads as closed the same as ``notLoaded``: the daemon
+    keeps such a thread loaded for as long as it runs, and a session that will only move
+    again when somebody comes back to it belongs with the ended ones rather than under the
+    count of what is waiting on you. A session left open in an editor after a failed turn
+    reads as closed too, until whoever is in front of it types the next thing.
     """
     if not isinstance(payload, Mapping):
         return Status.UNKNOWN, None
@@ -411,6 +430,20 @@ def parse_trust(payload: Mapping[str, Any]) -> set[Path]:
         for path, record in projects.items()
         if isinstance(record, Mapping) and record.get("trust_level") == "trusted"
     }
+
+
+def _opened_by_a_person(thread: Mapping[str, Any]) -> bool:
+    """Whether a thread is somebody's session, or one Codex opened for its own work.
+
+    Codex runs threads beside a conversation for the work it does around one, and marks
+    them ``threadSource: system``. They are ephemeral: no rollout file to read, no entry in
+    ``thread/list``, nothing to resume. One of them failing puts a row on the board in a
+    directory somebody is working in, for a session nobody opened.
+
+    ``thread/list`` answers with no source at all, so the test is for the threads Codex
+    marks as its own; a test for ``user`` would drop every session the index remembers.
+    """
+    return thread.get("threadSource") != SYSTEM_SOURCE
 
 
 def _loaded_ids(client: Client) -> list[str]:
