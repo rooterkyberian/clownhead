@@ -1,14 +1,14 @@
 import json
-from datetime import timedelta
+from datetime import UTC, datetime, timedelta
 from pathlib import Path
 
 import pytest
 from typer.testing import CliRunner
 
 import clownhead
-from clownhead import attention, cli, discovery, harness
+from clownhead import attention, cli, discovery, harness, usage
 from clownhead import terminal as terminal_module
-from clownhead.models import Session, Status
+from clownhead.models import Harness, Session, Status
 from clownhead.pulls import Status as PullStatus
 from clownhead.resume import Launch
 from clownhead.terminal import ITerm2Terminal, Terminal
@@ -136,6 +136,53 @@ def test_no_arguments_fails_loudly_when_peer_discovery_is_blocked(monkeypatch):
     result = runner.invoke(cli.app, [])
 
     assert result.exit_code == 2
+
+
+def test_usage_shows_allowances_and_unavailable_readings_without_discovery(monkeypatch):
+    reset = datetime(2026, 9, 17, 12, tzinfo=UTC)
+    found = {
+        Harness.CLAUDE: usage.Usage(problem="Claude usage cache is stale; open /usage in Claude Code"),
+        Harness.CODEX: usage.Usage((usage.Window("5h", 25, reset), usage.Window("7d", 40, reset))),
+    }
+    monkeypatch.setattr(harness, "installed", lambda: [harness.Claude(), harness.Codex()])
+    monkeypatch.setattr(usage, "read", found.__getitem__)
+    monkeypatch.setattr(discovery, "peer_discovery_available", lambda: False)
+
+    result = runner.invoke(cli.app, ["usage"])
+
+    assert result.exit_code == 0
+    assert "Account allowance used" in result.stdout
+    assert "claude: Claude usage cache is stale; open /usage in Claude Code" in result.stdout
+    assert "codex 5h: 25% used; resets" in result.stdout
+    assert "codex 7d: 40% used; resets" in result.stdout
+    assert "refreshes" not in result.stdout
+
+
+def test_usage_reads_the_local_claude_cache():
+    now = datetime.now(tz=UTC)
+    discovery.trust_file().write_text(
+        json.dumps(
+            {
+                "oauthAccount": {"accountUuid": "account-1"},
+                "cachedUsageUtilization": {
+                    "accountUuid": "account-1",
+                    "fetchedAtMs": now.timestamp() * 1000,
+                    "utilization": {
+                        "five_hour": {"utilization": 12.5, "resets_at": (now + timedelta(hours=2)).isoformat()},
+                        "seven_day": {"utilization": 0},
+                    },
+                },
+            }
+        )
+    )
+
+    result = runner.invoke(cli.app, ["usage"])
+
+    assert result.exit_code == 0
+    assert "claude: local snapshot from" in result.stdout
+    assert "claude 5h: 12.5% used; resets" in result.stdout
+    assert "claude 7d: 0% used; resets unknown" in result.stdout
+    assert "codex" not in result.stdout
 
 
 def test_ls_lists_the_fleet(live_fleet):

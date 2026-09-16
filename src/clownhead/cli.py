@@ -16,7 +16,19 @@ from rich.table import Table
 from rich.text import Text
 from typer.core import TyperGroup
 
-from clownhead import __version__, attention, checkouts, discovery, harness, issues, pulls, search, tui, worktrees
+from clownhead import (
+    __version__,
+    attention,
+    checkouts,
+    discovery,
+    harness,
+    issues,
+    pulls,
+    search,
+    tui,
+    usage,
+    worktrees,
+)
 from clownhead import settings as settings_store
 from clownhead.issues import Unavailable
 from clownhead.models import Column, Session
@@ -443,6 +455,13 @@ def _holders(cwd: Path | None, include_background: bool) -> dict[PullRequest, li
     has usually finished too.
     """
     return search.sessions_by_pull(_load(cwd, include_background, include_closed=True))
+
+
+@app.command("usage")
+def account_usage() -> None:
+    """Show account allowance used, reset times, and unavailable readings for each harness."""
+    found = {agent.kind: usage.read(agent.kind) for agent in harness.installed()}
+    console.print(usage.details(found))
 
 
 @app.command("worktrees-cleanup")

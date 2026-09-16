@@ -48,6 +48,18 @@ which is ahead of the last release.
 `AGE` is time since its process started,
 and the pane below the table carries the id, path, process and terminal the columns cannot fit.
 
+The top-right corner shows account allowance **used**, for example
+`claude 5h 25% 7d 40% · codex 5h 10% 7d 30%`.
+It refreshes once a minute, or with `ctrl+r`; hover for reset times and reading details.
+Claude reads its local usage cache.
+Codex asks its local app-server and falls back to rate-limit snapshots in the selected profile's session files.
+`--` means no current reading is available, rather than zero usage.
+For Claude, opening `/usage` in Claude Code refreshes the cache;
+readings older than an hour are prefixed with `~` and labelled stale with their snapshot time.
+A cached window disappears once its reset time passes.
+Claude snapshots belonging to a different account are ignored.
+`clownhead usage` prints the same readings, reset times, and any unavailable-reading reasons without opening the board.
+
 `STATUS` reads `busy` while a turn is in flight and `shell` once the turn is over with a background command still running.
 A row that has sat on `shell` for half an hour is usually a command nobody is waiting for any more.
 
@@ -123,7 +135,7 @@ Finished work is usually in a session that has ended,
 so `c` first, then the URL:
 
 ```
- 🤡  2 of 137 sessions · acme/data-platform#309                        ⟳ 5s
+ 🤡  2 of 137 sessions · acme/data-platform#309
  STATUS  NAME                    WHERE
  idle    invoice-parser          data-platform ⇢ invoice-parser
  closed  design-system:87e26be1  ~/dev/acme/design-system
@@ -236,6 +248,7 @@ so the same data pipes into a script.
 | `clownhead open <ref>` | The board filtered to a pull request or issue, ended sessions included, ready to start one for it. What a bare `clownhead <url>` runs. Takes a GitHub pull request or issue URL, a Jira URL, or `owner/repo#123`. `--print` writes the sessions and the start command out instead of opening the board. |
 | `clownhead prs` | What you have open on GitHub, and which sessions here worked on each. `--author` asks about somebody else, `--limit` caps how many to ask for, `--no-sessions` skips the transcript pass. Needs `gh`. |
 | `clownhead ls` | Status board, attention-first. `--cwd` scopes to one tree, `--all` adds background agents, `--closed` adds sessions that have ended, `--pr` keeps only the ones whose transcript names a pull request, `--columns` picks the columns and their order. |
+| `clownhead usage` | Account allowance used for Claude and Codex, with reset times, local snapshot timestamps, and reasons for unavailable readings. Uses the same local sources as the board. |
 | `clownhead worktrees-cleanup` | Retire the worktrees Claude Code and Codex left behind. `--older-than` sets how long untouched is long enough (default `7d`), `--merged` keeps to the ones already in the default branch, `--branches` deletes those branches too, `--dry-run` shows what would go, `--yes` skips the question. |
 | `clownhead paint` | Colour each session's tab to match its state, for a board you would rather not keep open. `--follow` keeps them in sync, `--reset` clears them. |
 | `clownhead focus [name]` | Bounce the dock, raise the terminal, and notify. With no argument, takes every session that is waiting on you. `--no-foreground` leaves your windows where they are. |

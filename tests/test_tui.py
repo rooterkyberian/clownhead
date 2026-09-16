@@ -1,4 +1,5 @@
 import json
+import threading
 from pathlib import Path
 
 import pytest
@@ -7,12 +8,12 @@ from rich.markup import render as render_markup
 from textual.coordinate import Coordinate
 from textual.widgets import DataTable, Input, OptionList, Select, SelectionList, Static, Switch
 
-from clownhead import archive, harness
+from clownhead import archive, harness, usage
 from clownhead import settings as settings_store
 from clownhead import tui as tui_module
 from clownhead.attention import SignalResult
 from clownhead.issues import Issue, Tracker
-from clownhead.models import Column, Message, Process, Session, Status
+from clownhead.models import Column, Harness, Message, Process, Session, Status
 from clownhead.pulls import Status as PullStatus
 from clownhead.settings import ResumeIn, Settings
 from clownhead.terminal import ITerm2Terminal
@@ -159,6 +160,89 @@ def notified(app: FleetApp) -> str:
 
 def title_of(app: FleetApp) -> str:
     return str(app.query_one("#title", Static).content)
+
+
+async def test_account_usage_appears_on_the_right_for_both_harnesses(monkeypatch):
+    monkeypatch.setattr(harness, "installed", lambda: [harness.Claude(), harness.Codex()])
+    monkeypatch.setattr(usage, "read", lambda kind: usage.Usage((usage.Window("5h", 25), usage.Window("7d", 40))))
+    app = build_app()
+    async with app.run_test(size=(80, 24)) as pilot:
+        await settle(app, pilot)
+        widget = app.query_one("#usage", Static)
+        assert str(widget.content) == "claude 5h 25% 7d 40% · codex 5h 25% 7d 40%"
+        assert widget.region.x > app.query_one("#title", Static).region.x
+        assert widget.region.right == app.query_one("#bar").region.right
+        assert widget.region.width >= len(str(widget.content))
+        assert "allowance used" in str(widget.tooltip)
+
+
+async def test_usage_refresh_is_independent_of_session_refresh_and_recovers(monkeypatch):
+    calls = []
+    found = usage.Usage((usage.Window("5h", 25),))
+
+    def read(kind):
+        calls.append(kind)
+        return found
+
+    monkeypatch.setattr(usage, "read", read)
+    app = build_app()
+    async with app.run_test() as pilot:
+        await settle(app, pilot)
+        assert calls == [Harness.CLAUDE]
+        app.start_reload()
+        await settle(app, pilot)
+        assert calls == [Harness.CLAUDE]
+        found = usage.Usage(problem="stale; open /usage in Claude Code")
+        await pilot.press("ctrl+r")
+        await settle(app, pilot)
+        assert str(app.query_one("#usage", Static).content) == "claude --"
+        assert "stale" in str(app.query_one("#usage", Static).tooltip)
+        found = usage.Usage((usage.Window("5h", 35),))
+        app.start_usage_reload()
+        await settle(app, pilot)
+        assert str(app.query_one("#usage", Static).content) == "claude 5h 35%"
+
+
+async def test_slow_usage_does_not_block_the_fleet_or_duplicate_reads(monkeypatch):
+    release = threading.Event()
+    calls = []
+
+    def read(kind):
+        calls.append(kind)
+        release.wait(timeout=5)
+        raise RuntimeError("private error details")
+
+    monkeypatch.setattr(usage, "read", read)
+    app = build_app()
+    async with app.run_test() as pilot:
+        try:
+            await pilot.pause()
+            assert table_of(app).row_count == 2
+            assert str(app.query_one("#usage", Static).content) == "claude …"
+            app.start_usage_reload()
+            await pilot.pause()
+            assert calls == [Harness.CLAUDE]
+        finally:
+            release.set()
+        await settle(app, pilot)
+        assert str(app.query_one("#usage", Static).content) == "claude --"
+        assert "private error details" not in str(app.query_one("#usage", Static).tooltip)
+        assert table_of(app).row_count == 2
+
+
+async def test_account_usage_refreshes_on_its_own_timer(monkeypatch):
+    calls = []
+
+    def read(kind):
+        calls.append(kind)
+        return usage.Usage((usage.Window("5h", len(calls)),))
+
+    monkeypatch.setattr(usage, "read", read)
+    monkeypatch.setattr(usage, "REFRESH_INTERVAL", 0.05)
+    app = build_app()
+    async with app.run_test() as pilot:
+        await pilot.pause(0.2)
+        assert len(calls) >= 2
 
 
 @pytest.mark.parametrize(
@@ -2375,7 +2459,7 @@ async def test_tui_settings_screen_changes_the_refresh_interval():
         await pilot.pause()
 
         assert app._settings.interval == 30
-        assert "30s" in str(app.query_one("#tick", Static).content)
+        assert app._interval == 30
         assert settings_store.load().interval == 30
 
 

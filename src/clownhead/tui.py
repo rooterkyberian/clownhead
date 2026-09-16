@@ -38,7 +38,7 @@ from textual.widgets import (
 )
 from textual.widgets.selection_list import Selection
 
-from clownhead import archive, attention, checkouts, harness, issues, pulls
+from clownhead import archive, attention, checkouts, harness, issues, pulls, usage
 from clownhead import settings as settings_store
 from clownhead.control import SLASH_COMMAND, close_tab, rename, send_message, shell_of, terminate, wait_for_exit
 from clownhead.discovery import process_table
@@ -1540,10 +1540,12 @@ class FleetApp(App[None]):
         link-color-hover: $text;
         link-background-hover: $boost;
     }
-    #tick {
+    #usage {
         width: auto;
+        max-width: 70%;
         padding: 0 1;
-        color: $text-muted;
+        text-overflow: ellipsis;
+        text-wrap: nowrap;
     }
     #board {
         height: 1fr;
@@ -1645,10 +1647,14 @@ class FleetApp(App[None]):
         settings: Settings | None = None,
         reader: Reader | None = None,
         target: Reference | None = None,
+        usage_reader: Callable[[Harness], usage.Usage] | None = None,
     ) -> None:
         super().__init__()
         self._loader = loader
         self._reader: Reader = reader if reader is not None else harness.recent_messages
+        self._usage_reader = usage_reader if usage_reader is not None else usage.read
+        self._usage: dict[Harness, usage.Usage | None] = {}
+        self._usage_loading: set[Harness] = set()
         self._settings = settings if settings is not None else settings_store.load()
         self._interval = interval if interval is not None else self._settings.interval
         self._terminal = terminal
@@ -1675,7 +1681,7 @@ class FleetApp(App[None]):
         with Horizontal(id="bar"):
             yield Static(CLOWN, id="clown")
             yield Static(id="title")
-            yield Static(f"⟳ {format_duration(timedelta(seconds=self._interval))}", id="tick")
+            yield Static(id="usage")
         with Horizontal(id="board"):
             yield FleetTable(id="fleet", cursor_type="row", zebra_stripes=True)
             with HistoryPanel(id="history"):
@@ -1696,6 +1702,8 @@ class FleetApp(App[None]):
         self._draw()
         self.start_reload()
         self._ticker = self.set_interval(self._interval, self.start_reload)
+        self.start_usage_reload()
+        self.set_interval(usage.REFRESH_INTERVAL, self.start_usage_reload)
 
     def on_unmount(self) -> None:
         """Give the board's own tab its colour back on the way out.
@@ -1872,6 +1880,35 @@ class FleetApp(App[None]):
         self._loading = True
         self._reload()
 
+    def start_usage_reload(self) -> None:
+        """Refresh each installed harness independently, at most once at a time."""
+        for agent in harness.installed():
+            self._usage.setdefault(agent.kind, None)
+            if agent.kind not in self._usage_loading:
+                self._usage_loading.add(agent.kind)
+                self._reload_usage(agent.kind)
+        self._draw_usage()
+
+    @work(thread=True, group="usage")
+    def _reload_usage(self, kind: Harness) -> None:
+        """Fetch allowances off the event loop, separately from session discovery."""
+        try:
+            found = self._usage_reader(kind)
+        except Exception:
+            found = usage.Usage(problem="account usage unavailable")
+        hand_back(self, self._usage_finished, (kind, found))
+
+    def _usage_finished(self, result: tuple[Harness, usage.Usage]) -> None:
+        kind, found = result
+        self._usage_loading.discard(kind)
+        self._usage[kind] = found
+        self._draw_usage()
+
+    def _draw_usage(self) -> None:
+        widget = self.query_one("#usage", Static)
+        widget.update(usage.summary(self._usage))
+        widget.tooltip = usage.details(self._usage)
+
     def action_refresh(self) -> None:
         """Reload the fleet now, and read the transcripts again if one is being searched.
 
@@ -1887,6 +1924,7 @@ class FleetApp(App[None]):
         self._pulls_asked.clear()
         self._searching = None
         self.start_reload()
+        self.start_usage_reload()
 
     def action_go(self) -> None:
         """Get into the selected session, by whichever route it still has.
@@ -2751,7 +2789,6 @@ class FleetApp(App[None]):
             self._interval = settings.interval
             self._ticker.stop()
             self._ticker = self.set_interval(self._interval, self.start_reload)
-            self.query_one("#tick", Static).update(f"⟳ {format_duration(timedelta(seconds=self._interval))}")
         self._draw()
 
     @work(thread=True, group="history")
@@ -2830,6 +2867,7 @@ def run(
     settings: Settings | None = None,
     reader: Reader | None = None,
     target: Reference | None = None,
+    usage_reader: Callable[[Harness], usage.Usage] | None = None,
 ) -> Launch | None:
     """Launch the fleet overseer, block until the user quits, and say what to run next.
 
@@ -2848,6 +2886,7 @@ def run(
         settings=settings,
         reader=reader,
         target=target,
+        usage_reader=usage_reader,
     )
     app.run()
     return app.launch

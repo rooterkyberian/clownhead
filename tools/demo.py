@@ -35,9 +35,9 @@ from typing import Annotated
 
 import typer
 
-from clownhead import codex, tui
+from clownhead import codex, tui, usage
 from clownhead.discovery import CONFIG_DIR_VAR, sort_key
-from clownhead.models import Message, Session, Status
+from clownhead.models import Harness, Message, Session, Status
 from clownhead.settings import Settings
 
 DEMO_HOME = Path("/tmp/clownhead-demo")  # noqa: S108
@@ -128,7 +128,12 @@ def board(screenshot: ScreenshotOption = None) -> None:
     if screenshot is not None:
         screenshot.write_text(asyncio.run(shot()))
         return
-    tui.run(loader=fabricated_fleet(), settings=DEMO_SETTINGS, reader=fabricated_conversation)
+    tui.run(
+        loader=fabricated_fleet(),
+        settings=DEMO_SETTINGS,
+        reader=fabricated_conversation,
+        usage_reader=fabricated_usage,
+    )
 
 
 async def shot() -> str:
@@ -139,10 +144,18 @@ async def shot() -> str:
     rather than sampled from a video at a moment that moves whenever the demo changes.
     """
     loader = fabricated_fleet()
-    app = tui.FleetApp(loader=loader, settings=DEMO_SETTINGS, reader=fabricated_conversation)
+    app = tui.FleetApp(
+        loader=loader, settings=DEMO_SETTINGS, reader=fabricated_conversation, usage_reader=fabricated_usage
+    )
     async with app.run_test(size=SHOT_SIZE) as pilot:
         await pilot.pause()
         return app.export_screenshot(title="clownhead")
+
+
+def fabricated_usage(kind: Harness) -> usage.Usage:
+    """Give the demo fixed allowances without reaching either real account."""
+    percent = 25 if kind is Harness.CLAUDE else 40
+    return usage.Usage((usage.Window("5h", percent), usage.Window("7d", 12)))
 
 
 def fabricated_fleet() -> Callable[[bool], list[Session]]:

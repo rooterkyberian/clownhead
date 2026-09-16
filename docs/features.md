@@ -47,6 +47,7 @@ where the CLI answers for what is live and the transcripts answer for what has e
 | List live sessions | `claude agents --json` | yes, `thread/loaded/list` then `thread/read` |
 | List ended sessions | registry and transcripts | yes, `thread/list` |
 | Status vocabulary | `status`, `waitingFor`, `state` | yes, `ThreadStatus` with `activeFlags` |
+| Account usage in the header | local `cachedUsageUtilization`; older readings marked stale | local app-server `account/rateLimits/read`, falling back to rollout rate-limit snapshots |
 | Split `busy` from `shell` | registry beat, `discovery.refine` | **no**, the protocol has no such state |
 | Working directory | payload `cwd` | yes, `Thread.cwd` |
 | Session name | payload `name`, `--name` at launch | **partial**, model-written and null until the session ends |
