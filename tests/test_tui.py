@@ -162,6 +162,10 @@ def title_of(app: FleetApp) -> str:
     return str(app.query_one("#title", Static).content)
 
 
+def sheet_line(app: FleetApp, selector: str) -> str:
+    return str(app.screen.query_one(selector, Static).content)
+
+
 async def test_account_usage_appears_on_the_right_for_both_harnesses(monkeypatch):
     monkeypatch.setattr(harness, "installed", lambda: [harness.Claude(), harness.Codex()])
     monkeypatch.setattr(usage, "read", lambda kind: usage.Usage((usage.Window("5h", 25), usage.Window("7d", 40))))
@@ -3495,10 +3499,57 @@ async def test_resume_harness_choice_defaults_to_original_and_can_fork(monkeypat
         await pilot.press("r")
         await pilot.pause()
         assert isinstance(app.screen, tui_module.ResumeScreen)
-        assert "Resume in claude" in str(app.screen.query_one("#resume-choice", Static).content)
-        await pilot.press("f", "enter")
+        assert "Resume invoice-parser-3d?" in sheet_line(app, "#question")
+        assert "(x) claude" in sheet_line(app, "#harness")
+        assert "( ) codex" in sheet_line(app, "#harness")
+        assert "[ ] fork" in sheet_line(app, "#fork")
+        await pilot.press("f")
+        await pilot.pause()
+        assert "Fork invoice-parser-3d?" in sheet_line(app, "#question")
+        assert "[x] fork" in sheet_line(app, "#fork")
+        await pilot.press("enter")
         await settle(app, pilot)
         assert "--fork-session" in opened[0].argv
+
+
+@pytest.mark.parametrize(("key", "resumed"), [("y", True), ("n", False)])
+async def test_resume_sheet_answers_to_the_terminate_keys(monkeypatch, codex_installed, key, resumed):
+    opened = []
+    monkeypatch.setattr(tui_module, "open_session", lambda plan, *args: opened.append(plan) or "in terminal")
+    app = build_app(sessions=[closed_session()])
+    async with app.run_test() as pilot:
+        await settle(app, pilot)
+        await pilot.press("r", key)
+        await settle(app, pilot)
+        assert not isinstance(app.screen, tui_module.ResumeScreen)
+        assert ["--fork-session" in plan.argv for plan in opened] == ([False] if resumed else [])
+
+
+async def test_resume_sheet_keeps_a_live_session_forked(codex_installed):
+    app = build_app()
+    async with app.run_test() as pilot:
+        await settle(app, pilot)
+        await pilot.press("r", "f")
+        await pilot.pause()
+        assert "Fork payments-api-7c?" in sheet_line(app, "#question")
+        assert "[x] fork under a new session id · still running" in sheet_line(app, "#fork")
+        assert "f for fork" not in sheet_line(app, "#keys")
+        await pilot.press("escape")
+
+
+async def test_resume_sheet_ignores_fork_while_handing_off(codex_installed):
+    app = build_app(sessions=[closed_session()])
+    async with app.run_test() as pilot:
+        await settle(app, pilot)
+        await pilot.press("r", "h")
+        await pilot.pause()
+        assert "new conversation" in sheet_line(app, "#fork")
+        assert "f for fork" not in sheet_line(app, "#keys")
+        await pilot.press("f", "h")
+        await pilot.pause()
+        assert "Resume invoice-parser-3d?" in sheet_line(app, "#question")
+        assert "f for fork" in sheet_line(app, "#keys")
+        await pilot.press("escape")
 
 
 @pytest.mark.parametrize("route", ["terminal", "here", "copy"])
@@ -3524,7 +3575,8 @@ async def test_resume_can_continue_in_another_harness(monkeypatch, tmp_path, cod
             app.action_go()
         await pilot.pause()
         await pilot.press("h")
-        assert "new conversation" in str(app.screen.query_one("#resume-choice", Static).content)
+        assert "Continue invoice-parser-3d in codex?" in sheet_line(app, "#question")
+        assert "(x) codex" in sheet_line(app, "#harness")
         await pilot.press("enter")
         await settle(app, pilot)
         if route == "copy":
@@ -3573,7 +3625,12 @@ async def test_resume_offers_installed_harness_when_original_is_missing(monkeypa
         await pilot.press("r")
         await pilot.pause()
         assert isinstance(app.screen, tui_module.ResumeScreen)
-        assert "Continue in claude" in str(app.screen.query_one("#resume-choice", Static).content)
+        assert "Continue invoice-parser-3d in claude?" in sheet_line(app, "#question")
+        assert "codex · closed" in sheet_line(app, "#session")
+        assert not app.screen.query("#harness")
+        await pilot.press("h")
+        await pilot.pause()
+        assert "Continue invoice-parser-3d in claude?" in sheet_line(app, "#question")
         await pilot.press("escape")
 
 

@@ -543,20 +543,41 @@ class ResumeChoice:
 
 
 class ResumeScreen(ModalScreen[ResumeChoice | None]):
-    """Choose the agent that continues a conversation."""
+    """Which agent continues a conversation, and whether it keeps the session id.
+
+    Laid out like the terminate question: what is about to happen, a dim line saying which
+    session it happens to, one line per choice showing where it stands, and the keys under
+    that. Every harness is on the sheet with the chosen one marked, so `h` moves a mark
+    you can see rather than rewriting a sentence you have to reread.
+
+    The fork box is only a box where the answer is open. A session still running always
+    forks, since resuming it would make a second writer of its transcript, and a handoff
+    to another harness is a new conversation whichever way the box reads. The line says so
+    in both cases, and `f` drops out of the keys.
+
+    It answers with the chosen harness and fork, or ``None`` for neither.
+    """
 
     CSS = """
-    ResumeScreen { align: center middle; }
-    ResumeScreen #sheet {
-        width: 78; height: auto; padding: 1 2;
-        border: round $panel; background: $surface;
+    ResumeScreen {
+        align: center middle;
+    }
+    #sheet {
+        width: 64;
+        height: auto;
+        padding: 1 2;
+        border: round $panel;
+        background: $surface;
     }
     """
+
     BINDINGS = [
+        Binding("y", "confirm", "yes"),
+        Binding("enter", "confirm", "yes"),
         Binding("h", "harness", "harness"),
-        Binding("f", "fork", "resume/fork"),
-        Binding("enter", "continue_session", "continue"),
-        Binding("escape", "cancel", "cancel"),
+        Binding("f", "toggle_fork", "fork"),
+        Binding("n", "cancel", "no"),
+        Binding("escape", "cancel", "no"),
     ]
 
     def __init__(self, session: Session, agents: Sequence[Harness], fork: bool = False) -> None:
@@ -567,40 +588,92 @@ class ResumeScreen(ModalScreen[ResumeChoice | None]):
         self._fork = fork or not session.is_finished
 
     def compose(self) -> ComposeResult:
-        """Show the selected harness and what continuing will preserve."""
+        """Ask, with the session under the question, the choices under that, and the keys last."""
         with Vertical(id="sheet"):
-            yield Static(f"[bold]Continue {escape(self._session.label)}[/]")
-            yield Static(self._description(), id="resume-choice")
-            yield Static("[dim]h for harness · f for resume/fork · enter to continue · esc to cancel[/]")
-
-    def _description(self) -> str:
-        agent = self._agents[self._agent]
-        if agent is not self._session.harness:
-            return (
-                f"Continue in {agent.value} with a new conversation in the same checkout.\n"
-                "Carry recent messages and references to the original transcripts.\n"
-                "Starts in plan/read-only mode; the original conversation stays intact."
-            )
-        return f"{'Fork' if self._fork else 'Resume'} in {agent.value}."
+            yield Static(self._question(), id="question")
+            yield Static(self._session_line(), id="session")
+            if len(self._agents) > 1:
+                yield Static(self._harness_line(), id="harness")
+            yield Static(self._fork_line(), id="fork")
+            yield Static(self._keys(), id="keys")
 
     def action_harness(self) -> None:
-        """Cycle through installed harnesses."""
+        """Move the mark to the next installed harness."""
+        if len(self._agents) < 2:
+            return
         self._agent = (self._agent + 1) % len(self._agents)
-        self.query_one("#resume-choice", Static).update(self._description())
+        self._refresh()
 
-    def action_fork(self) -> None:
-        """Toggle conversation identity when the original is no longer running."""
-        if self._session.is_finished:
-            self._fork = not self._fork
-            self.query_one("#resume-choice", Static).update(self._description())
+    def action_toggle_fork(self) -> None:
+        """Tick the fork box, or untick it, where the session leaves that open."""
+        if not self._fork_is_open():
+            return
+        self._fork = not self._fork
+        self._refresh()
 
-    def action_continue_session(self) -> None:
-        """Continue with the displayed choice."""
-        self.dismiss(ResumeChoice(self._agents[self._agent], self._fork))
+    def action_confirm(self) -> None:
+        """Answer yes, to whatever the sheet currently says."""
+        self.dismiss(ResumeChoice(self._chosen_agent(), self._fork))
 
     def action_cancel(self) -> None:
-        """Leave the conversation untouched."""
+        """Answer no."""
         self.dismiss(None)
+
+    def _refresh(self) -> None:
+        self.query_one("#question", Static).update(self._question())
+        for line in self.query("#harness").results(Static):
+            line.update(self._harness_line())
+        self.query_one("#fork", Static).update(self._fork_line())
+        self.query_one("#keys", Static).update(self._keys())
+
+    def _question(self) -> str:
+        label = escape(self._session.label)
+        if self._hands_off():
+            return f"[bold]Continue {label} in {self._chosen_agent().value}?[/]"
+        return f"[bold]{'Fork' if self._fork else 'Resume'} {label}?[/]"
+
+    def _session_line(self) -> str:
+        """The session's own harness, its process while it has one, and its status."""
+        session = self._session
+        process = () if session.pid is None else (f"pid {session.pid}",)
+        return f"[dim]{escape(' · '.join((session.harness.value, *process, session.reason)))}[/]"
+
+    def _harness_line(self) -> str:
+        return "  ".join(
+            f"(x) {agent.value}" if agent is self._chosen_agent() else f"[dim]( ) {agent.value}[/]"
+            for agent in self._agents
+        )
+
+    def _fork_line(self) -> str:
+        """The tick, with brackets escaped so Rich reads them as a box and not as markup."""
+        if self._hands_off():
+            return (
+                "[dim]new conversation in the same checkout, starting read-only\n"
+                "given recent messages and the original transcript paths[/]"
+            )
+        if not self._session.is_finished:
+            return r"[dim]\[x] fork under a new session id · still running[/]"
+        if self._fork:
+            return r"\[x] fork under a new session id"
+        return r"[dim]\[ ] fork under a new session id[/]"
+
+    def _keys(self) -> str:
+        keys = ["y to confirm"]
+        if len(self._agents) > 1:
+            keys.append("h for harness")
+        if self._fork_is_open():
+            keys.append("f for fork")
+        keys.append("esc to cancel")
+        return f"[dim]{' · '.join(keys)}[/]"
+
+    def _chosen_agent(self) -> Harness:
+        return self._agents[self._agent]
+
+    def _hands_off(self) -> bool:
+        return self._chosen_agent() is not self._session.harness
+
+    def _fork_is_open(self) -> bool:
+        return self._session.is_finished and not self._hands_off()
 
 
 @dataclass(frozen=True)

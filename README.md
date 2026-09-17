@@ -101,11 +101,13 @@ A row that has sat on `shell` for half an hour is usually a command nobody is wa
   On a session still running it asks whether to fork it,
   which copies the conversation so far into a session with an id of its own
   and leaves the live one alone.
-  When both harnesses are installed, the resume/fork sheet lets you press `h`
-  to choose Claude or Codex and `f` to toggle resume/fork for an ended session.
+  When both harnesses are installed it asks first, with both listed and the session's own marked:
+  `h` moves the mark,
+  `f` ticks `[x] fork under a new session id` for an ended session,
+  and `y` or `enter` confirms.
   Switching harnesses opens a new conversation in the same checkout with recent
   messages and transcript references, starting in plan/read-only mode.
-  The same choice is available when resuming here with `enter` or copying a command.
+  The same question comes up when resuming here with `enter` or copying a command.
 - `R` renames it.
 - `t` asks whether to send its process SIGTERM, and can close its tab behind it.
   The question comes with `[x] archive session` ticked,

@@ -439,9 +439,13 @@ An iTerm2 tab in the frontmost window.
 Or the clipboard, which is the route that needs nothing to be running
 and the one it falls back to by default.
 
-When both harnesses are installed, resuming or forking first opens a harness choice.
-`h` cycles the installed harnesses, defaulting to the conversation's original one.
-`f` toggles resume/fork for an ended session; a live session always forks.
+When both harnesses are installed, resuming or forking first asks,
+listing the installed harnesses with the conversation's original one marked.
+`h` moves the mark.
+`f` ticks the fork box for an ended session.
+A live session always forks and a switch of harness is a new conversation either way,
+so `f` does nothing in either case and the sheet says why.
+`y` or `enter` confirms, `n` or `esc` cancels.
 This choice also applies to `enter`, pull-request session selection, and copied commands.
 Staying with the original harness uses its native resume/fork command.
 Switching starts a new conversation in the recorded working directory, carrying the
