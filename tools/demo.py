@@ -11,13 +11,14 @@ printed: a working directory that has gone is marked as gone, a worktree resumes
 repository only while that repository still stands, and a signal is a write to a TTY. A
 fleet invented in memory alone would therefore render as a board full of missing
 directories, so this one is built rather than imagined — a home of its own holding the
-projects, the worktrees, the terminal application and a stand-in file per TTY that its
-sessions claim, with ``HOME`` pointed at it so paths shorten to ``~`` as they would
-anywhere else.
+projects, the worktrees, the terminal application, a stand-in ``codex`` and a stand-in
+file per TTY that its sessions claim, with ``HOME`` pointed at it so paths shorten to
+``~`` as they would anywhere else.
 
 Nothing here reaches a real terminal or a real process. The TTYs are ordinary files, so a
 signal aimed at one lands in the demo's own directory rather than in somebody's terminal,
-and no session carries a pid, so there is nothing for ``t`` to send SIGTERM to.
+and no session carries a pid, so there is nothing for ``t`` to send SIGTERM to. The
+``codex`` the board finds answers its version and refuses everything else.
 
 Durations are offsets from the moment the fleet is read rather than fixed dates, so every
 recording of the board renders the same numbers.
@@ -61,6 +62,14 @@ two to one — which is what GitHub asks a social preview for.
 
 TERMINAL_APP = Path("Applications/iTerm.app")
 ITERM2_BUNDLE_ID = "com.googlecode.iterm2"
+CODEX_STAND_IN = Path("bin/codex")
+"""Found on ``PATH`` ahead of any real Codex, so every recording shows both agents.
+
+The harness column and the Codex half of the usage bar appear only on a machine where
+``codex`` is found, which would otherwise make the board depend on whoever records it. It
+answers ``--version`` with the release that makes its own worktrees, and exits non-zero
+on anything else, so a command the board runs for a Codex row stays inside the demo.
+"""
 
 PAYMENTS = Path("dev/payments-api")
 WEB_PLATFORM = Path("dev/web-platform")
@@ -164,12 +173,15 @@ def fabricated_fleet() -> Callable[[bool], list[Session]]:
     ``CLAUDE_CONFIG_DIR`` and ``CODEX_HOME`` go with the shell they were set in: the board
     names a relocated config directory in its top bar, and the demo opens none at all, so a
     shell that had one would have the board reporting a directory it never read — and, in a
-    recording, naming somebody's home directory besides.
+    recording, naming somebody's home directory besides. ``CLOWNHEAD_CODEX_BIN`` goes with
+    them, since it names a binary ahead of the stand-in ``PATH`` now leads with.
     """
     _build_home()
     os.environ["HOME"] = str(DEMO_HOME)
+    os.environ["PATH"] = os.pathsep.join((str((DEMO_HOME / CODEX_STAND_IN).parent), os.environ.get("PATH", "")))
     os.environ.pop(CONFIG_DIR_VAR, None)
     os.environ.pop(codex.CONFIG_DIR_VAR, None)
+    os.environ.pop(codex.BINARY_VAR, None)
     return _fleet
 
 
@@ -195,6 +207,20 @@ def _build_home() -> None:
     info = DEMO_HOME / TERMINAL_APP / "Contents/Info.plist"
     info.parent.mkdir(parents=True, exist_ok=True)
     info.write_bytes(plistlib.dumps({"CFBundleIdentifier": ITERM2_BUNDLE_ID}))
+    stand_in = DEMO_HOME / CODEX_STAND_IN
+    stand_in.parent.mkdir(parents=True, exist_ok=True)
+    stand_in.write_text(_codex_stand_in())
+    stand_in.chmod(0o755)
+
+
+def _codex_stand_in() -> str:
+    version = ".".join(str(part) for part in codex.WORKTREE_VERSION)
+    return (
+        "#!/bin/sh\n"
+        f'[ "$1" = --version ] && echo "codex-cli {version}" && exit 0\n'
+        'echo "codex: the clownhead demo has no Codex to run" >&2\n'
+        "exit 1\n"
+    )
 
 
 def _fleet(include_closed: bool) -> list[Session]:
@@ -245,6 +271,7 @@ def _fleet(include_closed: bool) -> list[Session]:
         Session(
             session_id=NOTIFICATIONS_SESSION,
             cwd=DEMO_HOME / NOTIFICATIONS,
+            harness=Harness.CODEX,
             name="notifications-svc",
             status=Status.IDLE,
             started_at=now - timedelta(hours=2, minutes=10),
@@ -269,6 +296,7 @@ def _fleet(include_closed: bool) -> list[Session]:
                 Session(
                     session_id=DESIGN_SYSTEM_SESSION,
                     cwd=DEMO_HOME / DESIGN_SYSTEM,
+                    harness=Harness.CODEX,
                     name="design-system-0b",
                     status=Status.CLOSED,
                     started_at=now - timedelta(days=6),

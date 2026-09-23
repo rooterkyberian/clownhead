@@ -61,6 +61,7 @@ DEFAULT_CONFIG_DIR = CODEX_DEFAULT_HOME
 SOCKET_DIR_NAME = "app-server-control"
 SOCKET_NAME = "app-server-control.sock"
 CODEX_COMMAND = "codex"
+BINARY_VAR = "CLOWNHEAD_CODEX_BIN"
 CLIENT_NAME = "clownhead"
 CLOSED_PAGE = 200
 PREVIEW_MESSAGES = 3
@@ -237,7 +238,7 @@ def rename(session_id: str, name: str) -> None:
 
 def codex_binary() -> str:
     """Path to the Codex CLI, overridable for tests via ``CLOWNHEAD_CODEX_BIN``."""
-    return os.environ.get("CLOWNHEAD_CODEX_BIN", CODEX_COMMAND)
+    return os.environ.get(BINARY_VAR, CODEX_COMMAND)
 
 
 def config_dir() -> Path:

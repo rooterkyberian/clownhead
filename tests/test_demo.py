@@ -1,4 +1,6 @@
 import os
+import shutil
+import subprocess
 from datetime import UTC, datetime
 from pathlib import Path
 
@@ -7,8 +9,9 @@ import pytest
 import clownhead
 from clownhead import attention, codex
 from clownhead import discovery as discovery_module
+from clownhead import harness as harness_module
 from clownhead.discovery import CONFIG_DIR_VAR
-from clownhead.models import Session, Status
+from clownhead.models import Harness, Session, Status
 from clownhead.render import build_rows, describe, worktree_cell
 from clownhead.resume import resume_shell_command
 from tools import demo as demo_module
@@ -24,6 +27,7 @@ def demo_home(monkeypatch, tmp_path):
     home = tmp_path / "clownhead-demo"
     monkeypatch.setattr(demo_module, "DEMO_HOME", home)
     monkeypatch.setenv("HOME", str(tmp_path / "elsewhere"))
+    monkeypatch.setenv("PATH", os.environ.get("PATH", ""))
     return home
 
 
@@ -35,6 +39,27 @@ def loader(demo_home):
 def test_the_demo_fleet_covers_the_statuses_worth_showing(loader):
     statuses = {session.status for session in loader(True)}
     assert statuses == {Status.WAITING, Status.BUSY, Status.SHELL, Status.IDLE, Status.CLOSED}
+
+
+def test_both_agents_are_on_the_board_whatever_the_machine_has_installed(loader):
+    assert {session.harness for session in loader(True)} == {Harness.CLAUDE, Harness.CODEX}
+    assert [found.kind for found in harness_module.installed()] == [Harness.CLAUDE, Harness.CODEX]
+
+
+def test_the_codex_the_board_finds_is_the_demos_own(loader, demo_home):
+    stand_in = demo_home / demo_module.CODEX_STAND_IN
+    refused = subprocess.run(  # noqa: S603
+        [stand_in, "resume", demo_module.NOTIFICATIONS_SESSION], capture_output=True, check=False
+    )
+
+    assert shutil.which(codex.codex_binary()) == str(stand_in)
+    assert refused.returncode != 0
+
+
+def test_the_stand_in_codex_is_new_enough_to_make_worktrees(loader, demo_home, monkeypatch):
+    monkeypatch.setenv(codex.BINARY_VAR, str(demo_home / demo_module.CODEX_STAND_IN))
+
+    assert codex.supports_worktrees() is True
 
 
 def test_closed_sessions_stay_out_until_they_are_asked_for(loader):
