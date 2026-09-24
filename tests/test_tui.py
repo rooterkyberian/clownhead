@@ -249,6 +249,24 @@ async def test_account_usage_refreshes_on_its_own_timer(monkeypatch):
         assert len(calls) >= 2
 
 
+async def test_a_usage_tick_once_the_board_stops_reads_and_draws_nothing(monkeypatch):
+    calls = []
+
+    def read(kind):
+        calls.append(kind)
+        return usage.Usage((usage.Window("5h", 1),))
+
+    monkeypatch.setattr(usage, "read", read)
+    app = build_app()
+    async with app.run_test() as pilot:
+        await settle(app, pilot)
+    calls.clear()
+
+    app.start_usage_reload()
+
+    assert calls == []
+
+
 @pytest.mark.parametrize(
     ("needle", "expected"),
     [("", True), ("payments", True), ("PAYMENTS", True), ("4e020900", True), ("input needed", True), ("nope", False)],

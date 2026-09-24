@@ -1954,7 +1954,14 @@ class FleetApp(App[None]):
         self._reload()
 
     def start_usage_reload(self) -> None:
-        """Refresh each installed harness independently, at most once at a time."""
+        """Refresh each installed harness independently, at most once at a time.
+
+        The interval that calls this outlives the widgets during shutdown: Textual prunes
+        the screen before it stops the app's timers, so a tick in between finds no bar to
+        draw into.
+        """
+        if not self.is_running:
+            return
         for agent in harness.installed():
             self._usage.setdefault(agent.kind, None)
             if agent.kind not in self._usage_loading:
