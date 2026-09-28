@@ -36,6 +36,7 @@ import socket
 import subprocess
 import time
 import tomllib
+from collections import Counter
 from collections.abc import Iterable, Iterator, Mapping, Sequence
 from contextlib import contextmanager
 from functools import lru_cache
@@ -52,6 +53,7 @@ from clownhead.models import (
     Process,
     Session,
     Status,
+    codex_worktree,
     epoch_seconds_to_datetime,
 )
 from clownhead.websocket import Connection, ProtocolError, connect
@@ -93,6 +95,9 @@ WAITING_BY_FLAG = {
 _refused: dict[Path, str] = {}
 """Why a socket has no daemon, so the board stops asking for one on every refresh."""
 
+_holders: dict[str, int] = {}
+"""The terminal last attached to each loaded thread, so its exit is noticed before the daemon's."""
+
 
 class Unavailable(RuntimeError):
     """The Codex app-server could not be reached.
@@ -128,26 +133,38 @@ def attach_processes(sessions: Iterable[Session], processes: Mapping[int, Proces
     """Give each Codex session the terminal process running it, where that is unambiguous.
 
     The app-server names no process, so the only join available is the working directory:
-    ``ps`` says which processes are Codex and ``lsof`` says where each one is.
+    ``ps`` says which processes are Codex and ``lsof`` says where each one is. Only a
+    process with a terminal is a candidate. The daemon, and the app-servers other tools
+    run for themselves, have none, and one of those sitting in a checkout would otherwise
+    crowd out the terminal that is really there.
 
-    A pairing is taken only where it is unambiguous in both directions, one session in a
-    directory and one process sitting in it. Three sessions and one terminal in the same
-    checkout is the ordinary case once an editor is also running Codex there, and the
-    directory says nothing about which of the three the terminal holds. A pid is what
+    A session started with ``--worktree`` is looked for in two places. The thread works in
+    the checkout Codex made under its home, while the terminal stays in the repository it
+    was started from, so the repository is where the terminal is found unless something is
+    sitting in the checkout itself, which is where ``codex resume`` puts it.
+
+    A pairing is taken only where it is unambiguous in both directions, one session looked
+    for in a directory and one process sitting in it. Three sessions and one terminal in
+    the same checkout is the ordinary case once an editor is also running Codex there, and
+    the directory says nothing about which of the three the terminal holds. A pid is what
     terminating and signalling act on, so the wrong one costs somebody else's session.
     """
     found = list(sessions)
-    candidates = {pid: process for pid, process in processes.items() if is_codex(process.command)}
+    candidates = {
+        pid: process for pid, process in processes.items() if process.tty is not None and is_codex(process.command)
+    }
     if not candidates:
         return found
     by_directory: dict[Path, list[int]] = {}
     for pid, directory in process_directories(candidates).items():
         by_directory.setdefault(directory, []).append(pid)
-    crowded = {found_session.cwd for found_session in found if _shares_directory(found_session, found)}
+    homes = {found_session.session_id: _terminal_directory(found_session, by_directory) for found_session in found}
+    claims = Counter(homes.values())
     attached = []
     for found_session in found:
-        pids = by_directory.get(found_session.cwd, [])
-        if len(pids) != 1 or found_session.cwd in crowded:
+        home = homes[found_session.session_id]
+        pids = by_directory.get(home, [])
+        if len(pids) != 1 or claims[home] > 1:
             attached.append(found_session)
             continue
         process = candidates[pids[0]]
@@ -155,8 +172,47 @@ def attach_processes(sessions: Iterable[Session], processes: Mapping[int, Proces
     return attached
 
 
-def _shares_directory(one: Session, among: Sequence[Session]) -> bool:
-    return sum(1 for other in among if other.cwd == one.cwd) > 1
+def close_abandoned(sessions: Iterable[Session], processes: Mapping[int, Process]) -> list[Session]:
+    """Mark closed every session whose terminal has exited since it was last attached.
+
+    The daemon keeps a thread loaded, and idle, for a minute after the last client lets go
+    of it (measured against 0.158.0), so a session whose terminal was closed would stay on
+    the board that long as though somebody could still type into it. The terminal
+    :func:`attach_processes` found is the better witness, and the board asks on every
+    refresh, so the process it last saw holding each thread is kept between calls.
+
+    Only a session that was attached can be told apart this way. One whose terminal was
+    never identified waits for the daemon as before, and so does one mid-turn, since a turn
+    may still be running in the daemon after the terminal that started it has gone.
+    """
+    found = list(sessions)
+    for gone in _holders.keys() - {found_session.session_id for found_session in found}:
+        del _holders[gone]
+    settled = []
+    for found_session in found:
+        if found_session.pid is not None:
+            _holders[found_session.session_id] = found_session.pid
+            settled.append(found_session)
+        elif _abandoned(found_session, processes):
+            settled.append(found_session.model_copy(update={"status": Status.CLOSED, "waiting_for": None}))
+        else:
+            settled.append(found_session)
+    return settled
+
+
+def _terminal_directory(session: Session, by_directory: Mapping[Path, list[int]]) -> Path:
+    worktree = codex_worktree(session.cwd)
+    if worktree is None or session.cwd in by_directory:
+        return session.cwd
+    return worktree[0]
+
+
+def _abandoned(session: Session, processes: Mapping[int, Process]) -> bool:
+    holder = _holders.get(session.session_id)
+    if holder is None or session.status is Status.BUSY:
+        return False
+    process = processes.get(holder)
+    return process is None or not is_codex(process.command)
 
 
 def process_directories(pids: Iterable[int]) -> dict[int, Path]:

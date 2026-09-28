@@ -72,12 +72,14 @@ def no_codex(monkeypatch, tmp_path) -> Path:
     Codex half of the fan-out is skipped — which is also the state of every machine without
     Codex installed. The binary is pointed at nothing for the same reason, so a developer
     with Codex on their PATH and a CI runner without it agree about the harness column.
-    Tests about Codex point both somewhere of their own.
+    Tests about Codex point both somewhere of their own. The terminals remembered against
+    threads start out empty too, since tests reuse thread ids.
     """
     home = tmp_path / "codex-home"
     home.mkdir()
     monkeypatch.setenv(codex.CONFIG_DIR_VAR, str(home))
     monkeypatch.setenv("CLOWNHEAD_CODEX_BIN", str(tmp_path / "no-such-codex"))
+    monkeypatch.setattr(codex, "_holders", {})
     return home
 
 

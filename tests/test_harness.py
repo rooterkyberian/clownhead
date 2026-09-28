@@ -212,6 +212,21 @@ def test_codex_joins_the_process_table_onto_the_live_sessions(monkeypatch, codex
     assert CODEX.list_sessions(None, include_closed=False)[0].pid == 42
 
 
+@pytest.mark.parametrize(("include_closed", "expected"), [(False, []), (True, [Status.CLOSED])])
+def test_codex_puts_a_session_whose_terminal_has_exited_with_the_ended_ones(
+    monkeypatch, codex_server, include_closed, expected
+):
+    orphaned = a_session("thread", Harness.CODEX)
+    monkeypatch.setattr(codex, "list_sessions", lambda cwd, *, include_closed: [orphaned])
+    monkeypatch.setattr(codex, "attach_processes", lambda sessions, processes: list(sessions))
+    monkeypatch.setattr(discovery, "process_table", dict)
+    monkeypatch.setitem(codex._holders, "thread", 42)
+
+    found = CODEX.list_sessions(None, include_closed=include_closed)
+
+    assert [session.status for session in found] == expected
+
+
 def test_codex_asks_nothing_of_the_process_table_when_every_session_has_ended(monkeypatch, codex_server):
     ended = a_session("thread", Harness.CODEX, status=Status.CLOSED)
     monkeypatch.setattr(codex, "list_sessions", lambda cwd, *, include_closed: [ended])

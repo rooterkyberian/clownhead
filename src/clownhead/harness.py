@@ -202,14 +202,18 @@ class Codex(Harness):
         """Live threads from the daemon, and the ended ones it and the index remember.
 
         The process table is joined on afterwards, since the app-server names no process
-        and everything that signals a session needs one.
+        and everything that signals a session needs one. The same table says which live
+        threads have lost their terminal, which the daemon admits to only a minute later.
         """
         found = codex.list_sessions(cwd, include_closed=include_closed)
         live = [session for session in found if not session.is_finished]
         if not live:
             return found
-        attached = {session.session_id: session for session in codex.attach_processes(live, discovery.process_table())}
-        return [attached.get(session.session_id, session) for session in found]
+        processes = discovery.process_table()
+        settled = codex.close_abandoned(codex.attach_processes(live, processes), processes)
+        by_id = {session.session_id: session for session in settled}
+        sessions = [by_id.get(session.session_id, session) for session in found]
+        return sessions if include_closed else [session for session in sessions if not session.is_finished]
 
     def recent_messages(self, session_id: str, *, limit: int) -> list[Message]:
         """The tail of the thread's item list."""

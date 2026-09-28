@@ -262,6 +262,119 @@ def test_attach_processes_asks_nothing_of_a_machine_running_no_codex():
     assert codex.attach_processes(sessions, {5: a_process(5, command="zsh")}) == sessions
 
 
+def a_codex_worktree(home: Path, repo: Path) -> Path:
+    """A checkout Codex made under its home for ``--worktree``, pointing back at ``repo``."""
+    admin = repo / ".git" / "worktrees" / repo.name
+    admin.mkdir(parents=True)
+    (admin / "commondir").write_text("../..\n")
+    checkout = home / "worktrees" / "ab12" / repo.name
+    checkout.mkdir(parents=True)
+    (checkout / ".git").write_text(f"gitdir: {admin}\n")
+    return checkout
+
+
+def test_attach_processes_finds_a_worktree_session_in_the_repository_it_was_started_from(
+    monkeypatch, tmp_path, no_codex
+):
+    repo = tmp_path / "widgets"
+    checkout = a_codex_worktree(no_codex, repo)
+    monkeypatch.setattr(codex, "process_directories", lambda pids: {77: repo.resolve()})
+    sessions = [a_codex_session(THREAD_ID, str(checkout))]
+
+    attached = codex.attach_processes(sessions, {77: a_process(77)})
+
+    assert (attached[0].pid, attached[0].tty) == (77, Path("/dev/ttys025"))
+
+
+def test_attach_processes_prefers_a_terminal_sitting_in_the_worktree_itself(monkeypatch, tmp_path, no_codex):
+    repo = tmp_path / "widgets"
+    checkout = a_codex_worktree(no_codex, repo)
+    monkeypatch.setattr(codex, "process_directories", lambda pids: {77: checkout, 78: repo.resolve()})
+    sessions = [a_codex_session(THREAD_ID, str(checkout)), a_codex_session(OTHER_ID, str(repo.resolve()))]
+
+    attached = codex.attach_processes(sessions, {77: a_process(77), 78: a_process(78, tty="/dev/ttys026")})
+
+    assert [session.pid for session in attached] == [77, 78]
+
+
+def test_attach_processes_refuses_to_guess_between_a_worktree_session_and_one_in_its_repository(
+    monkeypatch, tmp_path, no_codex
+):
+    repo = tmp_path / "widgets"
+    checkout = a_codex_worktree(no_codex, repo)
+    monkeypatch.setattr(codex, "process_directories", lambda pids: {77: repo.resolve()})
+    sessions = [a_codex_session(THREAD_ID, str(checkout)), a_codex_session(OTHER_ID, str(repo.resolve()))]
+
+    attached = codex.attach_processes(sessions, {77: a_process(77)})
+
+    assert [session.pid for session in attached] == [None, None]
+
+
+def test_attach_processes_passes_over_codex_processes_without_a_terminal(monkeypatch):
+    asked: list[list[int]] = []
+
+    def directories(pids):
+        asked.append(sorted(pids))
+        return {77: Path("/Users/x/one")}
+
+    monkeypatch.setattr(codex, "process_directories", directories)
+    sessions = [a_codex_session(THREAD_ID, "/Users/x/one")]
+    daemon = Process(pid=5, ppid=1, tty=None, command="codex app-server")
+
+    attached = codex.attach_processes(sessions, {5: daemon, 77: a_process(77)})
+
+    assert (asked, attached[0].pid) == ([[77]], 77)
+
+
+def test_close_abandoned_closes_a_session_whose_terminal_has_exited():
+    attached = a_codex_session(THREAD_ID, "/Users/x/one").model_copy(update={"pid": 77, "status": Status.IDLE})
+    codex.close_abandoned([attached], {77: a_process(77)})
+
+    settled = codex.close_abandoned([attached.model_copy(update={"pid": None, "tty": None})], {})
+
+    assert settled[0].status is Status.CLOSED
+
+
+def test_close_abandoned_closes_a_session_whose_process_id_went_to_something_else():
+    attached = a_codex_session(THREAD_ID, "/Users/x/one").model_copy(update={"pid": 77, "status": Status.IDLE})
+    codex.close_abandoned([attached], {77: a_process(77)})
+
+    settled = codex.close_abandoned([attached.model_copy(update={"pid": None})], {77: a_process(77, command="vim")})
+
+    assert settled[0].status is Status.CLOSED
+
+
+def test_close_abandoned_leaves_a_session_it_never_saw_attached_to_the_daemon():
+    unattached = a_codex_session(THREAD_ID, "/Users/x/one").model_copy(update={"status": Status.IDLE})
+
+    assert codex.close_abandoned([unattached], {}) == [unattached]
+
+
+def test_close_abandoned_leaves_a_session_whose_terminal_is_still_running():
+    attached = a_codex_session(THREAD_ID, "/Users/x/one").model_copy(update={"pid": 77, "status": Status.IDLE})
+    codex.close_abandoned([attached], {77: a_process(77)})
+    crowded = attached.model_copy(update={"pid": None})
+
+    assert codex.close_abandoned([crowded], {77: a_process(77)}) == [crowded]
+
+
+def test_close_abandoned_leaves_a_turn_that_may_still_be_running_in_the_daemon():
+    attached = a_codex_session(THREAD_ID, "/Users/x/one").model_copy(update={"pid": 77, "status": Status.BUSY})
+    codex.close_abandoned([attached], {77: a_process(77)})
+    orphaned = attached.model_copy(update={"pid": None})
+
+    assert codex.close_abandoned([orphaned], {}) == [orphaned]
+
+
+def test_close_abandoned_forgets_a_thread_the_daemon_has_unloaded():
+    attached = a_codex_session(THREAD_ID, "/Users/x/one").model_copy(update={"pid": 77, "status": Status.IDLE})
+    codex.close_abandoned([attached], {77: a_process(77)})
+    codex.close_abandoned([], {})
+    reloaded = attached.model_copy(update={"pid": None})
+
+    assert codex.close_abandoned([reloaded], {}) == [reloaded]
+
+
 @pytest.mark.parametrize(
     ("command", "expected"),
     [
