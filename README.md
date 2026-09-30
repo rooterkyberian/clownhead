@@ -42,6 +42,68 @@ which is ahead of the last release.
   System Settings, Privacy & Security, Accessibility.
   Without it the window still comes up and the board says why the tab did not.
 
+## Tray
+
+The TUI starts the tray automatically when the optional tray dependencies are installed.
+It shares the board's discovery results and refresh interval, and closes when the TUI exits.
+`clownhead tui --no-tray` opens just the board.
+Missing tray dependencies produce a warning while the TUI continues running.
+
+`clownhead tray` shows live Claude Code and Codex counts in the macOS menu bar or a Linux
+AppIndicator panel:
+
+```text
+!2 ○3 ▶4
+```
+
+The counters mean **blocked**, **idle**, and **busy**, in that order.
+Zero counts are hidden; an empty fleet shows `🤡`.
+macOS uses cctop's Claude palette: burnt orange, warm gray, and muted green,
+with shades adjusted for light and dark menu bars.
+Linux uses orange and green status symbols with a neutral idle symbol (`🟠2 ⚪3 🟢4`).
+Blocked includes waiting for input, blocked tools, and failed sessions.
+Busy includes turns in progress and background shell commands.
+Finished sessions are excluded; unknown states add a separate `?` count.
+Click the tray to focus its TUI session; on macOS, right-click opens the menu.
+Linux panels that only open menus provide a **Focus TUI** action.
+Linux window activation requires X11, the terminal's `WINDOWID`, and `wmctrl`.
+Tab selection depends on the terminal's focus support.
+The menu also shows labelled counts and **Close tray** (or **Quit clownhead** in standalone mode).
+
+On macOS, install the optional tray dependencies:
+
+```bash
+uv tool install --force 'clownhead[tray]'
+clownhead tray
+```
+
+On Linux, install GTK 3 and Ayatana AppIndicator from your distribution first.
+For Ubuntu 24.04 or newer:
+
+```bash
+sudo apt install gir1.2-gtk-3.0 gir1.2-ayatanaappindicator3-0.1 \
+  libgirepository-2.0-dev libcairo2-dev pkg-config python3-dev gcc
+uv tool install --force --python /usr/bin/python3 'clownhead[tray]'
+clownhead tray
+```
+
+Other distributions have their own [PyGObject installation instructions](https://pygobject.gnome.org/getting_started.html).
+The tray needs a graphical desktop with AppIndicator support.
+GNOME may need the AppIndicator extension enabled.
+Panels that support indicator labels show the counters beside the icon;
+other panels show them when you open the menu.
+
+The tray refreshes at the saved interval (five seconds by default).
+`--interval 2` changes it for this run, `--cwd /path/to/repo` scopes the counts,
+and `--all` includes background agents.
+Discovery failures show question marks and an explanation in the menu, then retry automatically.
+The command stays running until you quit it; it does not install a login service.
+
+For a checkout of this repository, run `uv run --extra tray clownhead tray` after installing
+any Linux system dependencies above.
+Use `uv run --extra tray clownhead` for the TUI with its tray.
+To install an editable checkout, run `uv tool install --force -e '.[tray]'` from its directory.
+
 ## Keys
 
 `QUIET` is how long a live session has been in the status it is in,
@@ -247,6 +309,7 @@ so the same data pipes into a script.
 | Command | What it does |
 |---|---|
 | `clownhead` | The interactive overseer. Same as `clownhead tui`. |
+| `clownhead tray` | Live blocked, idle, and busy counts in the macOS menu bar or Linux indicator panel. Requires the optional tray dependencies above. Supports `--cwd`, `--all`, and `--interval`. |
 | `clownhead open <ref>` | The board filtered to a pull request or issue, ended sessions included, ready to start one for it. What a bare `clownhead <url>` runs. Takes a GitHub pull request or issue URL, a Jira URL, or `owner/repo#123`. `--print` writes the sessions and the start command out instead of opening the board. |
 | `clownhead prs` | What you have open on GitHub, and which sessions here worked on each. `--author` asks about somebody else, `--limit` caps how many to ask for, `--no-sessions` skips the transcript pass. Needs `gh`. |
 | `clownhead ls` | Status board, attention-first. `--cwd` scopes to one tree, `--all` adds background agents, `--closed` adds sessions that have ended, `--pr` keeps only the ones whose transcript names a pull request, `--columns` picks the columns and their order. |

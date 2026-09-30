@@ -7,7 +7,10 @@ several terminals gets signalled correctly; passing one forces it for every sess
 
 from __future__ import annotations
 
+import os
+import shutil
 import subprocess
+import sys
 from collections.abc import Iterable
 from dataclasses import dataclass
 from pathlib import Path
@@ -116,6 +119,31 @@ def paint_self(terminal: Terminal | None = None) -> SignalResult:
 def reset_self(terminal: Terminal | None = None) -> SignalResult:
     """Hand clownhead's own tab back the colour it had before the board took it."""
     return _signal_own_tab(terminal, None)
+
+
+def focus_self(terminal: Terminal | None = None) -> SignalResult:
+    """Raise the board's terminal and select its tab where supported."""
+    tty = own_tty()
+    if tty is None:
+        return SignalResult(OVERSEER_LABEL, None, False, "no tty")
+    emitter = terminal or detect_terminal()
+    tab = None
+    try:
+        if sys.platform == "linux":
+            window = os.environ.get("WINDOWID", "")
+            wmctrl = shutil.which("wmctrl")
+            if not window or wmctrl is None:
+                return SignalResult(OVERSEER_LABEL, tty, False, "Linux focus requires WINDOWID and wmctrl on X11")
+            subprocess.run([wmctrl, "-ia", window], check=True, capture_output=True, timeout=5)  # noqa: S603
+        else:
+            if not emitter.supports_foreground:
+                return SignalResult(OVERSEER_LABEL, tty, False, f"{emitter.name} cannot raise its window")
+            emitter.foreground(tty)
+        if emitter.supports_tab_focus:
+            tab = emitter.select_tab(tty, OVERSEER_LABEL)
+    except (OSError, subprocess.SubprocessError) as error:
+        return SignalResult(OVERSEER_LABEL, tty, False, str(error))
+    return SignalResult(OVERSEER_LABEL, tty, True, "focused", tab)
 
 
 def _signal_own_tab(terminal: Terminal | None, color: Rgb | None) -> SignalResult:

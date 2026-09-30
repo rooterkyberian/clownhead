@@ -1,12 +1,13 @@
 import json
 from datetime import UTC, datetime, timedelta
 from pathlib import Path
+from unittest.mock import MagicMock
 
 import pytest
 from typer.testing import CliRunner
 
 import clownhead
-from clownhead import attention, cli, discovery, harness, usage
+from clownhead import attention, cli, discovery, harness, tray, usage
 from clownhead import terminal as terminal_module
 from clownhead.models import Harness, Session, Status
 from clownhead.pulls import Status as PullStatus
@@ -94,7 +95,16 @@ def test_no_arguments_launches_the_tui(live_fleet, monkeypatch):
     assert result.exit_code == 0
     assert launched["interval"] is None
     assert launched["include_closed"] is None
+    assert launched["show_tray"] is True
     assert launched["loader"](False) == fleet()
+
+
+def test_tui_can_disable_tray(monkeypatch: pytest.MonkeyPatch) -> None:
+    backend = MagicMock(return_value=None)
+    monkeypatch.setattr(cli.tui, "run", backend)
+    result = runner.invoke(cli.app, ["tui", "--no-tray"])
+    assert result.exit_code == 0
+    assert backend.call_args.kwargs["show_tray"] is False
 
 
 def run_and_quit(kwargs, include_closed: bool) -> None:
@@ -112,6 +122,46 @@ def test_tui_command_scopes_the_loader(live_fleet, monkeypatch):
 
     assert result.exit_code == 0
     assert seen["cwd"] == Path("/tmp/payments-api")
+
+
+def test_tray_scopes_discovery_and_uses_interval(monkeypatch: pytest.MonkeyPatch) -> None:
+    backend = MagicMock()
+    loader = MagicMock(return_value=[])
+    monkeypatch.setattr(tray, "run", backend)
+    monkeypatch.setattr(harness, "list_sessions", loader)
+    result = runner.invoke(cli.app, ["tray", "--cwd", "/tmp/project", "--all", "-n", "2"])
+    assert result.exit_code == 0
+    assert backend.call_args.kwargs["interval"] == 2
+    backend.call_args.kwargs["loader"]()
+    loader.assert_called_once_with(Path("/tmp/project"), interactive_only=False)
+
+
+def test_tray_uses_saved_interval_and_defaults_to_interactive(monkeypatch: pytest.MonkeyPatch) -> None:
+    from clownhead.settings import Settings
+
+    monkeypatch.setattr(cli.settings_store, "load", lambda: Settings(interval=9))
+    backend = MagicMock()
+    loader = MagicMock(return_value=[])
+    monkeypatch.setattr(tray, "run", backend)
+    monkeypatch.setattr(harness, "list_sessions", loader)
+    result = runner.invoke(cli.app, ["tray"])
+    assert result.exit_code == 0
+    assert backend.call_args.kwargs["interval"] == 9
+    backend.call_args.kwargs["loader"]()
+    loader.assert_called_once_with(None, interactive_only=True)
+
+
+def test_tray_reports_missing_dependencies(monkeypatch: pytest.MonkeyPatch) -> None:
+    monkeypatch.setattr(tray, "run", MagicMock(side_effect=tray.Unavailable("Install clownhead[tray]")))
+    result = runner.invoke(cli.app, ["tray"])
+    assert result.exit_code == 2
+    assert "Install clownhead[tray]" in result.output
+
+
+def test_tray_rejects_invalid_interval() -> None:
+    result = runner.invoke(cli.app, ["tray", "--interval", "0"])
+    assert result.exit_code == 2
+    assert "finite number greater than zero" in result.output
 
 
 def test_tui_command_passes_the_closed_flag_through(live_fleet, monkeypatch):

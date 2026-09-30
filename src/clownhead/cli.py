@@ -25,6 +25,7 @@ from clownhead import (
     issues,
     pulls,
     search,
+    tray,
     tui,
     usage,
     worktrees,
@@ -272,6 +273,7 @@ def launch_tui(
     include_background: AllOption = False,
     include_closed: ClosedOption = False,
     interval: IntervalOption = None,
+    show_tray: Annotated[bool, typer.Option("--tray/--no-tray", help="Show counts in the desktop tray.")] = True,
 ) -> None:
     """Browse the fleet interactively — what bare `clownhead` runs."""
     _require_discovery()
@@ -282,8 +284,28 @@ def launch_tui(
             ),
             interval=interval,
             include_closed=include_closed or None,
+            show_tray=show_tray,
         )
     )
+
+
+@app.command("tray")
+def launch_tray(
+    cwd: CwdOption = None,
+    include_background: AllOption = False,
+    interval: IntervalOption = None,
+) -> None:
+    """Show blocked, idle and busy agent counts in the desktop tray."""
+    _require_discovery()
+    every = interval if interval is not None else settings_store.load().interval
+    try:
+        tray.run(
+            loader=lambda: harness.list_sessions(cwd, interactive_only=not include_background),
+            interval=every,
+        )
+    except (tray.Unavailable, ValueError) as error:
+        error_console.print(str(error), markup=False)
+        raise typer.Exit(code=2) from error
 
 
 @app.command("ls")

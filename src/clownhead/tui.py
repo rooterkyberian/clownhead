@@ -38,7 +38,7 @@ from textual.widgets import (
 )
 from textual.widgets.selection_list import Selection
 
-from clownhead import archive, attention, checkouts, harness, issues, pulls, usage
+from clownhead import archive, attention, checkouts, harness, issues, pulls, tray, usage
 from clownhead import settings as settings_store
 from clownhead.control import SLASH_COMMAND, close_tab, rename, send_message, shell_of, terminate, wait_for_exit
 from clownhead.discovery import process_table
@@ -1721,9 +1721,12 @@ class FleetApp(App[None]):
         reader: Reader | None = None,
         target: Reference | None = None,
         usage_reader: Callable[[Harness], usage.Usage] | None = None,
+        tray_companion: tray.Companion | None = None,
     ) -> None:
         super().__init__()
         self._loader = loader
+        self._tray = tray_companion
+        self._tray_problem: str | None = None
         self._reader: Reader = reader if reader is not None else harness.recent_messages
         self._usage_reader = usage_reader if usage_reader is not None else usage.read
         self._usage: dict[Harness, usage.Usage | None] = {}
@@ -1773,6 +1776,10 @@ class FleetApp(App[None]):
         self.query_one("#fleet", DataTable).focus()
         self._tint_own_tab(self._settings.paint_tabs)
         self._draw()
+        if self._tray is not None:
+            self.set_interval(0.25, self._poll_tray)
+        if self._tray_problem is not None:
+            self.notify(self._tray_problem, title="Tray unavailable", severity="warning")
         self.start_reload()
         self._ticker = self.set_interval(self._interval, self.start_reload)
         self.start_usage_reload()
@@ -1785,6 +1792,27 @@ class FleetApp(App[None]):
         no longer there, which is worse than no tint at all.
         """
         self._tint_own_tab(False)
+        if self._tray is not None:
+            self._tray.close()
+
+    def _poll_tray(self) -> None:
+        if self._tray is None:
+            return
+        for message in self._tray.messages():
+            if message == "focus":
+                self._focus_from_tray()
+            else:
+                self.notify(message, severity="warning")
+
+    @work(thread=True, group="tray-focus", exclusive=True)
+    def _focus_from_tray(self) -> None:
+        result = attention.focus_self(self._terminal)
+        if not result.delivered or result.tab_note:
+            hand_back(
+                self,
+                partial(self.notify, title="Focus TUI", severity="warning"),
+                result.detail + result.tab_note,
+            )
 
     def get_system_commands(self, screen: Screen[Any]) -> Iterable[SystemCommand]:
         """Everything the board can do, by name.
@@ -2679,8 +2707,12 @@ class FleetApp(App[None]):
         try:
             sessions = self._loader(self._show_closed)
         except Exception as error:
+            if self._tray is not None:
+                self._tray.publish(tray.Snapshot(problem=f"Discovery failed: {error}"))
             hand_back(self, self._reload_failed, str(error))
             return
+        if self._tray is not None:
+            self._tray.publish(tray.Snapshot(tray.Counts.from_sessions(sessions)))
         if self._settings.paint_tabs:
             attention.paint(sessions, self._terminal)
         hand_back(self, self._reload_finished, sessions)
@@ -2948,6 +2980,7 @@ def run(
     reader: Reader | None = None,
     target: Reference | None = None,
     usage_reader: Callable[[Harness], usage.Usage] | None = None,
+    show_tray: bool = True,
 ) -> Launch | None:
     """Launch the fleet overseer, block until the user quits, and say what to run next.
 
@@ -2958,6 +2991,7 @@ def run(
     app on purpose: the whole point of that key is to become the session, and a process
     replaced while a screen is still up would inherit a terminal in raw mode.
     """
+    companion = tray.Companion() if show_tray else None
     app = FleetApp(
         loader=loader,
         interval=interval,
@@ -2967,6 +3001,18 @@ def run(
         reader=reader,
         target=target,
         usage_reader=usage_reader,
+        tray_companion=companion,
     )
-    app.run()
+    try:
+        if companion is not None:
+            try:
+                companion.start()
+            except (OSError, ValueError, RuntimeError) as error:
+                companion.close()
+                app._tray = None
+                app._tray_problem = str(error)
+        app.run()
+    finally:
+        if companion is not None:
+            companion.close()
     return app.launch

@@ -1,5 +1,6 @@
 import subprocess
 from pathlib import Path
+from unittest.mock import MagicMock
 
 import pytest
 
@@ -113,6 +114,51 @@ def test_paint_self_tints_the_boards_own_tab(own_tty):
     assert result.tty == own_tty
     assert terminal.calls[0][0] == str(own_tty)
     assert "brightness;108" in terminal.calls[0][1]
+
+
+def test_focus_self_targets_own_iterm_tty_without_notifications(monkeypatch, own_tty):
+    monkeypatch.setattr(attention.sys, "platform", "darwin")
+    terminal = RecordingTerminal()
+    terminal.supports_foreground = True
+    result = attention.focus_self(terminal)
+    assert result.delivered
+    assert terminal.calls == [(str(own_tty), "\033]1337;StealFocus\a")]
+
+
+def test_focus_self_selects_own_tab(monkeypatch, own_tty):
+    monkeypatch.setattr(attention.sys, "platform", "darwin")
+    terminal = MagicMock(spec=Terminal, supports_foreground=True, supports_tab_focus=True)
+    terminal.select_tab.return_value = Selection(True)
+    result = attention.focus_self(terminal)
+    terminal.foreground.assert_called_once_with(own_tty)
+    terminal.select_tab.assert_called_once_with(own_tty, "clownhead")
+    terminal.request_attention.assert_not_called()
+    assert result.tab == Selection(True)
+
+
+@pytest.mark.parametrize("failure", [False, True])
+def test_focus_self_activates_linux_window(monkeypatch, own_tty, failure):
+    monkeypatch.setattr(attention.sys, "platform", "linux")
+    monkeypatch.setenv("WINDOWID", "12345")
+    monkeypatch.setattr(attention.shutil, "which", lambda _: "/usr/bin/wmctrl")
+    run = MagicMock(side_effect=subprocess.TimeoutExpired("wmctrl", 5) if failure else None)
+    monkeypatch.setattr(attention.subprocess, "run", run)
+    result = attention.focus_self(PlainTerminal())
+    run.assert_called_once_with(["/usr/bin/wmctrl", "-ia", "12345"], check=True, capture_output=True, timeout=5)
+    assert result.delivered is not failure
+
+
+def test_focus_self_reports_unsupported_linux_desktop(monkeypatch, own_tty):
+    monkeypatch.setattr(attention.sys, "platform", "linux")
+    monkeypatch.delenv("WINDOWID", raising=False)
+    result = attention.focus_self(PlainTerminal())
+    assert not result.delivered
+    assert "X11" in result.detail
+
+
+def test_focus_self_reports_missing_tty(monkeypatch):
+    monkeypatch.setattr(attention, "own_tty", lambda: None)
+    assert not attention.focus_self().delivered
 
 
 def test_paint_self_wears_a_colour_no_status_wears():

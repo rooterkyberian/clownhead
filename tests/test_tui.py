@@ -1,6 +1,7 @@
 import json
 import threading
 from pathlib import Path
+from unittest.mock import MagicMock
 
 import pytest
 from rich.console import Console
@@ -8,7 +9,7 @@ from rich.markup import render as render_markup
 from textual.coordinate import Coordinate
 from textual.widgets import DataTable, Input, OptionList, Select, SelectionList, Static, Switch
 
-from clownhead import archive, harness, usage
+from clownhead import archive, harness, tray, usage
 from clownhead import settings as settings_store
 from clownhead import tui as tui_module
 from clownhead.attention import SignalResult
@@ -21,6 +22,92 @@ from clownhead.tui import FleetApp, PullChoiceScreen, config_dir_notices, matche
 from clownhead.worktrees import Candidate, Worktree
 
 BOARD = (Column.STATUS, Column.NAME, Column.QUIET, Column.AGE)
+
+
+async def test_tui_feeds_tray_live_counts_and_discovery_errors() -> None:
+    companion = MagicMock(spec=tray.Companion)
+    companion.messages.return_value = []
+    loader = MagicMock(return_value=[*fleet(), closed_session()])
+    app = FleetApp(loader, interval=3600, settings=Settings(paint_tabs=False), tray_companion=companion)
+    async with app.run_test() as pilot:
+        await app.workers.wait_for_complete()
+        await pilot.pause()
+        companion.publish.assert_called_with(tray.Snapshot(tray.Counts(blocked=1, idle=1)))
+        loader.side_effect = OSError("discovery unavailable")
+        app.start_reload()
+        await app.workers.wait_for_complete()
+        await pilot.pause()
+        companion.publish.assert_called_with(tray.Snapshot(problem="Discovery failed: discovery unavailable"))
+    companion.close.assert_called_once()
+
+
+async def test_tui_keeps_running_when_tray_dependencies_are_missing() -> None:
+    companion = MagicMock(spec=tray.Companion)
+    companion.messages.return_value = ["Tray unavailable: install tray dependencies"]
+    app = FleetApp(lambda _: fleet(), settings=Settings(paint_tabs=False), tray_companion=companion)
+    async with app.run_test() as pilot:
+        await app.workers.wait_for_complete()
+        await pilot.pause()
+        assert app.is_running
+        assert len(app._sessions) == 2
+    companion.close.assert_called_once()
+
+
+async def test_tray_click_focuses_own_terminal_without_reloading(monkeypatch: pytest.MonkeyPatch) -> None:
+    companion = MagicMock(spec=tray.Companion)
+    companion.messages.return_value = []
+    loader = MagicMock(return_value=fleet())
+    focus = MagicMock(return_value=SignalResult("clownhead", None, True, "focused"))
+    monkeypatch.setattr(tui_module.attention, "focus_self", focus)
+    app = FleetApp(loader, interval=3600, settings=Settings(paint_tabs=False), tray_companion=companion)
+    async with app.run_test() as pilot:
+        await app.workers.wait_for_complete()
+        await pilot.pause()
+        reads = loader.call_count
+        companion.messages.return_value = ["focus"]
+        app._poll_tray()
+        companion.messages.return_value = []
+        await app.workers.wait_for_complete()
+        focus.assert_called_once_with(app._terminal)
+        assert loader.call_count == reads
+
+
+@pytest.mark.parametrize("show_tray", [False, True])
+def test_run_owns_companion_and_closes_it_on_errors(monkeypatch: pytest.MonkeyPatch, show_tray: bool) -> None:
+    companion = MagicMock()
+    factory = MagicMock(return_value=companion)
+    app = MagicMock()
+    app.run.side_effect = RuntimeError("terminal disconnected")
+    monkeypatch.setattr(tray, "Companion", factory)
+    app_factory = MagicMock(return_value=app)
+    monkeypatch.setattr(tui_module, "FleetApp", app_factory)
+    with pytest.raises(RuntimeError, match="terminal disconnected"):
+        tui_module.run(lambda _: [], show_tray=show_tray)
+    assert factory.call_count == int(show_tray)
+    assert app_factory.call_args.kwargs["tray_companion"] is (companion if show_tray else None)
+    assert companion.close.call_count == int(show_tray)
+
+
+@pytest.mark.parametrize("error", [None, OSError("desktop unavailable"), ValueError("bad value(s) in fds_to_keep")])
+def test_run_starts_tray_before_textual_captures_stderr(
+    monkeypatch: pytest.MonkeyPatch, error: Exception | None
+) -> None:
+    companion = MagicMock()
+    companion.start.side_effect = error
+    monkeypatch.setattr(tray, "Companion", lambda: companion)
+    app = MagicMock(launch=None)
+
+    def run_app() -> None:
+        companion.start.assert_called_once()
+        if error is not None:
+            assert app._tray is None
+            assert app._tray_problem == str(error)
+
+    app.run.side_effect = run_app
+    monkeypatch.setattr(tui_module, "FleetApp", lambda **kwargs: app)
+    assert tui_module.run(lambda _: []) is None
+    companion.close.assert_called()
+
 
 OWN_TTY = Path("/dev/ttys009")
 CLEARED = "\033]6;1;bg;*;default\a"
