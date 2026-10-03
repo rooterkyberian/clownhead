@@ -1,12 +1,14 @@
 import plistlib
 import subprocess
 from pathlib import Path
+from unittest.mock import MagicMock
 
 import pytest
 
 from clownhead import terminal as terminal_module
 from clownhead.jetbrains import Selection
 from clownhead.terminal import (
+    GnomeTerminal,
     ITerm2Terminal,
     JetBrainsTerminal,
     KittyTerminal,
@@ -202,6 +204,43 @@ def test_detect_kitty_by_term_program():
 
 def test_detect_kitty_by_term():
     assert isinstance(detect_terminal({"TERM": "xterm-kitty"}), KittyTerminal)
+
+
+def test_detect_gnome_terminal_from_its_native_environment(monkeypatch):
+    monkeypatch.setattr(terminal_module.sys, "platform", "linux")
+    terminal = detect_terminal(
+        {
+            "GNOME_TERMINAL_SERVICE": ":1.128",
+            "GNOME_TERMINAL_SCREEN": "/org/gnome/Terminal/screen/77e017e7_69ec_4aa6_b944_4f1bfc536784",
+        }
+    )
+
+    assert isinstance(terminal, GnomeTerminal)
+    assert terminal.supports_foreground
+    assert terminal.supports_tab_focus
+
+
+def test_terminal_for_recognises_the_gnome_process_owner(monkeypatch):
+    monkeypatch.setattr(terminal_module.sys, "platform", "linux")
+    terminal = terminal_for(Path("/usr/libexec/gnome-terminal-server"), {"TERM_PROGRAM": "kitty"})
+
+    assert isinstance(terminal, GnomeTerminal)
+    assert terminal.app == Path("/usr/libexec/gnome-terminal-server")
+
+
+def test_gnome_tab_focus_targets_the_tty_instead_of_the_title(monkeypatch):
+    select = MagicMock(return_value=Selection(True))
+    monkeypatch.setattr(terminal_module.gnome_terminal, "select", select)
+
+    assert GnomeTerminal().select_tab(TTY, "a title shared by several tabs") == Selection(True)
+    select.assert_called_once_with(TTY)
+
+
+def test_gnome_foreground_reports_a_failed_native_activation(monkeypatch):
+    monkeypatch.setattr(terminal_module.gnome_terminal, "select", lambda tty: Selection(False, "tab has closed"))
+
+    with pytest.raises(OSError, match="tab has closed"):
+        GnomeTerminal().foreground(TTY)
 
 
 def test_own_tty_reads_the_terminal_behind_the_standard_descriptors(monkeypatch):

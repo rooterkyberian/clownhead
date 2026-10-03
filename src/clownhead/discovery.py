@@ -222,13 +222,13 @@ def process_table() -> dict[int, Process]:
 
 
 def owning_application(pid: int | None, processes: Mapping[int, Process]) -> Path | None:
-    """The application bundle whose process tree a session sits in.
+    """The application bundle or recognised Linux emulator that owns a session.
 
     Which application owns a session cannot be read out of clownhead's own environment,
     because a fleet routinely spans several terminals at once — the session being
     signalled is usually not in the one clownhead was started from. Walking up from the
-    session process to the first ancestor running out of an application bundle answers it
-    per session instead.
+    session process to the first ancestor running out of an application bundle, or GNOME
+    Terminal's server executable, answers it per session instead.
     """
     seen: set[int] = set()
     while pid is not None and pid > 1 and pid not in seen:
@@ -239,6 +239,9 @@ def owning_application(pid: int | None, processes: Mapping[int, Process]) -> Pat
         bundle = application_bundle(process.command)
         if bundle is not None:
             return bundle
+        executable = Path(process.command.split(maxsplit=1)[0]) if process.command else None
+        if executable is not None and executable.name == "gnome-terminal-server":
+            return executable
         pid = process.ppid
     return None
 

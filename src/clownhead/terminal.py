@@ -12,6 +12,8 @@ touching callers.
 Raising the emulator above other applications is the one signal no portable escape code
 covers. iTerm2 has ``StealFocus``; everything else on macOS is asked through ``open``,
 which activates a running application without opening a window.
+GNOME Terminal uses its native D-Bus search provider to select a screen and raise the
+owning window together, through :mod:`clownhead.gnome_terminal`.
 
 An IDE needs one more step than that. Its terminal tabs share a window, so raising the
 application leaves the session still buried behind whichever tab was last looked at, and
@@ -36,7 +38,7 @@ from dataclasses import dataclass
 from functools import lru_cache
 from pathlib import Path
 
-from clownhead import jetbrains
+from clownhead import gnome_terminal, jetbrains
 from clownhead.jetbrains import Selection
 
 ESC = "\033"
@@ -119,6 +121,7 @@ class Terminal:
     supports_notifications = False
     supports_foreground = False
     supports_tab_focus = False
+    select_tab_raises_window = False
     supports_typing = False
     supports_tabs = False
 
@@ -161,10 +164,10 @@ class Terminal:
     def select_tab(self, tty: Path, text: str) -> Selection:
         """Bring the tab of the session marked with ``text`` to the front; declined by default.
 
-        An emulator that gives each tab a TTY has nothing to do here: the session was
-        signalled on its own device, so whichever tab that device belongs to is the one
-        that flashed. Only an application drawing its tabs inside a single window has to be
-        told which of them was meant, which is what ``supports_tab_focus`` says of it.
+        There is no portable escape code for selecting a tab. Emulators with a native
+        interface and IDEs with an accessibility API implement it here; the text lets
+        an implementation locate the session by title where a TTY is not enough.
+        ``select_tab_raises_window`` says selection also presents the owning window.
         """
         return Selection(False)
 
@@ -292,9 +295,32 @@ class JetBrainsTerminal(Terminal):
         return jetbrains.select(self.bundle_id, title)
 
 
+class GnomeTerminal(Terminal):
+    """GNOME Terminal, whose native tab activation also raises the owning window."""
+
+    name = "gnome-terminal"
+    select_tab_raises_window = True
+
+    def __init__(self, bundle_id: str | None = None, app: Path | None = None, name: str | None = None) -> None:
+        super().__init__(bundle_id, app=app, name=name)
+        self.supports_foreground = sys.platform == "linux"
+        self.supports_tab_focus = self.supports_foreground
+
+    def foreground(self, tty: Path) -> None:
+        """Raise the window containing ``tty``, selecting its tab at the same time."""
+        result = self.select_tab(tty, "")
+        if not result.selected:
+            raise OSError(result.reason)
+
+    def select_tab(self, tty: Path, text: str) -> Selection:
+        """Select the native screen belonging to ``tty``, independent of its title."""
+        return gnome_terminal.select(tty)
+
+
 TERMINALS: dict[str, type[Terminal]] = {
     "iTerm.app": ITerm2Terminal,
     "kitty": KittyTerminal,
+    "gnome-terminal": GnomeTerminal,
 }
 
 TERMINALS_BY_BUNDLE: dict[str, type[Terminal]] = {
@@ -313,6 +339,8 @@ def terminal_for(app: Path | None, env: Mapping[str, str] | None = None) -> Term
     """
     if app is None:
         return detect_terminal(env)
+    if app.name == "gnome-terminal-server":
+        return GnomeTerminal(app=app)
     bundle_id = bundle_id_of(app)
     implementation = TERMINALS_BY_BUNDLE.get(bundle_id or "")
     if implementation is not None:
@@ -369,6 +397,8 @@ def detect_terminal(env: Mapping[str, str] | None = None) -> Terminal:
 
     macOS stamps the owning application's bundle id into the environment of every
     process it launches, which is how an unrecognised emulator still gets raised.
+    GNOME Terminal publishes its service and screen instead; these identify the native
+    backend without confusing TERM's terminal compatibility setting with the emulator.
     """
     environ = env if env is not None else os.environ
     bundle_id = environ.get(BUNDLE_ID_VAR)
@@ -377,6 +407,8 @@ def detect_terminal(env: Mapping[str, str] | None = None) -> Terminal:
         return TERMINALS[program](bundle_id)
     if "kitty" in environ.get("TERM", ""):
         return KittyTerminal(bundle_id)
+    if sys.platform == "linux" and gnome_terminal.target_from_env(environ) is not None:
+        return GnomeTerminal()
     return Terminal(bundle_id)
 
 

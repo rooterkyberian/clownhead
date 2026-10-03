@@ -45,6 +45,8 @@ class SignalResult:
     delivered: bool
     detail: str
     tab: Selection | None = None
+    focused: bool = False
+    """Whether a requested window or tab activation succeeded, beyond delivering attention."""
 
     @property
     def tab_note(self) -> str:
@@ -129,7 +131,11 @@ def focus_self(terminal: Terminal | None = None) -> SignalResult:
     emitter = terminal or detect_terminal()
     tab = None
     try:
-        if sys.platform == "linux":
+        if emitter.supports_tab_focus and emitter.select_tab_raises_window:
+            tab = emitter.select_tab(tty, OVERSEER_LABEL)
+            if not tab.selected:
+                return SignalResult(OVERSEER_LABEL, tty, False, tab.reason)
+        elif sys.platform == "linux":
             window = os.environ.get("WINDOWID", "")
             wmctrl = shutil.which("wmctrl")
             if not window or wmctrl is None:
@@ -139,11 +145,11 @@ def focus_self(terminal: Terminal | None = None) -> SignalResult:
             if not emitter.supports_foreground:
                 return SignalResult(OVERSEER_LABEL, tty, False, f"{emitter.name} cannot raise its window")
             emitter.foreground(tty)
-        if emitter.supports_tab_focus:
+        if emitter.supports_tab_focus and not emitter.select_tab_raises_window:
             tab = emitter.select_tab(tty, OVERSEER_LABEL)
     except (OSError, subprocess.SubprocessError) as error:
         return SignalResult(OVERSEER_LABEL, tty, False, str(error))
-    return SignalResult(OVERSEER_LABEL, tty, True, "focused", tab)
+    return SignalResult(OVERSEER_LABEL, tty, True, "focused", tab, focused=tab is None or tab.selected)
 
 
 def _signal_own_tab(terminal: Terminal | None, color: Rgb | None) -> SignalResult:
@@ -202,17 +208,26 @@ def focus(
     text = message or f"{session.label}: {session.reason}"
     emitter = terminal_of(session, terminal)
     tab: Selection | None = None
+    focused = False
     try:
         emitter.request_attention(session.tty, text)
         if foreground:
-            emitter.foreground(session.tty)
-            if select_tab and emitter.supports_tab_focus:
-                tab = emitter.select_tab(session.tty, text)
+            if emitter.supports_tab_focus:
+                if select_tab:
+                    if not emitter.select_tab_raises_window:
+                        emitter.foreground(session.tty)
+                    tab = emitter.select_tab(session.tty, text)
+                    focused = tab.selected
+            elif emitter.supports_foreground:
+                emitter.foreground(session.tty)
+                focused = True
+            else:
+                tab = Selection(False, f"{emitter.name} cannot raise its window or select a tab")
         if emitter.supports_notifications:
             emitter.notify(session.tty, text)
     except (OSError, subprocess.SubprocessError) as error:
         return SignalResult(session.label, session.tty, False, str(error))
-    return SignalResult(session.label, session.tty, True, text, tab)
+    return SignalResult(session.label, session.tty, True, text, tab, focused=focused)
 
 
 def focus_stalled(
@@ -231,8 +246,9 @@ def focus_stalled(
         if not session.needs_attention:
             continue
         emitter = terminal_of(session, terminal)
-        owner = emitter.bundle_id if emitter.supports_tab_focus else None
-        results.append(focus(session, emitter, foreground=foreground, select_tab=owner not in claimed))
-        if owner is not None:
+        owner = (emitter.bundle_id or emitter.name) if emitter.supports_tab_focus else None
+        result = focus(session, emitter, foreground=foreground, select_tab=owner not in claimed)
+        results.append(result)
+        if owner is not None and result.focused:
             claimed.add(owner)
     return results

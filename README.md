@@ -66,8 +66,9 @@ Busy includes turns in progress and background shell commands.
 Finished sessions are excluded; unknown states add a separate `?` count.
 Click the tray to focus its TUI session; on macOS, right-click opens the menu.
 Linux panels that only open menus provide a **Focus TUI** action.
-Linux window activation requires X11, the terminal's `WINDOWID`, and `wmctrl`.
-Tab selection depends on the terminal's focus support.
+GNOME Terminal selects the exact tab and raises its window through D-Bus using `gdbus`.
+Other Linux terminals require X11, the terminal's `WINDOWID`, and `wmctrl` to raise the TUI window;
+tab selection depends on the terminal's focus support.
 The menu also shows labelled counts and **Close tray** (or **Quit clownhead** in standalone mode).
 
 On macOS, install the optional tray dependencies:
@@ -134,7 +135,9 @@ A row that has sat on `shell` for half an hour is usually a command nobody is wa
   and one that has ended is resumed here, which ends the board.
 - `f` focuses its terminal:
   attention, then the window brought to the front,
-  and in a JetBrains IDE the session's own tab selected once it is.
+  selecting the exact tab in GNOME Terminal or a JetBrains IDE.
+  GNOME Terminal requires `gdbus` and access to the session D-Bus.
+  A terminal that only received attention is reported as signalled.
 - `o` opens the pull request the session was working on,
   asking which when it named more than one.
 - `/` filters by name, status, path, or session id —

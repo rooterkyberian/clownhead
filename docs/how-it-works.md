@@ -246,10 +246,21 @@ Set `CLAUDE_CODE_DISABLE_TERMINAL_TITLE=1` in that session to make it stick.
 
 A dock bounce is easy to miss,
 so focusing also raises the window:
-`StealFocus` in iTerm2, `open` for everything else on macOS, a no-op elsewhere.
+`StealFocus` in iTerm2, `open` for everything else on macOS,
+and native D-Bus activation in GNOME Terminal.
+Other terminals receive attention and report when their window cannot be raised.
 Which application to raise is resolved per session,
 since a herd spans several terminals at once;
 `clownhead doctor` lists which ones.
+
+GNOME Terminal publishes a service name and a screen object path in its child processes'
+environment. Clownhead reads these from a process on the selected session's controlling TTY,
+checks that the screen is still live, and calls the
+[search provider's `ActivateResult`](https://github.com/GNOME/gnome-terminal/blob/3.52.0/src/terminal-search-provider.cc#L266) through
+`gdbus`. GNOME Terminal selects that screen and presents its owning window in one operation,
+so renamed tabs, reordered tabs, and multiple windows do not change the target.
+The tray uses the same operation for the board's own tab without needing `WINDOWID` or `wmctrl`.
+Missing process permissions, a missing search provider, or a closed tab are reported.
 
 ## IDE tabs
 

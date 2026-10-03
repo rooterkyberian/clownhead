@@ -17,7 +17,7 @@ from clownhead.discovery import CONFIG_DIR_VAR
 from clownhead.pulls import Pull, Status
 from clownhead.search import PullRequest
 
-DESKTOP_BINARIES = ("/usr/bin/open", "xdg-open", "osascript", "/usr/bin/osascript")
+DESKTOP_BINARIES = ("/usr/bin/open", "xdg-open", "osascript", "/usr/bin/osascript", "gdbus", "wmctrl", "xdotool")
 
 
 @pytest.fixture(autouse=True)
@@ -48,6 +48,13 @@ def unreachable_desktop(monkeypatch) -> list[list[str]]:
 
     monkeypatch.setattr(subprocess, "run", guarded)
     return attempted
+
+
+@pytest.fixture(autouse=True)
+def isolated_terminal_environment(monkeypatch) -> None:
+    """Keep the developer's GNOME Terminal tab out of capability detection in tests."""
+    monkeypatch.delenv("GNOME_TERMINAL_SERVICE", raising=False)
+    monkeypatch.delenv("GNOME_TERMINAL_SCREEN", raising=False)
 
 
 @pytest.fixture(autouse=True)

@@ -80,6 +80,7 @@ def live_fleet(monkeypatch):
 class SilentTerminal(ITerm2Terminal):
     def __init__(self):
         super().__init__()
+        self.supports_foreground = True
         self.written: list[str] = []
 
     def write(self, tty: Path, sequence: str) -> None:
@@ -443,6 +444,22 @@ def test_focus_can_leave_the_terminal_where_it_is(live_fleet, monkeypatch):
     assert result.exit_code == 0
     assert "\033]1337;StealFocus\a" not in terminal.written
     assert "\033]1337;RequestAttention=yes\a" in terminal.written
+    assert "signalled" in result.stdout
+    assert "focused" not in result.stdout
+
+
+def test_focus_does_not_claim_a_focus_when_only_attention_was_delivered(live_fleet, monkeypatch):
+    terminal = MagicMock(spec=Terminal, supports_foreground=False, supports_tab_focus=False)
+    terminal.name = "generic"
+    use_terminal(monkeypatch, terminal)
+
+    result = runner.invoke(cli.app, ["focus", "payments-api-7c"])
+
+    assert result.exit_code == 0
+    assert "signalled" in result.stdout
+    assert "focused" not in result.stdout
+    assert "cannot raise its window" in " ".join(result.stdout.split())
+    terminal.foreground.assert_not_called()
 
 
 def test_focus_reports_a_calm_fleet(monkeypatch):

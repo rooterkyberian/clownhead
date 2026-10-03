@@ -61,6 +61,15 @@ def test_owning_application_walks_up_to_the_terminal(monkeypatch):
     assert discovery.owning_application(99999, table) == Path("/Applications/iTerm.app")
 
 
+def test_owning_application_finds_gnome_terminal_per_session():
+    table = discovery.parse_ps_output(
+        "101 102 pts/7 claude\n102 103 pts/7 /usr/bin/zsh\n"
+        "103 1 ? /usr/libexec/gnome-terminal-server --app-id=org.gnome.Terminal"
+    )
+
+    assert discovery.owning_application(101, table) == Path("/usr/libexec/gnome-terminal-server")
+
+
 def test_owning_application_gives_up_on_a_process_it_cannot_place():
     table = discovery.parse_ps_output(PS_OUTPUT)
 

@@ -204,6 +204,7 @@ def candidate(name: str = "search-index", **overrides) -> Candidate:
 class SilentTerminal(ITerm2Terminal):
     def __init__(self):
         super().__init__()
+        self.supports_foreground = True
         self.written: list[str] = []
 
     def write(self, tty: Path, sequence: str) -> None:

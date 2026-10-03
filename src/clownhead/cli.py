@@ -653,7 +653,9 @@ def focus(
         results = [attention.focus(match, message=message, foreground=raise_window) for match in matches]
     for result in results:
         colour = "green" if result.delivered and not result.tab_note else "yellow"
-        marker = "focused" if result.delivered else "skipped"
+        marker = "focused" if result.focused else "signalled"
+        if not result.delivered:
+            marker = "skipped"
         console.print(f"[{colour}]{marker}[/] {result.label}: {result.detail}{result.tab_note}")
 
 

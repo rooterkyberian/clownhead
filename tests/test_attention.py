@@ -8,13 +8,15 @@ from clownhead import attention
 from clownhead import terminal as terminal_module
 from clownhead.jetbrains import Selection
 from clownhead.models import Session, Status
-from clownhead.terminal import ITerm2Terminal, Rgb, Terminal
+from clownhead.terminal import GnomeTerminal, ITerm2Terminal, Rgb, Terminal
 
 TTY = Path("/dev/ttys004")
 OWN_TTY = Path("/dev/ttys009")
 
 
 class RecordingTerminal(ITerm2Terminal):
+    supports_foreground = True
+
     def __init__(self, fail: bool = False):
         self.calls: list[tuple[str, str]] = []
         self.fail = fail
@@ -127,7 +129,9 @@ def test_focus_self_targets_own_iterm_tty_without_notifications(monkeypatch, own
 
 def test_focus_self_selects_own_tab(monkeypatch, own_tty):
     monkeypatch.setattr(attention.sys, "platform", "darwin")
-    terminal = MagicMock(spec=Terminal, supports_foreground=True, supports_tab_focus=True)
+    terminal = MagicMock(
+        spec=Terminal, supports_foreground=True, supports_tab_focus=True, select_tab_raises_window=False
+    )
     terminal.select_tab.return_value = Selection(True)
     result = attention.focus_self(terminal)
     terminal.foreground.assert_called_once_with(own_tty)
@@ -310,8 +314,11 @@ def test_focus_says_why_a_tab_was_left_behind():
     assert result.tab_note == " · needs accessibility access"
 
 
-def test_a_terminal_with_no_tab_to_select_has_nothing_to_report():
-    assert attention.focus(session(Status.WAITING), PlainTerminal()).tab_note == ""
+def test_focus_reports_attention_without_claiming_an_unsupported_foreground_switch():
+    result = attention.focus(session(Status.WAITING), PlainTerminal())
+
+    assert result.delivered
+    assert "cannot raise its window or select a tab" in result.tab_note
 
 
 def test_focus_leaves_the_tabs_alone_without_the_foreground_switch():
@@ -346,6 +353,85 @@ def test_focus_stalled_asks_every_application_holding_a_stalled_session(monkeypa
     attention.focus_stalled(stalled)
 
     assert [terminal.asked for terminal in ides.values()] == [["one: waiting"], ["two: waiting"]]
+
+
+@pytest.fixture
+def gnome_terminal(monkeypatch):
+    terminal = GnomeTerminal()
+    terminal.supports_foreground = True
+    terminal.supports_tab_focus = True
+    monkeypatch.setattr(terminal, "write", MagicMock())
+    select = MagicMock(return_value=Selection(True))
+    monkeypatch.setattr(terminal_module.gnome_terminal, "select", select)
+    return terminal, select
+
+
+def test_focus_activates_a_gnome_tab_and_window_in_one_call(gnome_terminal):
+    terminal, select = gnome_terminal
+
+    result = attention.focus(session(Status.WAITING), terminal)
+
+    select.assert_called_once_with(TTY)
+    assert result.delivered
+    assert result.focused
+    assert result.tab == Selection(True)
+
+
+def test_focus_self_uses_native_gnome_activation_without_windowid(monkeypatch, own_tty, gnome_terminal):
+    monkeypatch.setattr(attention.sys, "platform", "linux")
+    monkeypatch.delenv("WINDOWID", raising=False)
+    terminal, select = gnome_terminal
+
+    result = attention.focus_self(terminal)
+
+    select.assert_called_once_with(own_tty)
+    assert result.delivered
+    terminal.write.assert_not_called()
+
+
+def test_focus_self_reports_a_failed_gnome_activation(own_tty, gnome_terminal):
+    terminal, select = gnome_terminal
+    select.return_value = Selection(False, "tab has closed")
+
+    result = attention.focus_self(terminal)
+
+    assert not result.delivered
+    assert result.detail == "tab has closed"
+
+
+def test_focus_leaves_gnome_tabs_alone_when_foreground_is_disabled(gnome_terminal):
+    terminal, select = gnome_terminal
+
+    result = attention.focus(session(Status.WAITING), terminal, foreground=False)
+
+    select.assert_not_called()
+    assert result.delivered
+    assert not result.focused
+    assert result.tab is None
+
+
+def test_focus_stalled_does_not_undo_the_first_gnome_tab_selection(gnome_terminal):
+    terminal, select = gnome_terminal
+
+    results = attention.focus_stalled(
+        [session(Status.WAITING), session(Status.BLOCKED, tty=OWN_TTY, name="two")], terminal
+    )
+
+    select.assert_called_once_with(TTY)
+    assert all(result.delivered for result in results)
+    assert [result.focused for result in results] == [True, False]
+
+
+def test_focus_stalled_tries_the_next_tab_when_the_first_is_unavailable(gnome_terminal):
+    terminal, select = gnome_terminal
+    select.side_effect = [Selection(False, "tab has closed"), Selection(True)]
+
+    results = attention.focus_stalled(
+        [session(Status.WAITING), session(Status.BLOCKED, tty=OWN_TTY, name="two")], terminal
+    )
+
+    assert [call.args[0] for call in select.call_args_list] == [TTY, OWN_TTY]
+    assert [result.focused for result in results] == [False, True]
 
 
 def test_focus_reports_a_failed_foreground_switch():
