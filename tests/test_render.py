@@ -145,7 +145,8 @@ def test_build_table_renders_a_row_per_session():
     console.print(build_table(sessions, now=NOW, columns=columns))
     output = console.export_text()
 
-    assert "input needed" in output
+    assert "waiting" in output
+    assert "input needed" not in output
     assert "one" in output
     assert "77730" in output
     assert "ttys004" in output
@@ -294,7 +295,7 @@ def test_status_survives_narrow_terminals(width):
     console = Console(width=width, record=True)
     console.print(build_table([session], now=NOW, width=width))
 
-    assert "input needed" in console.export_text()
+    assert "waiting" in console.export_text()
 
 
 @pytest.mark.parametrize("width", [40, 50, 60, 80, 99, 100, 120, 200])

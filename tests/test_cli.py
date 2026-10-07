@@ -241,7 +241,8 @@ def test_ls_lists_the_fleet(live_fleet):
 
     assert result.exit_code == 0
     assert "payments-api-7c" in result.stdout
-    assert "input needed" in result.stdout
+    assert "waiting" in result.stdout
+    assert "input needed" not in result.stdout
 
 
 def test_ls_asks_for_closed_sessions(monkeypatch):

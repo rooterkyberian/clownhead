@@ -179,7 +179,7 @@ def build_rows(
     """
     return [
         Row(
-            status=session.reason,
+            status=session.status.value,
             style=STATUS_STYLES.get(session.status, ""),
             harness=session.harness.value,
             name=session.label,
