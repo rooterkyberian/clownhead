@@ -157,9 +157,13 @@ def _require_discovery() -> None:
         raise typer.Exit(code=2)
 
 
-def _load(cwd: Path | None, include_background: bool, include_closed: bool = False) -> list[Session]:
+def _load(
+    cwd: Path | None, include_background: bool, include_closed: bool = False, *, include_ignored: bool = False
+) -> list[Session]:
     _require_discovery()
-    return harness.list_sessions(cwd, interactive_only=not include_background, include_closed=include_closed)
+    return harness.list_sessions(
+        cwd, interactive_only=not include_background, include_closed=include_closed, include_ignored=include_ignored
+    )
 
 
 def _reference(text: str) -> Reference:
@@ -285,6 +289,7 @@ def launch_tui(
             interval=interval,
             include_closed=include_closed or None,
             show_tray=show_tray,
+            cleanup_loader=lambda: harness.list_sessions(cwd, include_closed=True, include_ignored=True),
         )
     )
 
@@ -379,6 +384,7 @@ def open_reference(
             ),
             include_closed=True,
             target=target,
+            cleanup_loader=lambda: harness.list_sessions(cwd, include_closed=True, include_ignored=True),
         )
     )
 
@@ -513,7 +519,7 @@ def worktrees_cleanup(
     """
     age = _older_than(older_than)
     merged_only = merged_only or branches
-    sessions = _load(cwd, include_background=True, include_closed=True)
+    sessions = _load(cwd, include_background=True, include_closed=True, include_ignored=True)
     candidates = worktrees.survey(sessions, older_than=age)
     if merged_only:
         candidates = [candidate for candidate in candidates if candidate.merged]

@@ -13,13 +13,14 @@ def test_defaults_leave_the_columns_to_the_view_and_raise_on_ping():
 
     assert settings.columns is None
     assert settings.show_closed is False
+    assert settings.ignored_owners == ()
     assert settings.foreground is True
     assert settings.paint_tabs is True
     assert settings.interval == 5.0
 
 
 def test_save_then_load_round_trip():
-    saved = Settings(columns=(Column.NAME, Column.PID), interval=12.5, history_turns=40)
+    saved = Settings(columns=(Column.NAME, Column.PID), interval=12.5, history_turns=40, ignored_owners=("kandev",))
 
     path = settings_store.save(saved)
 

@@ -978,6 +978,9 @@ class SettingsScreen(ModalScreen[Settings | None]):
                     yield Label(label)
                     yield Switch(value=getattr(self._settings, field), id=field)
             with Horizontal(classes="row"):
+                yield Label("ignore owners (comma-separated)")
+                yield Input(value=",".join(self._settings.ignored_owners), id="ignored_owners")
+            with Horizontal(classes="row"):
                 yield Label("refresh every (seconds)")
                 yield Input(value=str(self._settings.interval), id="interval", type="number")
             with Horizontal(classes="row"):
@@ -1054,8 +1057,12 @@ class SettingsScreen(ModalScreen[Settings | None]):
         self._settings = self._settings.model_copy(update={str(event.select.id): event.value})
 
     def on_input_changed(self, event: Input.Changed) -> None:
-        """Apply a typed number, ignoring anything half-typed or out of range."""
+        """Apply owner names or a valid numeric setting."""
         field = str(event.input.id)
+        if field == "ignored_owners":
+            owners = tuple(dict.fromkeys(owner.strip().casefold() for owner in event.value.split(",") if owner.strip()))
+            self._settings = self._settings.model_copy(update={"ignored_owners": owners})
+            return
         try:
             value = float(event.value) if field == "interval" else int(event.value)
             self._settings = Settings.model_validate(self._settings.model_dump() | {field: value})
@@ -1722,6 +1729,7 @@ class FleetApp(App[None]):
         target: Reference | None = None,
         usage_reader: Callable[[Harness], usage.Usage] | None = None,
         tray_companion: tray.Companion | None = None,
+        cleanup_loader: Callable[[], list[Session]] | None = None,
     ) -> None:
         super().__init__()
         self._loader = loader
@@ -1736,6 +1744,7 @@ class FleetApp(App[None]):
         self._terminal = terminal
         self._show_closed = include_closed if include_closed is not None else self._settings.show_closed
         self._sessions: list[Session] = []
+        self._cleanup_loader = cleanup_loader if cleanup_loader is not None else lambda: self._sessions
         self._visible: list[Session] = []
         self._previews: dict[str, list[Message]] = {}
         self._preview_asked: set[str] = set()
@@ -2367,7 +2376,11 @@ class FleetApp(App[None]):
 
     @work(thread=True, group="worktree")
     def _inspect_worktree(self, session: Session) -> None:
-        found = survey([session], older_than=CLEANUP_AGE, only=session.cwd)
+        try:
+            found = survey(self._cleanup_loader(), older_than=CLEANUP_AGE, only=session.cwd)
+        except Exception as error:
+            hand_back(self, self._worktree_kept, str(error))
+            return
         if not found:
             hand_back(self, self._worktree_kept, f"git does not know {shorten_path(session.cwd)}")
             return
@@ -2397,7 +2410,13 @@ class FleetApp(App[None]):
 
     @work(thread=True, group="worktree")
     def _cleanup_worktrees(self) -> None:
-        candidates = [candidate for candidate in survey(self._sessions, older_than=CLEANUP_AGE) if candidate.merged]
+        try:
+            candidates = [
+                candidate for candidate in survey(self._cleanup_loader(), older_than=CLEANUP_AGE) if candidate.merged
+            ]
+        except Exception as error:
+            hand_back(self, self._worktree_kept, str(error))
+            return
         hand_back(self, self._ask_cleanup, candidates)
 
     def _ask_cleanup(self, candidates: Sequence[Candidate]) -> None:
@@ -2891,6 +2910,7 @@ class FleetApp(App[None]):
         rebuild = settings.columns != self._settings.columns
         retime = settings.interval != self._settings.interval
         repaint = settings.paint_tabs != self._settings.paint_tabs
+        refilter = settings.ignored_owners != self._settings.ignored_owners
         self._settings = settings
         settings_store.save(settings)
         if rebuild:
@@ -2902,6 +2922,8 @@ class FleetApp(App[None]):
             self._ticker.stop()
             self._ticker = self.set_interval(self._interval, self.start_reload)
         self._draw()
+        if refilter:
+            self.start_reload()
 
     @work(thread=True, group="history")
     def _load_history(self, session: Session) -> None:
@@ -2981,6 +3003,7 @@ def run(
     target: Reference | None = None,
     usage_reader: Callable[[Harness], usage.Usage] | None = None,
     show_tray: bool = True,
+    cleanup_loader: Callable[[], list[Session]] | None = None,
 ) -> Launch | None:
     """Launch the fleet overseer, block until the user quits, and say what to run next.
 
@@ -3002,6 +3025,7 @@ def run(
         target=target,
         usage_reader=usage_reader,
         tray_companion=companion,
+        cleanup_loader=cleanup_loader,
     )
     try:
         if companion is not None:

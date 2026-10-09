@@ -2,7 +2,7 @@ from pathlib import Path
 
 import pytest
 
-from clownhead import codex, discovery, harness, models
+from clownhead import codex, discovery, harness, models, settings
 from clownhead.models import Harness, Kind, Message, Session, Status
 
 CLAUDE = harness.HARNESSES[models.Harness.CLAUDE]
@@ -206,6 +206,7 @@ def test_codex_reads_its_own_trust_file(no_codex):
 
 def test_codex_joins_the_process_table_onto_the_live_sessions(monkeypatch, codex_server):
     live = a_session("thread", Harness.CODEX)
+    monkeypatch.setattr(discovery, "process_table", lambda: discovery.parse_ps_output("42 1 ttys004 codex"))
     monkeypatch.setattr(codex, "list_sessions", lambda cwd, *, include_closed: [live])
     monkeypatch.setattr(codex, "attach_processes", lambda sessions, processes: [live.model_copy(update={"pid": 42})])
 
@@ -255,3 +256,36 @@ def test_the_base_harness_answers_nothing_on_its_own():
         base.recent_messages("a", limit=1)
     with pytest.raises(NotImplementedError):
         base.owns_process("claude")
+
+
+def test_owner_filter_covers_both_harnesses_and_keeps_closed_sessions_hidden(monkeypatch: pytest.MonkeyPatch) -> None:
+    claude = a_session("same-id", owner="kandev")
+    codex_session = a_session("same-id", Harness.CODEX)
+    monkeypatch.setattr(CLAUDE, "available", lambda: True)
+    monkeypatch.setattr(CODEX, "installed", lambda: True)
+    monkeypatch.setattr(CODEX, "available", lambda: True)
+    monkeypatch.setattr(CLAUDE, "list_sessions", lambda *a, **k: [claude])
+    monkeypatch.setattr(CODEX, "list_sessions", lambda *a, **k: [codex_session])
+
+    assert len(harness.list_sessions()) == 2
+    settings.save(settings.Settings(ignored_owners=("kandev",)))
+    assert harness.list_sessions() == [codex_session]
+    assert len(harness.list_sessions(include_ignored=True)) == 2
+
+    claude = claude.model_copy(update={"owner": None, "status": Status.CLOSED, "pid": None})
+    assert harness.list_sessions(include_closed=True) == [codex_session]
+    codex_session = codex_session.model_copy(update={"owner": "kandev"})
+    assert harness.list_sessions(include_closed=True) == []
+
+    settings.save(settings.Settings())
+    assert len(harness.list_sessions(include_closed=True)) == 2
+
+
+def test_codex_detects_ownership_after_attaching_the_process(monkeypatch: pytest.MonkeyPatch) -> None:
+    live = a_session("thread", Harness.CODEX)
+    processes = discovery.parse_ps_output("42 41 ttys004 codex\n41 1 ? /opt/bin/kandev")
+    monkeypatch.setattr(codex, "list_sessions", lambda *a, **k: [live])
+    monkeypatch.setattr(discovery, "process_table", lambda: processes)
+    monkeypatch.setattr(codex, "process_directories", lambda pids: {42: live.cwd})
+
+    assert CODEX.list_sessions(None, include_closed=False)[0].owner == "kandev"

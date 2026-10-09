@@ -2522,6 +2522,50 @@ async def test_tui_settings_screen_edits_and_saves(monkeypatch):
         assert settings_store.load().columns == (Column.PID,)
 
 
+async def test_tui_settings_ignore_owners_are_saved_and_reload_the_board() -> None:
+    visible = fleet()[0]
+    hidden = fleet()[1].model_copy(update={"owner": "kandev"})
+
+    def load(include_closed: bool) -> list[Session]:
+        return [visible] if "kandev" in settings_store.load().ignored_owners else [visible, hidden]
+
+    app = build_app(loader=load)
+    async with app.run_test() as pilot:
+        await settle(app, pilot)
+        await pilot.press("comma")
+        await pilot.pause()
+        app.screen.query_one("#ignored_owners", Input).value = " Kandev, ,kandev "
+        await pilot.pause()
+        await pilot.press("escape")
+        await settle(app, pilot)
+
+        assert settings_store.load().ignored_owners == ("kandev",)
+        assert table_of(app).row_count == 1
+
+
+@pytest.mark.parametrize("single", [True, False])
+async def test_tui_cleanup_checks_hidden_sessions(monkeypatch: pytest.MonkeyPatch, single: bool) -> None:
+    visible = worktree_fleet()[0]
+    hidden = visible.model_copy(update={"session_id": "hidden", "status": Status.BUSY, "owner": "kandev"})
+    inspected: list[Session] = []
+    monkeypatch.setattr(tui_module, "survey", lambda sessions, **kwargs: inspected.extend(sessions) or [])
+    app = FleetApp(
+        loader=lambda closed: [visible],
+        cleanup_loader=lambda: [visible, hidden],
+        settings=Settings(paint_tabs=False),
+    )
+
+    async with app.run_test() as pilot:
+        await settle(app, pilot)
+        if single:
+            app.action_remove_worktree()
+        else:
+            app.action_cleanup_worktrees()
+        await settle(app, pilot)
+
+        assert inspected == [visible, hidden]
+
+
 async def test_tui_settings_typing_does_not_filter_the_fleet():
     app = build_app()
 

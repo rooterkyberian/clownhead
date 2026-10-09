@@ -344,6 +344,21 @@ A resume command is the longest thing on the board and the one truncation ruins,
 so naming fewer columns is how you get one whole;
 `--columns name,resume` is the pair worth remembering.
 
+## Ignoring Kandev sessions
+
+Open settings with `,` and enter `kandev` in **ignore owners**.
+The setting hides detected Kandev sessions from the board, CLI listings, tray counts, and attention commands.
+Worktree cleanup still checks hidden sessions before offering to remove their checkout.
+
+You can also add `"ignored_owners": ["kandev"]` to `settings.json` in the clownhead state directory:
+`$CLOWNHEAD_STATE_DIR`, `$XDG_STATE_HOME/clownhead`, or `~/.local/state/clownhead` by default.
+Clear the list to show those sessions again.
+
+Ownership is detected from a live session's process ancestry and remembered in `owners.json`.
+Sessions that ended before clownhead observed their owner remain visible.
+Codex ownership detection requires an unambiguous process association;
+sessions without one remain visible too.
+
 ## How it works
 
 [How it works](https://rooterkyberian.github.io/clownhead/how-it-works/):

@@ -259,6 +259,7 @@ class Session(BaseModel):
     updated_at: datetime | None = None
     tty: Path | None = None
     app: Path | None = None
+    owner: str | None = None
     transcript: Path | None = None
     """Where the conversation is on disk, for a harness that names the file rather than
     deriving it. Codex hands out the rollout path with the thread; Claude Code's transcripts

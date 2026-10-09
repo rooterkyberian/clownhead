@@ -17,7 +17,7 @@ from __future__ import annotations
 
 from pathlib import Path
 
-from clownhead import codex, discovery, models
+from clownhead import codex, discovery, models, owners, settings
 from clownhead.models import Message, Session
 
 
@@ -211,6 +211,10 @@ class Codex(Harness):
             return found
         processes = discovery.process_table()
         settled = codex.close_abandoned(codex.attach_processes(live, processes), processes)
+        settled = [
+            session.model_copy(update={"owner": owners.process_owner(session.pid, processes) or session.owner})
+            for session in settled
+        ]
         by_id = {session.session_id: session for session in settled}
         sessions = [by_id.get(session.session_id, session) for session in found]
         return sessions if include_closed else [session for session in sessions if not session.is_finished]
@@ -263,6 +267,7 @@ def list_sessions(
     *,
     interactive_only: bool = False,
     include_closed: bool = False,
+    include_ignored: bool = False,
 ) -> list[Session]:
     """One fleet made of every harness that can answer, sorted as a single board.
 
@@ -277,7 +282,13 @@ def list_sessions(
         if not harness.installed() or not harness.available():
             continue
         found.extend(harness.list_sessions(cwd, include_closed=include_closed))
-    kept = [session for session in found if session.kind is models.Kind.INTERACTIVE] if interactive_only else found
+    found = owners.restore(found)
+    ignored = set() if include_ignored else {owner.casefold() for owner in settings.load().ignored_owners}
+    kept = [
+        session
+        for session in found
+        if session.owner not in ignored and (not interactive_only or session.kind is models.Kind.INTERACTIVE)
+    ]
     return sorted(kept, key=discovery.sort_key)
 
 

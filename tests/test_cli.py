@@ -701,6 +701,7 @@ def test_worktrees_cleanup_reads_the_closed_sessions_too(monkeypatch, live_fleet
 
     assert result.exit_code == 0
     assert seen["include_closed"] is True
+    assert seen["include_ignored"] is True
 
 
 def test_ls_can_show_the_worktree_column(monkeypatch):

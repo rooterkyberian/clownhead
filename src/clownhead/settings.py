@@ -50,6 +50,7 @@ class Settings(BaseModel):
     width, and leaves out the harness column on a machine running one agent.
     """
     show_closed: bool = False
+    ignored_owners: tuple[str, ...] = ()
     foreground: bool = True
     paint_tabs: bool = True
     close_tab_on_terminate: bool = False

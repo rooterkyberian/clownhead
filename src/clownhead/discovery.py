@@ -33,7 +33,7 @@ from typing import Any
 
 from pydantic import ValidationError
 
-from clownhead import archive, codex
+from clownhead import archive, codex, owners
 from clownhead.models import Kind, Message, Process, Session, Status, epoch_millis_to_datetime
 
 SOCKET_DIR = Path("/tmp/cc-socks")  # noqa: S108
@@ -525,6 +525,7 @@ def enrich(
                 update={
                     "tty": (process.tty if process else None) or session.tty,
                     "app": owning_application(session.pid, table) or session.app,
+                    "owner": owners.process_owner(session.pid, table) or session.owner,
                     "status": refine(session.status, beat.status),
                     "updated_at": beat.at or session.updated_at,
                 }
