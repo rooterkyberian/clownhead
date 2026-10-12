@@ -483,6 +483,33 @@ which attaches to the worktree that still stands and rebuilds the one that has b
 Any other missing directory keeps its failing `cd` on purpose:
 resuming somewhere else would hand the session a working directory full of the wrong project.
 
+## Last seen running
+
+Neither harness records when a session stopped.
+A transcript's modification time is the last thing the session said,
+which for a session left idle overnight is hours before it went away,
+and Claude Code deletes a session's registry record when it exits cleanly.
+clownhead keeps its own record:
+every listing stamps each running session in `seen.json` under the state directory,
+keyed by harness and session id,
+and an ended session carries its last stamp.
+
+A stamp is rewritten once it is a minute old,
+so a board refreshing every five seconds writes the file once a minute.
+Stamps older than 30 days are dropped on the next write.
+The file is replaced by rename, since the board and the tray both write it.
+
+`clownhead resume-all --since <when>` and the palette's **Resume sessions seen running since**
+resume every closed session stamped at or after that moment, latest first,
+each with the command described under [Resurrection](#resurrection).
+`<when>` is a duration back from now (`2h`),
+a local time today (`09:30`),
+or an ISO date and time (`2026-10-12T09:30`, local unless it carries an offset).
+Archived sessions are left out,
+since terminating with the archive box ticked stamps a session moments before it goes.
+The clipboard holds one command,
+so with resume-into set to it the CLI prints every command and the board declines.
+
 ## Worktrees
 
 A session records the worktree as its directory,

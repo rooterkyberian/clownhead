@@ -1,5 +1,6 @@
 import json
 import threading
+from datetime import UTC, datetime, timedelta
 from pathlib import Path
 from unittest.mock import MagicMock
 
@@ -3797,3 +3798,123 @@ async def test_handoff_read_failure_keeps_board_open(monkeypatch, tmp_path, code
         await settle(app, pilot)
         assert app.launch is None
         assert "source server stopped answering" in notified(app)
+
+
+def seen_fleet(include_closed: bool) -> list[Session]:
+    """The live fleet, and with the ended sessions in, two closed ones seen at different times."""
+    if not include_closed:
+        return fleet()
+    now = datetime.now(tz=UTC)
+    return [
+        *fleet(),
+        closed_session().model_copy(update={"last_seen": now - timedelta(minutes=20)}),
+        Session(
+            session_id="5d6e7f80-bbbb",
+            cwd=Path("/tmp/search-api"),
+            name="search-api-2f",
+            status=Status.CLOSED,
+            last_seen=now - timedelta(hours=5),
+        ),
+    ]
+
+
+async def ask_resume_seen(app: FleetApp, pilot, answer: str) -> None:
+    app.action_resume_seen()
+    await pilot.pause()
+    app.screen.query_one("#answer", Input).value = answer
+    await pilot.press("enter")
+    await settle(app, pilot)
+
+
+async def test_tui_resume_seen_opens_every_session_seen_since_once_confirmed(monkeypatch):
+    opened: list[tuple[str, ResumeIn, str]] = []
+    monkeypatch.setattr(
+        tui_module, "open_session", lambda plan, how, name: opened.append((str(plan.directory), how, name)) or "x"
+    )
+    app = build_app(loader=seen_fleet, settings=Settings(resume_in=ResumeIn.TMUX))
+
+    async with app.run_test() as pilot:
+        await settle(app, pilot)
+        await ask_resume_seen(app, pilot, "6h")
+
+        assert isinstance(app.screen, tui_module.ConfirmScreen)
+        listing = "\n".join(str(widget.content) for widget in app.screen.query(Static))
+        assert "Resume 2 sessions seen running after" in listing
+        assert "invoice-parser-3d  [dim]20m ago[/]" in listing
+        assert "each in tmux" in listing
+
+        await pilot.press("y")
+        await settle(app, pilot)
+
+        assert opened == [
+            ("/tmp/invoice-parser", ResumeIn.TMUX, "invoice-parser-3d"),
+            ("/tmp/search-api", ResumeIn.TMUX, "search-api-2f"),
+        ]
+        assert "resumed 2 of 2 sessions" in notified(app)
+
+
+async def test_tui_resume_seen_opens_nothing_when_declined(monkeypatch):
+    monkeypatch.setattr(tui_module, "open_session", lambda *args: pytest.fail("must not open"))
+    app = build_app(loader=seen_fleet, settings=Settings(resume_in=ResumeIn.TMUX))
+
+    async with app.run_test() as pilot:
+        await settle(app, pilot)
+        await ask_resume_seen(app, pilot, "1h")
+        await pilot.press("n")
+        await settle(app, pilot)
+
+        assert not isinstance(app.screen, tui_module.ConfirmScreen)
+
+
+async def test_tui_resume_seen_reports_a_session_that_would_not_open_and_carries_on(monkeypatch):
+    def open_session(plan, how, name):
+        if name == "invoice-parser-3d":
+            raise OSError("tmux refused")
+        return "x"
+
+    monkeypatch.setattr(tui_module, "open_session", open_session)
+    app = build_app(loader=seen_fleet, settings=Settings(resume_in=ResumeIn.TMUX))
+
+    async with app.run_test() as pilot:
+        await settle(app, pilot)
+        await ask_resume_seen(app, pilot, "6h")
+        await pilot.press("y")
+        await settle(app, pilot)
+
+        assert "invoice-parser-3d: tmux refused" in notified(app)
+        assert "resumed 1 of 2 sessions" in notified(app)
+
+
+async def test_tui_resume_seen_says_when_nothing_was_seen_since(monkeypatch):
+    monkeypatch.setattr(tui_module, "open_session", lambda *args: pytest.fail("must not open"))
+    app = build_app(loader=seen_fleet, settings=Settings(resume_in=ResumeIn.TMUX))
+
+    async with app.run_test() as pilot:
+        await settle(app, pilot)
+        await ask_resume_seen(app, pilot, "5m")
+
+        assert not isinstance(app.screen, tui_module.ConfirmScreen)
+        assert "no session has ended since being seen running after" in notified(app)
+
+
+async def test_tui_resume_seen_refuses_a_moment_it_cannot_read(monkeypatch):
+    app = build_app(loader=seen_fleet, settings=Settings(resume_in=ResumeIn.TMUX))
+
+    async with app.run_test() as pilot:
+        await settle(app, pilot)
+        await ask_resume_seen(app, pilot, "yesterday")
+
+        assert not isinstance(app.screen, tui_module.ConfirmScreen)
+        assert "not a duration like 2h" in notified(app)
+
+
+async def test_tui_resume_seen_turns_down_the_clipboard_before_asking_anything():
+    app = build_app(loader=seen_fleet, settings=Settings(resume_in=ResumeIn.CLIPBOARD))
+
+    async with app.run_test() as pilot:
+        await settle(app, pilot)
+        app.action_resume_seen()
+        await pilot.pause()
+
+        assert not isinstance(app.screen, tui_module.PromptScreen)
+        assert "the clipboard holds one command" in notified(app)

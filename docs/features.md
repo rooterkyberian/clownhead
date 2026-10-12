@@ -63,6 +63,7 @@ where the CLI answers for what is live and the transcripts answer for what has e
 | Rename | control socket | yes, `thread/name/set` |
 | Terminate, close the tab | SIGTERM and SIGHUP to the pid | **partial**, needs the pid join above |
 | Archive | clownhead's own `archived.json` | yes, the same file |
+| Last seen running, resume all since | clownhead's own `seen.json` | yes, the same file |
 | History pane | transcript tail | yes, `thread/items/list` |
 | Scan transcripts for PR and issue mentions | `projects/*/*.jsonl` | yes, the rollout file `Thread.path` names |
 | Worktree cleanup | git, per repository | yes, the same worktrees |

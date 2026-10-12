@@ -1,4 +1,5 @@
-from datetime import UTC, datetime, timedelta
+import time
+from datetime import UTC, datetime, timedelta, timezone
 from pathlib import Path
 
 import pytest
@@ -24,6 +25,7 @@ from clownhead.render import (
     format_duration,
     parse_columns,
     parse_duration,
+    parse_since,
     shorten_path,
     shorten_reference,
     worktree_cell,
@@ -91,6 +93,38 @@ def test_parse_duration_refuses_what_does_not_name_one(text):
 @pytest.mark.parametrize("delta", [timedelta(seconds=30), timedelta(minutes=10), timedelta(hours=4), timedelta(days=7)])
 def test_parse_duration_reads_back_what_format_duration_writes(delta):
     assert parse_duration(format_duration(delta)) == delta
+
+
+@pytest.fixture
+def warsaw(monkeypatch):
+    """Read local times on a clock two hours ahead of UTC, whatever the machine is set to."""
+    monkeypatch.setenv("TZ", "Europe/Warsaw")
+    time.tzset()
+    yield timezone(timedelta(hours=2))
+    monkeypatch.undo()
+    time.tzset()
+
+
+@pytest.mark.parametrize(
+    ("text", "expected"),
+    [
+        ("2h", datetime(2026, 10, 12, 8, 0, tzinfo=UTC)),
+        ("30m", datetime(2026, 10, 12, 9, 30, tzinfo=UTC)),
+        ("2026-10-12T07:15:00+00:00", datetime(2026, 10, 12, 7, 15, tzinfo=UTC)),
+        ("2026-10-12 09:30", datetime(2026, 10, 12, 7, 30, tzinfo=UTC)),
+        ("2026-10-11", datetime(2026, 10, 10, 22, 0, tzinfo=UTC)),
+        ("09:30", datetime(2026, 10, 12, 7, 30, tzinfo=UTC)),
+        ("09:30+00:00", datetime(2026, 10, 12, 9, 30, tzinfo=UTC)),
+    ],
+)
+def test_parse_since(warsaw, text, expected):
+    assert parse_since(text, now=datetime(2026, 10, 12, 10, 0, tzinfo=UTC)) == expected
+
+
+@pytest.mark.parametrize("text", ["", "2026", "0930", "yesterday", "7", "25:00"])
+def test_parse_since_refuses_what_does_not_name_a_moment(text):
+    with pytest.raises(ValueError, match="not a duration like 2h, a time like 09:30"):
+        parse_since(text, now=NOW)
 
 
 def test_worktree_cell_is_empty_for_a_session_outside_one(tmp_path):

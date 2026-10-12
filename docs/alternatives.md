@@ -89,6 +89,8 @@ A session is a transcript on disk,
 and what a reboot destroys is the mapping from session id to directory.
 Most tools either keep this in a private database or leave it to tmux,
 which does not survive a reboot either.
+clownhead also records when it last saw each session running,
+so `clownhead resume-all --since 2h` reopens what was running before the reboot.
 
 ## Subscription vs API key
 

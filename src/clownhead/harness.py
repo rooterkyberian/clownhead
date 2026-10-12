@@ -17,7 +17,7 @@ from __future__ import annotations
 
 from pathlib import Path
 
-from clownhead import codex, discovery, models, owners, settings
+from clownhead import codex, discovery, models, owners, settings, sightings
 from clownhead.models import Message, Session
 
 
@@ -276,13 +276,16 @@ def list_sessions(
     absence is available from :meth:`Harness.unavailable_reason` for whoever is in a
     position to say it. A harness that answers badly after saying it was available is a
     different matter, and that error travels.
+
+    Every listing stamps the sessions it finds running in :mod:`clownhead.sightings`, before
+    any filter here drops one, so a session hidden from this board is still seen by it.
     """
     found: list[Session] = []
     for harness in HARNESSES.values():
         if not harness.installed() or not harness.available():
             continue
         found.extend(harness.list_sessions(cwd, include_closed=include_closed))
-    found = owners.restore(found)
+    found = sightings.record(owners.restore(found))
     ignored = set() if include_ignored else {owner.casefold() for owner in settings.load().ignored_owners}
     kept = [
         session

@@ -264,6 +264,10 @@ class Session(BaseModel):
     """Where the conversation is on disk, for a harness that names the file rather than
     deriving it. Codex hands out the rollout path with the thread; Claude Code's transcripts
     are found from the session id, so this stays unset for them."""
+    last_seen: datetime | None = None
+    """When clownhead last found a session that has since ended still running, read from
+    :mod:`clownhead.sightings`. Unset for a running session, and for an ended one no listing
+    ever caught alive."""
 
     @model_validator(mode="before")
     @classmethod

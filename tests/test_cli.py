@@ -12,6 +12,7 @@ from clownhead import terminal as terminal_module
 from clownhead.models import Harness, Session, Status
 from clownhead.pulls import Status as PullStatus
 from clownhead.resume import Launch
+from clownhead.settings import ResumeIn, Settings
 from clownhead.terminal import ITerm2Terminal, Terminal
 from clownhead.worktrees import Candidate, Worktree
 
@@ -957,3 +958,145 @@ def test_doctor_says_how_to_start_a_codex_daemon_that_is_missing(live_fleet, mon
     result = runner.invoke(cli.app, ["doctor"])
 
     assert "app-server daemon start" in result.stdout
+
+
+def resumable_fleet() -> list[Session]:
+    now = datetime.now(tz=UTC)
+    return [
+        Session(
+            session_id="4e020900-df7c",
+            cwd=Path("/tmp/payments-api"),
+            name="payments-api-7c",
+            status=Status.CLOSED,
+            last_seen=now - timedelta(minutes=20),
+        ),
+        Session(
+            session_id="cef6830d-aaaa",
+            cwd=Path("/tmp/web-platform"),
+            name="web-platform-1d",
+            status=Status.CLOSED,
+            last_seen=now - timedelta(hours=5),
+        ),
+        Session(
+            session_id="9a1b2c3d-eeee",
+            cwd=Path("/tmp/invoice-parser"),
+            name="invoice-parser-3d",
+            status=Status.ARCHIVED,
+            last_seen=now - timedelta(minutes=5),
+        ),
+    ]
+
+
+@pytest.fixture
+def resumable(monkeypatch) -> list[tuple[str, ResumeIn, str]]:
+    """A fleet of ended sessions seen at different times, with every opened session recorded."""
+    opened: list[tuple[str, ResumeIn, str]] = []
+    monkeypatch.setattr(harness, "list_sessions", lambda *a, **k: resumable_fleet())
+    monkeypatch.setattr(
+        cli,
+        "open_session",
+        lambda plan, how, name: opened.append((str(plan.directory), how, name)) or f"in tmux window {name}",
+    )
+    return opened
+
+
+def test_resume_all_resumes_the_closed_sessions_seen_since_the_cutoff_once_confirmed(resumable):
+    result = runner.invoke(cli.app, ["resume-all", "--since", "1h", "--into", "tmux"], input="y\n")
+
+    assert result.exit_code == 0
+    assert resumable == [("/tmp/payments-api", ResumeIn.TMUX, "payments-api-7c")]
+    assert "1 session seen running after" in result.stdout
+    assert "resumed payments-api-7c in tmux window payments-api-7c" in result.stdout
+    assert "resumed 1 of 1 sessions" in result.stdout
+
+
+def test_resume_all_dry_run_lists_what_it_would_resume_and_stops(resumable):
+    result = runner.invoke(cli.app, ["resume-all", "--since", "6h", "--dry-run"])
+
+    assert result.exit_code == 0
+    assert "payments-api-7c" in result.stdout
+    assert "20m" in result.stdout
+    assert "web-platform-1d" in result.stdout
+    assert "invoice-parser-3d" not in result.stdout
+    assert "nothing resumed" in result.stdout
+    assert resumable == []
+
+
+def test_resume_all_resumes_nothing_when_the_question_is_declined(resumable):
+    result = runner.invoke(cli.app, ["resume-all", "--since", "1h", "--into", "tmux"], input="n\n")
+
+    assert result.exit_code == 0
+    assert "nothing resumed" in result.stdout
+    assert resumable == []
+
+
+def test_resume_all_opens_where_the_settings_say_without_asking_when_yes_was_given(resumable):
+    cli.settings_store.save(Settings(resume_in=ResumeIn.ITERM2))
+
+    result = runner.invoke(cli.app, ["resume-all", "--since", "6h", "--yes"])
+
+    assert result.exit_code == 0
+    assert [(how, name) for _, how, name in resumable] == [
+        (ResumeIn.ITERM2, "payments-api-7c"),
+        (ResumeIn.ITERM2, "web-platform-1d"),
+    ]
+
+
+def test_resume_all_prints_the_commands_when_resume_into_is_the_clipboard(resumable):
+    result = runner.invoke(cli.app, ["resume-all", "--since", "1h"])
+
+    assert result.exit_code == 0
+    assert "(cd /tmp/payments-api && CLAUDE_CONFIG_DIR=" in result.stdout
+    assert "claude --resume 4e020900-df7c)" in result.stdout
+    assert "--into tmux" in result.stdout
+    assert resumable == []
+
+
+def test_resume_all_says_when_nothing_was_seen_since_the_cutoff(resumable):
+    result = runner.invoke(cli.app, ["resume-all", "--since", "1m"])
+
+    assert result.exit_code == 0
+    assert "no session has ended since being seen running after" in result.stdout
+    assert resumable == []
+
+
+def test_resume_all_refuses_a_moment_it_cannot_read(resumable):
+    result = runner.invoke(cli.app, ["resume-all", "--since", "yesterday"])
+
+    assert result.exit_code == 2
+    assert "not a duration like 2h" in result.stderr
+    assert resumable == []
+
+
+def test_resume_all_keeps_going_when_one_session_will_not_open(monkeypatch):
+    opened: list[str] = []
+
+    def open_session(plan, how, name):
+        if name == "payments-api-7c":
+            raise LookupError("tmux refused")
+        opened.append(name)
+        return f"in tmux window {name}"
+
+    monkeypatch.setattr(harness, "list_sessions", lambda *a, **k: resumable_fleet())
+    monkeypatch.setattr(cli, "open_session", open_session)
+
+    result = runner.invoke(cli.app, ["resume-all", "--since", "6h", "--into", "tmux", "--yes"])
+
+    assert result.exit_code == 0
+    assert opened == ["web-platform-1d"]
+    assert "payments-api-7c: tmux refused" in result.stderr
+    assert "resumed 1 of 2 sessions" in result.stdout
+
+
+def test_resume_all_finds_what_an_earlier_listing_saw_running(monkeypatch):
+    listed = fleet()
+    monkeypatch.setattr(discovery, "list_sessions", lambda *a, **k: listed)
+    runner.invoke(cli.app, ["ls"])
+    listed = [session.model_copy(update={"status": Status.CLOSED, "tty": None}) for session in fleet()]
+
+    result = runner.invoke(cli.app, ["resume-all", "--since", "5m", "--dry-run"])
+
+    assert result.exit_code == 0
+    assert "2 sessions seen running after" in result.stdout
+    assert "payments-api-7c" in result.stdout
+    assert "web-platform-1d" in result.stdout

@@ -12,6 +12,7 @@ from typing import Annotated, Any
 
 import typer
 from rich.console import Console
+from rich.markup import escape
 from rich.table import Table
 from rich.text import Text
 from typer.core import TyperGroup
@@ -25,6 +26,7 @@ from clownhead import (
     issues,
     pulls,
     search,
+    sightings,
     tray,
     tui,
     usage,
@@ -33,6 +35,7 @@ from clownhead import (
 from clownhead import settings as settings_store
 from clownhead.issues import Unavailable
 from clownhead.models import Column, Session
+from clownhead.panes import open_session
 from clownhead.render import (
     NARROW_WIDTH,
     build_pull_table,
@@ -40,10 +43,13 @@ from clownhead.render import (
     format_duration,
     parse_columns,
     parse_duration,
+    parse_since,
     resolve_columns,
+    shorten_path,
 )
-from clownhead.resume import Launch, start_plan
+from clownhead.resume import Launch, resume_plan, start_plan
 from clownhead.search import PullRequest, Reference
+from clownhead.settings import ResumeIn
 from clownhead.terminal import detect_terminal
 
 
@@ -130,6 +136,20 @@ BranchesOption = Annotated[
 ]
 DryRunOption = Annotated[bool, typer.Option("--dry-run", help="Show what would be removed and stop.")]
 YesOption = Annotated[bool, typer.Option("--yes", "-y", help="Remove without asking first.")]
+SinceOption = Annotated[
+    str,
+    typer.Option(
+        "--since",
+        metavar="WHEN",
+        help="Sessions last seen running at or after this: 2h for two hours back, 09:30 today, or 2026-10-12T09:30.",
+    ),
+]
+IntoOption = Annotated[
+    ResumeIn | None,
+    typer.Option("--into", help="Where each session is opened. Defaults to the resume-into setting."),
+]
+ResumeDryRunOption = Annotated[bool, typer.Option("--dry-run", help="Show what would be resumed and stop.")]
+ResumeYesOption = Annotated[bool, typer.Option("--yes", "-y", help="Resume without asking first.")]
 
 DEFAULT_AGE = "7d"
 """Long enough that a worktree gone quiet for it is finished with rather than merely idle
@@ -602,6 +622,88 @@ def _remove_all(going: Sequence[worktrees.Candidate], branches: bool = False) ->
             continue
         removed += 1
     console.print(f"removed [bold]{removed}[/] of {len(going)} worktrees")
+
+
+@app.command("resume-all")
+def resume_all(
+    since: SinceOption,
+    cwd: CwdOption = None,
+    into: IntoOption = None,
+    dry_run: ResumeDryRunOption = False,
+    assume_yes: ResumeYesOption = False,
+) -> None:
+    """Resume every ended session that clownhead last saw running at or after --since.
+
+    The moment a session was last seen running is clownhead's own record, written whenever
+    the board, the tray or any command lists the fleet. After a reboot or a terminal crash
+    that is the moment just before everything went, so ``--since`` set a little earlier
+    brings back what was open. A session that ended while nothing was listing the fleet was
+    never seen, and is not offered.
+
+    Only closed sessions are resumed. An archived session stays where it was put, and a
+    session that is running again is already back.
+
+    Each one opens in a tmux window or an iTerm2 tab, from ``--into`` or the resume-into
+    setting. The clipboard holds a single command, so with it chosen the commands are
+    printed instead, one per line.
+    """
+    cutoff = _since(since)
+    found = sightings.seen_since(_load(cwd, include_background=False, include_closed=True), cutoff)
+    local = cutoff.astimezone()
+    if not found:
+        console.print(f"[dim]no session has ended since being seen running after {local:%Y-%m-%d %H:%M}[/]")
+        return
+    count = f"{len(found)} session{'' if len(found) == 1 else 's'}"
+    console.print(f"[dim]{count} seen running after {local:%Y-%m-%d %H:%M}[/]")
+    console.print(_seen_table(found))
+    if dry_run:
+        console.print("[dim]--dry-run · nothing resumed[/]")
+        return
+    how = into or settings_store.load().resume_in
+    if how is ResumeIn.CLIPBOARD:
+        console.print("[dim]resume into is the clipboard · --into tmux or --into iterm2 opens them[/]")
+        for session in found:
+            _print_command(resume_plan(session).shell_command)
+        return
+    if not assume_yes and not typer.confirm(f"resume {count} in {how.value}?"):
+        console.print("[dim]nothing resumed[/]")
+        return
+    _resume_each(found, how)
+
+
+def _since(text: str) -> datetime:
+    try:
+        return parse_since(text)
+    except ValueError as error:
+        error_console.print(f"[bold red]{error}[/]")
+        raise typer.Exit(code=2) from error
+
+
+def _seen_table(sessions: Sequence[Session]) -> Table:
+    """The sessions about to be resumed, with how long ago each was last seen running."""
+    now = datetime.now(tz=UTC)
+    table = Table(box=None, pad_edge=False, header_style="bold", padding=(0, 1))
+    table.add_column("NAME", no_wrap=True)
+    table.add_column("SEEN", no_wrap=True, justify="right")
+    table.add_column("WHERE", no_wrap=True)
+    for session in sessions:
+        seen = format_duration(now - session.last_seen) if session.last_seen else "-"
+        table.add_row(Text(session.label), seen, Text(shorten_path(session.cwd)))
+    return table
+
+
+def _resume_each(sessions: Sequence[Session], how: ResumeIn) -> None:
+    """Open each session, reporting failures without abandoning the rest of the run."""
+    resumed = 0
+    for session in sessions:
+        try:
+            where = open_session(resume_plan(session), how, session.label)
+        except (LookupError, OSError) as error:
+            error_console.print(f"[yellow]not resumed[/] {escape(session.label)}: {escape(str(error))}")
+            continue
+        resumed += 1
+        console.print(Text(f"resumed {session.label} {where}"))
+    console.print(f"resumed [bold]{resumed}[/] of {len(sessions)} sessions")
 
 
 @app.command()

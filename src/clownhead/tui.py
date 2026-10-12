@@ -66,6 +66,7 @@ from clownhead.render import (
     describe,
     describe_pull,
     format_duration,
+    parse_since,
     review_of,
     shorten_path,
     truncate,
@@ -80,6 +81,7 @@ from clownhead.search import (
     sessions_mentioning,
 )
 from clownhead.settings import ResumeIn, Settings
+from clownhead.sightings import seen_since
 from clownhead.terminal import Terminal, copy_to_pasteboard, open_url
 from clownhead.worktrees import Candidate, survey
 from clownhead.worktrees import remove as remove_worktree
@@ -91,6 +93,8 @@ CLOWN = "\N{CLOWN FACE}"
 CONFIG_DIR_CAP = 40
 COMMAND_NOTICE_CAP = 160
 HANDOFF_MESSAGES = 20
+RESUME_LISTED = 10
+"""How many sessions the resume-since question names before it counts the rest."""
 CLEANUP_AGE = timedelta(0)
 """No age filter on a cleanup: being merged is the stronger answer, and a worktree whose
 work is already upstream is finished with whether that happened this morning or last month."""
@@ -1895,6 +1899,11 @@ class FleetApp(App[None]):
             "Put the command that brings it back on the clipboard",
             self.action_copy_resume,
         )
+        yield SystemCommand(
+            "Resume sessions seen running since",
+            "Bring back every session that ended after a moment you name, each where the settings say",
+            self.action_resume_seen,
+        )
         if self._has_process():
             yield SystemCommand(
                 "Terminate this session",
@@ -2665,6 +2674,90 @@ class FleetApp(App[None]):
         if step.restore:
             archive.restore(session.session_id)
         self.notify(f"{session.label} {step.verb} {where}")
+        self.start_reload()
+
+    def action_resume_seen(self) -> None:
+        """Resume every session that ended after being seen running since a moment you name.
+
+        The moment comes from :mod:`clownhead.sightings`, which this board writes on every
+        reload, so after a reboot it is the last refresh before everything went. Each session
+        opens where the settings say, and the clipboard is turned down up front because it
+        holds one command and this is several.
+        """
+        if self._settings.resume_in is ResumeIn.CLIPBOARD:
+            self.notify(
+                "the clipboard holds one command; set resume into to tmux or iterm2",
+                title="nothing resumed",
+                severity="warning",
+            )
+            return
+        question = "[bold]Resume every session seen running since[/]\n[dim]2h back, 09:30 today, or 2026-10-12T09:30[/]"
+        self.push_screen(PromptScreen(question), self._resume_seen_since)
+
+    def _resume_seen_since(self, answer: str | None) -> None:
+        if answer is None:
+            return
+        try:
+            cutoff = parse_since(answer)
+        except ValueError as error:
+            self.notify(str(error), title="nothing resumed", severity="error")
+            return
+        self._find_seen(cutoff)
+
+    @work(thread=True, group="resume-seen", exclusive=True)
+    def _find_seen(self, cutoff: datetime) -> None:
+        """List the fleet with the ended sessions in, whatever the board is showing."""
+        try:
+            found = seen_since(self._loader(True), cutoff)
+        except Exception as error:  # noqa: BLE001
+            hand_back(self, partial(self.notify, title="nothing resumed", severity="error"), str(error))
+            return
+        hand_back(self, partial(self._ask_resume_seen, cutoff), found)
+
+    def _ask_resume_seen(self, cutoff: datetime, found: list[Session]) -> None:
+        moment = f"{cutoff.astimezone():%Y-%m-%d %H:%M}"
+        if not found:
+            self.notify(f"no session has ended since being seen running after {moment}", title="nothing to resume")
+            return
+        now = datetime.now(tz=UTC)
+        lines = [
+            f"  {escape(session.label)}  [dim]{format_duration(now - session.last_seen)} ago[/]"
+            for session in found[:RESUME_LISTED]
+            if session.last_seen is not None
+        ]
+        if len(found) > RESUME_LISTED:
+            lines.append(f"  [dim]and {len(found) - RESUME_LISTED} more[/]")
+        count = f"{len(found)} session{'' if len(found) == 1 else 's'}"
+        question = "\n".join(
+            [
+                f"[bold]Resume {count} seen running after {moment}?[/]",
+                *lines,
+                f"[dim]each in {self._settings.resume_in.value}[/]",
+            ]
+        )
+        self.push_screen(ConfirmScreen(question), partial(self._resume_seen, found))
+
+    def _resume_seen(self, found: list[Session], confirmed: bool | None) -> None:
+        if confirmed:
+            self._open_all(found, self._settings.resume_in)
+
+    @work(thread=True, group="resume-seen")
+    def _open_all(self, found: list[Session], how: ResumeIn) -> None:
+        """Open each session in turn, off the event loop, since every one is a tmux or iTerm2 call."""
+        refused = partial(self.notify, title="not resumed", severity="error")
+        resumed = 0
+        for session in found:
+            try:
+                open_session(resume_plan(session), how, session.label)
+            except (LookupError, OSError) as error:
+                hand_back(self, refused, f"{session.label}: {error}")
+                continue
+            resumed += 1
+        hand_back(self, self._opened_all, (resumed, len(found)))
+
+    def _opened_all(self, outcome: tuple[int, int]) -> None:
+        resumed, asked = outcome
+        self.notify(f"resumed {resumed} of {asked} session{'' if asked == 1 else 's'}")
         self.start_reload()
 
     def action_filter(self) -> None:

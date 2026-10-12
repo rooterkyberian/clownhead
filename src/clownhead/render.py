@@ -14,8 +14,9 @@ from __future__ import annotations
 
 import re
 from collections.abc import Iterable, Mapping, Sequence
+from contextlib import suppress
 from dataclasses import dataclass
-from datetime import UTC, datetime, timedelta
+from datetime import UTC, datetime, time, timedelta
 from pathlib import Path
 
 from rich.console import Group, JustifyMethod, RenderableType
@@ -106,6 +107,28 @@ def parse_duration(text: str) -> timedelta:
     if len(stripped) < 2 or not stripped[:-1].isdigit() or stripped[-1] not in DURATION_UNITS:
         raise ValueError(f"'{text}' is not a duration like 30s, 10m, 4h or 7d")
     return timedelta(seconds=int(stripped[:-1]) * DURATION_UNITS[stripped[-1]])
+
+
+def parse_since(text: str, now: datetime | None = None) -> datetime:
+    """Read a moment as a duration back from now (``2h``), a time today (``09:30``), or an ISO date.
+
+    A date or time with no offset is local, since that is the clock whoever typed it reads.
+    A time needs its colon: ISO also reads ``2026`` as twenty past eight in the evening,
+    which is the opposite of what anybody typing a year meant.
+    """
+    moment = now or datetime.now(tz=UTC)
+    with suppress(ValueError):
+        return moment - parse_duration(text)
+    stripped = text.strip()
+    with suppress(ValueError):
+        when = datetime.fromisoformat(stripped)
+        return when if when.tzinfo is not None else when.astimezone()
+    if ":" in stripped:
+        with suppress(ValueError):
+            clock = time.fromisoformat(stripped)
+            local = moment.astimezone()
+            return datetime.combine(local.date(), clock, tzinfo=clock.tzinfo or local.tzinfo)
+    raise ValueError(f"'{text}' is not a duration like 2h, a time like 09:30, or a date like 2026-10-12T09:30")
 
 
 def shorten_path(cwd: Path, home: Path | None = None) -> str:

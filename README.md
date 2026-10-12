@@ -180,8 +180,9 @@ A row that has sat on `shell` for half an hour is usually a command nobody is wa
   `a` unticks it.
 - `,` opens the settings.
 - `^p` opens the command palette,
-  which carries every key above by name and the three things with no key of their own:
+  which carries every key above by name and the four things with no key of their own:
   copying a session's resume command,
+  resuming every session seen running since a moment you name,
   retiring the worktree it worked in,
   and clearing out every worktree whose work has already merged.
 - `q` quits.
@@ -316,6 +317,7 @@ so the same data pipes into a script.
 | `clownhead open <ref>` | The board filtered to a pull request or issue, ended sessions included, ready to start one for it. What a bare `clownhead <url>` runs. Takes a GitHub pull request or issue URL, a Jira URL, or `owner/repo#123`. `--print` writes the sessions and the start command out instead of opening the board. |
 | `clownhead prs` | What you have open on GitHub, and which sessions here worked on each. `--author` asks about somebody else, `--limit` caps how many to ask for, `--no-sessions` skips the transcript pass. Needs `gh`. |
 | `clownhead ls` | Status board, attention-first. `--cwd` scopes to one tree, `--all` adds background agents, `--closed` adds sessions that have ended, `--pr` keeps only the ones whose transcript names a pull request, `--columns` picks the columns and their order. |
+| `clownhead resume-all --since <when>` | Resume every closed session clownhead last saw running at or after a moment: `2h`, `09:30`, or `2026-10-12T09:30`. Each opens in a tmux window or an iTerm2 tab, from `--into` or the resume-into setting; with the clipboard setting the commands are printed. `--dry-run` lists them, `--yes` skips the question. |
 | `clownhead usage` | Account allowance used for Claude and Codex, with reset times, local snapshot timestamps, and reasons for unavailable readings. Uses the same local sources as the board. |
 | `clownhead worktrees-cleanup` | Retire the worktrees Claude Code and Codex left behind. `--older-than` sets how long untouched is long enough (default `7d`), `--merged` keeps to the ones already in the default branch, `--branches` deletes those branches too, `--dry-run` shows what would go, `--yes` skips the question. |
 | `clownhead paint` | Colour each session's tab to match its state, for a board you would rather not keep open. `--follow` keeps them in sync, `--reset` clears them. |
@@ -343,6 +345,30 @@ index-rebuild    (cd /Users/you/dev/web-platform && claude --resume 8b1c4f22-0d3
 A resume command is the longest thing on the board and the one truncation ruins,
 so naming fewer columns is how you get one whole;
 `--columns name,resume` is the pair worth remembering.
+
+## Resume what was running before a reboot
+
+Every listing stamps the sessions it finds running in `seen.json` in the state directory.
+The board, the tray, and every subcommand list the fleet.
+After a reboot or a terminal crash, the latest stamps date the moment everything stopped:
+
+```bash
+$ clownhead resume-all --since 2h --dry-run
+3 sessions seen running after 2026-10-12 08:14
+NAME             SEEN  WHERE
+payments-api-7c    4m  ~/dev/payments-api
+index-rebuild      4m  web-platform ⇢ search-index
+invoice-parser    51m  ~/dev/invoice-parser
+--dry-run · nothing resumed
+```
+
+Drop `--dry-run` to open them, one tmux window or iTerm2 tab each.
+In the board, the palette's **Resume sessions seen running since** does the same.
+
+Only closed sessions are offered.
+Archived sessions stay archived, and a session that is running again is skipped.
+A session that started and ended while nothing was listing the fleet has no stamp,
+so keep the tray or the board open to cover every session.
 
 ## Ignoring Kandev sessions
 

@@ -2,7 +2,7 @@ from pathlib import Path
 
 import pytest
 
-from clownhead import codex, discovery, harness, models, settings
+from clownhead import codex, discovery, harness, models, settings, sightings
 from clownhead.models import Harness, Kind, Message, Session, Status
 
 CLAUDE = harness.HARNESSES[models.Harness.CLAUDE]
@@ -289,3 +289,21 @@ def test_codex_detects_ownership_after_attaching_the_process(monkeypatch: pytest
     monkeypatch.setattr(codex, "process_directories", lambda pids: {42: live.cwd})
 
     assert CODEX.list_sessions(None, include_closed=False)[0].owner == "kandev"
+
+
+def test_the_fan_out_stamps_running_sessions_and_dates_the_ended_ones(monkeypatch, both):
+    hidden = a_session("hidden", owner="kandev")
+    monkeypatch.setattr(CLAUDE, "list_sessions", lambda cwd, *, include_closed: [a_session("one"), hidden])
+    monkeypatch.setattr(CODEX, "list_sessions", lambda cwd, *, include_closed: [a_session("two", Harness.CODEX)])
+    settings.save(settings.Settings(ignored_owners=("kandev",)))
+
+    harness.list_sessions()
+
+    assert set(sightings.load()) == {"claude:one", "claude:hidden", "codex:two"}
+    ended = a_session("one", status=Status.CLOSED)
+    monkeypatch.setattr(CLAUDE, "list_sessions", lambda cwd, *, include_closed: [ended])
+    monkeypatch.setattr(CODEX, "list_sessions", lambda cwd, *, include_closed: [])
+
+    found = harness.list_sessions(include_closed=True)
+
+    assert found[0].last_seen == sightings.load()["claude:one"]
