@@ -1,5 +1,10 @@
 # 🤡 clownhead
 
+> [!WARNING]
+> **This project is retired and no longer maintained.**
+> For actively developed alternatives, see
+> [awesome-agent-orchestrators](https://github.com/andyrewlee/awesome-agent-orchestrators).
+
 [![PyPI](https://img.shields.io/pypi/v/clownhead)](https://pypi.org/project/clownhead/)
 
 A status board for the coding-agent sessions already running on your machine:
